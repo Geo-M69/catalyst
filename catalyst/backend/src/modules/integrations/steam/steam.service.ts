@@ -9,7 +9,7 @@ import { steamClient } from "./steam.client.js";
 import { mapSteamGameToLibraryGame } from "./steam.mapper.js";
 
 interface PendingAuthState {
-  userId: string;
+  userId?: string;
   expiresAt: number;
 }
 
@@ -25,10 +25,12 @@ const STEAM_CLAIMED_ID_PATTERN = /\/openid\/id\/(\d{17})$/;
 class SteamService {
   private readonly pendingAuthStates = new Map<string, PendingAuthState>();
 
-  public createAuthorization(userId: string): { authorizationUrl: string } {
+  public createAuthorization(userId?: string): { authorizationUrl: string } {
     this.clearExpiredStates();
 
-    usersService.getRequiredUser(userId);
+    if (userId) {
+      usersService.getRequiredUser(userId);
+    }
 
     const state = randomUUID();
     this.pendingAuthStates.set(state, {
@@ -75,11 +77,18 @@ class SteamService {
       throw new HttpError(400, "Invalid Steam claimed ID format", "VALIDATION_ERROR");
     }
 
-    usersService.linkSteamAccount(pendingState.userId, steamId);
-    const syncedGames = await this.syncOwnedGames(pendingState.userId);
+    const user = pendingState.userId
+      ? usersService.linkSteamAccount(pendingState.userId, steamId)
+      : usersService.getOrCreateUserBySteamId(steamId);
+
+    if (!user.integrations.steamId) {
+      usersService.linkSteamAccount(user.id, steamId);
+    }
+
+    const syncedGames = await this.syncOwnedGames(user.id);
 
     return {
-      userId: pendingState.userId,
+      userId: user.id,
       steamId,
       syncedGames
     };

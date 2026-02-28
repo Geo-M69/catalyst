@@ -33,10 +33,10 @@ npm run dev
 
 ## Steam Link Flow
 
-1. Authenticated frontend calls `GET /auth/steam/start`.
+1. Frontend calls `GET /auth/steam/start`.
 2. Frontend opens returned `authorizationUrl` in browser.
 3. Steam redirects to `/auth/steam/callback`.
-4. Backend verifies OpenID response, links `steamId`, syncs owned games, and redirects to:
+4. Backend verifies OpenID response, creates/links the local user, sets a session cookie, syncs owned games, and redirects to:
    `FRONTEND_BASE_URL + FRONTEND_STEAM_CALLBACK_PATH` with status query params.
 
 ## Storage and Security

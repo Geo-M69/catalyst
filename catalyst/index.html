@@ -12,13 +12,16 @@
   </head>
 
   <body>
-    <div class="centered" style="font-size: 120px;">
-      <span>Welcome to </span>
-      <span style="color: #F487B6">Catalyst</span>
-    </div>
-    <div class="centered">
-      <p style="font-size: 50px;">Login with Steam</p>
-      <button id="steam-login" class="login-button" onclick="steamLogin()">Login</button>
-    </div>
+    <main class="centered app-shell">
+      <h1 class="title">
+        <span>Welcome to </span>
+        <span class="brand">Catalyst</span>
+      </h1>
+
+      <section class="auth-card">
+        <p id="status-message" class="status-message">Checking session...</p>
+        <button id="steam-login" class="login-button" type="button">Login with Steam</button>
+      </section>
+    </main>
   </body>
 </html>

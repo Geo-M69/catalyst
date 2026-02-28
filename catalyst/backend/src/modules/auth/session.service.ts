@@ -84,6 +84,11 @@ class SessionService {
     sessionRepository.deleteByTokenHash(tokenHash);
   }
 
+  public createSessionForUser(userId: string): string {
+    usersService.getRequiredUser(userId);
+    return this.createSession(userId);
+  }
+
   public cleanupExpiredSessions(): void {
     const nowIso = new Date().toISOString();
     sessionRepository.deleteExpiredSessions(nowIso);

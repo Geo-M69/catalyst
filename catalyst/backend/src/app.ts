@@ -15,9 +15,26 @@ if (env.TRUST_PROXY) {
   app.set("trust proxy", 1);
 }
 
+const allowedOrigins = new Set<string>([env.FRONTEND_BASE_URL]);
+
+if (env.NODE_ENV !== "production") {
+  allowedOrigins.add("http://localhost:1420");
+  allowedOrigins.add("http://127.0.0.1:1420");
+  allowedOrigins.add("tauri://localhost");
+  allowedOrigins.add("http://tauri.localhost");
+  allowedOrigins.add("null");
+}
+
 app.use(
   cors({
-    origin: env.FRONTEND_BASE_URL,
+    origin: (requestOrigin, callback) => {
+      if (!requestOrigin || allowedOrigins.has(requestOrigin)) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error(`CORS origin not allowed: ${requestOrigin}`));
+    },
     credentials: true
   })
 );

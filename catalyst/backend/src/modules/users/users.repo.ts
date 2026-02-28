@@ -119,6 +119,57 @@ class UsersRepository {
     return mapRowToAuthRecord(row);
   }
 
+  public findBySteamId(steamId: string): User | null {
+    const db = getDatabase();
+
+    const row = db
+      .prepare(
+        `
+        SELECT id, email, password_hash, steam_id, created_at, updated_at
+        FROM users
+        WHERE steam_id = ?
+      `
+      )
+      .get(steamId) as UserRow | undefined;
+
+    if (!row) {
+      return null;
+    }
+
+    return mapRowToUser(row);
+  }
+
+  public createSteamUser(steamId: string, passwordHash: string): User {
+    const db = getDatabase();
+
+    const id = randomUUID();
+    const timestamp = new Date().toISOString();
+    const email = `steam_${randomUUID()}@steam.local`;
+
+    db.prepare(
+      `
+      INSERT INTO users (id, email, password_hash, steam_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `
+    ).run(id, email, passwordHash, steamId, timestamp, timestamp);
+
+    const insertedRow = db
+      .prepare(
+        `
+        SELECT id, email, password_hash, steam_id, created_at, updated_at
+        FROM users
+        WHERE id = ?
+      `
+      )
+      .get(id) as UserRow | undefined;
+
+    if (!insertedRow) {
+      throw new Error("Failed to create Steam user");
+    }
+
+    return mapRowToUser(insertedRow);
+  }
+
   public setSteamId(userId: string, steamId: string): User | null {
     const db = getDatabase();
 

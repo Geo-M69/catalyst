@@ -2,6 +2,7 @@ import type { ParsedQs } from "qs";
 import type { Request, RequestHandler } from "express";
 import { z } from "zod";
 
+import { env } from "../../config/env.js";
 import { HttpError } from "../../shared/errors/http-error.js";
 
 import { authService } from "./auth.service.js";
@@ -40,6 +41,22 @@ const getAuthenticatedUser = (request: Request): NonNullable<Request["authUser"]
   }
 
   return request.authUser;
+};
+
+const getOptionalAuthenticatedUser = (request: Request): Request["authUser"] => {
+  const rawToken = request.cookies?.[env.SESSION_COOKIE_NAME];
+  if (typeof rawToken !== "string" || rawToken.trim().length === 0) {
+    return undefined;
+  }
+
+  const user = sessionService.getUserBySessionToken(rawToken);
+  if (!user) {
+    return undefined;
+  }
+
+  request.authUser = user;
+  request.sessionToken = rawToken;
+  return user;
 };
 
 const parseCredentials = (payload: unknown): z.infer<typeof credentialsSchema> => {
@@ -110,8 +127,8 @@ export const sessionController: RequestHandler = (req, res, next) => {
 
 export const startSteamAuthController: RequestHandler = (req, res, next) => {
   try {
-    const user = getAuthenticatedUser(req);
-    const result = authService.startSteamAuth(user.id);
+    const user = getOptionalAuthenticatedUser(req);
+    const result = authService.startSteamAuth(user?.id);
 
     res.json(result);
   } catch (error) {
@@ -124,6 +141,9 @@ export const steamCallbackController: RequestHandler = async (req, res) => {
 
   try {
     const result = await authService.completeSteamAuth(params);
+    const sessionToken = sessionService.createSessionForUser(result.userId);
+    sessionService.setSessionCookie(res, sessionToken);
+
     const redirectUrl = authService.buildFrontendCallbackUrl({
       status: "success",
       userId: result.userId,

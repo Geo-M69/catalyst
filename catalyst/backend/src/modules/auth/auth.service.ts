@@ -19,7 +19,7 @@ export interface PublicUser {
 }
 
 class AuthService {
-  public startSteamAuth(userId: string): { authorizationUrl: string } {
+  public startSteamAuth(userId?: string): { authorizationUrl: string } {
     return steamService.createAuthorization(userId);
   }
 

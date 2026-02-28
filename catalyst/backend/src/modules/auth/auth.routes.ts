@@ -17,5 +17,5 @@ authRouter.post("/register", authRateLimiter, registerController);
 authRouter.post("/login", authRateLimiter, loginController);
 authRouter.post("/logout", requireSession, logoutController);
 authRouter.get("/session", requireSession, sessionController);
-authRouter.get("/steam/start", requireSession, steamRateLimiter, startSteamAuthController);
+authRouter.get("/steam/start", steamRateLimiter, startSteamAuthController);
 authRouter.get("/steam/callback", steamRateLimiter, steamCallbackController);

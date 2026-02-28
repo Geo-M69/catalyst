@@ -1,3 +1,7 @@
+import { randomUUID } from "node:crypto";
+
+import bcrypt from "bcryptjs";
+
 import { HttpError } from "../../shared/errors/http-error.js";
 
 import { usersRepository } from "./users.repo.js";
@@ -47,6 +51,25 @@ class UsersService {
 
   public getAuthUserByEmail(email: string): AuthUserRecord | null {
     return usersRepository.findAuthByEmail(email);
+  }
+
+  public getOrCreateUserBySteamId(steamId: string): User {
+    const existingUser = usersRepository.findBySteamId(steamId);
+    if (existingUser) {
+      return existingUser;
+    }
+
+    try {
+      const placeholderHash = bcrypt.hashSync(randomUUID(), 10);
+      return usersRepository.createSteamUser(steamId, placeholderHash);
+    } catch (error) {
+      const createdByAnotherRequest = usersRepository.findBySteamId(steamId);
+      if (createdByAnotherRequest) {
+        return createdByAnotherRequest;
+      }
+
+      throw error;
+    }
   }
 
   public linkSteamAccount(userId: string, steamId: string): User {
