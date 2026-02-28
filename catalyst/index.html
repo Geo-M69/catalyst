@@ -3,22 +3,20 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="stylesheet" href="/src/styles.css" />
-    <style>
-      @import url('https://fonts.googleapis.com/css2?family=Alyamama:wght@300..900&display=swap');
-    </style>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Catalyst</title>
     <script type="module" src="/src/main.ts" defer></script>
   </head>
 
   <body>
-    <main class="centered app-shell">
-      <h1 class="title scale-down-center">
-        <span>Welcome to </span>
-        <span class="brand">Catalyst</span>
+    <main id="app-shell" class="centered app-shell">
+      <h1 id="welcome-title" class="title fade-in">
+        <span>welcome to</span>
+        <br>
+        <span class="brand">catalyst</span>
       </h1>
 
-      <section class="auth-card">
+      <section id="auth-panel" class="auth-card" hidden>
         <p id="status-message" class="status-message">Checking session...</p>
         <button id="steam-login" class="login-button" type="button">Login with Steam</button>
       </section>

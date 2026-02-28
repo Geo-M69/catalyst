@@ -1,9 +1,50 @@
+@font-face {
+  font-family: "Junicode";
+  src: url("./assets/fonts/Junicode/OTF/Junicode-Light.otf") format("opentype");
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Junicode";
+  src: url("./assets/fonts/Junicode/OTF/Junicode-Regular.otf") format("opentype");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Junicode";
+  src: url("./assets/fonts/Junicode/OTF/Junicode-SmBold.otf") format("opentype");
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+}
+
+:root {
+  --color-background: #121212;
+  --color-text: #ffffff;
+  --color-accent: #f487b6;
+  --color-card-bg: rgba(255, 255, 255, 0.06);
+  --color-card-border: rgba(255, 255, 255, 0.18);
+  --color-error: #ff8686;
+  --color-button-bg: #ffffff;
+  --color-button-text: #1a1a1a;
+}
+
 body {
   margin: 0;
   min-height: 100vh;
-  background: radial-gradient(circle at top, #2a1d27 0%, #151515 55%, #0f0f0f 100%);
-  color: #ffffff;
-  font-family: "Alyamama", sans-serif;
+  background: var(--color-background);
+  color: var(--color-text);
+  font-family: sans-serif;
+}
+
+h1 {
+  margin: 0;
+  font-family: "Junicode", serif;
+  font-weight: 300;
 }
 
 .centered {
@@ -14,26 +55,26 @@ body {
 
 .app-shell {
   justify-content: center;
+  min-height: 100vh;
   padding: 2rem;
+  box-sizing: border-box;
 }
 
 .title {
-  margin: 0 0 2rem;
   font-size: clamp(2.4rem, 7vw, 5.6rem);
-  font-weight: 800;
   text-align: center;
 }
 
 .brand {
-  color: #f487b6;
+  color: var(--color-accent);
 }
 
 .auth-card {
   width: min(560px, 92vw);
   padding: 1.25rem;
+  border: 1px solid var(--color-card-border);
   border-radius: 18px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-card-bg);
   backdrop-filter: blur(5px);
 }
 
@@ -43,33 +84,7 @@ body {
 }
 
 .status-error {
-  color: #ff8686;
-}
-
-.auth-fields {
-  display: grid;
-  gap: 0.5rem;
-  margin-bottom: 0.9rem;
-}
-
-.auth-fields label {
-  font-size: 0.95rem;
-}
-
-.auth-fields input {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 0.7rem 0.8rem;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background: rgba(0, 0, 0, 0.25);
-  color: #fff;
-}
-
-.auth-actions {
-  display: flex;
-  gap: 0.6rem;
-  margin-bottom: 0.9rem;
+  color: var(--color-error);
 }
 
 button {
@@ -81,25 +96,10 @@ button {
   font-weight: 700;
 }
 
-.auth-actions button {
-  flex: 1;
-}
-
-#register-button {
-  background-color: #f1b8cd;
-  color: #1f1f1f;
-}
-
-#login-button,
-#logout-button {
-  background-color: #f487b6;
-  color: #1f1f1f;
-}
-
 .login-button {
   width: 100%;
-  background-color: #ffffff;
-  color: #1a1a1a;
+  background-color: var(--color-button-bg);
+  color: var(--color-button-text);
   font-size: 1.05rem;
 }
 
@@ -108,28 +108,32 @@ button:disabled {
   cursor: not-allowed;
 }
 
-.scale-down-center {
-	animation: scale-down-center 1s cubic-bezier(0.250, 0.460, 0.450, 0.940) both;
+.auth-card-reveal {
+  animation: fade-in-up 320ms ease-out both;
 }
 
-.slide-bottom {
-	animation: slide-bottom 1s cubic-bezier(0.250, 0.460, 0.450, 0.940) both;
+.fade-in {
+  animation: fade-in 1.5s cubic-bezier(0.39, 0.575, 0.565, 1) both;
 }
 
-@keyframes scale-down-center {
+@keyframes fade-in-up {
   0% {
-    transform: scale(1);
+    opacity: 0;
+    transform: translateY(16px);
   }
+
   100% {
-    transform: scale(0.5);
-  }
-}
-
-@keyframes slide-bottom {
-  0% {
+    opacity: 1;
     transform: translateY(0);
   }
+}
+
+@keyframes fade-in {
+  0% {
+    opacity: 0;
+  }
+
   100% {
-    transform: translateY(100px);
+    opacity: 1;
   }
 }

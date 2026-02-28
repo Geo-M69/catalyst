@@ -17,12 +17,27 @@ interface SteamStartResponse {
 
 const BACKEND_BASE_URL = "http://localhost:4000";
 
+const welcomeTitleElement = document.getElementById("welcome-title");
+const authPanelElement = document.getElementById("auth-panel");
 const statusMessageElement = document.getElementById("status-message");
 const steamButtonElement = document.getElementById("steam-login");
 
-if (!(statusMessageElement instanceof HTMLElement) || !(steamButtonElement instanceof HTMLButtonElement)) {
+if (
+  !(welcomeTitleElement instanceof HTMLElement) ||
+  !(authPanelElement instanceof HTMLElement) ||
+  !(statusMessageElement instanceof HTMLElement) ||
+  !(steamButtonElement instanceof HTMLButtonElement)
+) {
   throw new Error("App root is missing required DOM elements");
 }
+
+const revealAuthPanel = (): void => {
+  window.setTimeout(() => {
+    welcomeTitleElement.hidden = true;
+    authPanelElement.hidden = false;
+    authPanelElement.classList.add("auth-card-reveal");
+  }, 3000);
+};
 
 const setStatusMessage = (message: string, isError = false): void => {
   statusMessageElement.textContent = message;
@@ -129,5 +144,6 @@ steamButtonElement.addEventListener("click", () => {
   void startSteamLogin();
 });
 
+revealAuthPanel();
 applySteamCallbackStatusFromQuery();
 void refreshSession();
