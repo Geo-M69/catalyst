@@ -1,24 +1,28 @@
-import type { RequestHandler } from "express";
+import type { Request, RequestHandler } from "express";
 
 import { HttpError } from "../../shared/errors/http-error.js";
 
 import { libraryService } from "./library.service.js";
 
-const getUserIdFromQuery = (value: unknown): string => {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    throw new HttpError(400, "Missing required query parameter: userId", "VALIDATION_ERROR");
+const getAuthenticatedUserId = (request: Request): string => {
+  if (!request.authUser) {
+    throw new HttpError(401, "Not authenticated", "UNAUTHORIZED");
   }
 
-  return value;
+  return request.authUser.id;
 };
 
-export const getLibraryController: RequestHandler = (req, res) => {
-  const userId = getUserIdFromQuery(req.query.userId);
-  const games = libraryService.listUserGames(userId);
+export const getLibraryController: RequestHandler = (req, res, next) => {
+  try {
+    const userId = getAuthenticatedUserId(req);
+    const games = libraryService.listUserGames(userId);
 
-  res.json({
-    userId,
-    total: games.length,
-    games
-  });
+    res.json({
+      userId,
+      total: games.length,
+      games
+    });
+  } catch (error) {
+    next(error);
+  }
 };

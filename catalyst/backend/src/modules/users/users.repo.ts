@@ -1,43 +1,144 @@
-import type { User } from "./users.types.js";
+import { randomUUID } from "node:crypto";
+
+import { getDatabase } from "../../shared/db/database.js";
+
+import type { AuthUserRecord, User } from "./users.types.js";
+
+interface UserRow {
+  id: string;
+  email: string;
+  password_hash: string;
+  steam_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+const mapRowToUser = (row: UserRow): User => ({
+  id: row.id,
+  email: row.email,
+  integrations: {
+    steamId: row.steam_id ?? undefined
+  },
+  createdAt: row.created_at,
+  updatedAt: row.updated_at
+});
+
+const mapRowToAuthRecord = (row: UserRow): AuthUserRecord => ({
+  user: mapRowToUser(row),
+  passwordHash: row.password_hash
+});
 
 class UsersRepository {
-  private readonly users = new Map<string, User>();
+  public create(email: string, passwordHash: string): AuthUserRecord {
+    const db = getDatabase();
 
-  public getOrCreate(userId: string): User {
-    const existingUser = this.users.get(userId);
-    if (existingUser) {
-      return existingUser;
+    const id = randomUUID();
+    const timestamp = new Date().toISOString();
+
+    db.prepare(
+      `
+      INSERT INTO users (id, email, password_hash, steam_id, created_at, updated_at)
+      VALUES (?, ?, ?, NULL, ?, ?)
+    `
+    ).run(id, email, passwordHash, timestamp, timestamp);
+
+    const insertedRow = db
+      .prepare(
+        `
+        SELECT id, email, password_hash, steam_id, created_at, updated_at
+        FROM users
+        WHERE id = ?
+      `
+      )
+      .get(id) as UserRow | undefined;
+
+    if (!insertedRow) {
+      throw new Error("Failed to create user");
     }
 
-    const timestamp = new Date().toISOString();
-    const newUser: User = {
-      id: userId,
-      integrations: {},
-      createdAt: timestamp,
-      updatedAt: timestamp
-    };
-
-    this.users.set(userId, newUser);
-    return newUser;
+    return mapRowToAuthRecord(insertedRow);
   }
 
   public findById(userId: string): User | null {
-    return this.users.get(userId) ?? null;
+    const db = getDatabase();
+
+    const row = db
+      .prepare(
+        `
+        SELECT id, email, password_hash, steam_id, created_at, updated_at
+        FROM users
+        WHERE id = ?
+      `
+      )
+      .get(userId) as UserRow | undefined;
+
+    if (!row) {
+      return null;
+    }
+
+    return mapRowToUser(row);
   }
 
-  public setSteamId(userId: string, steamId: string): User {
-    const user = this.getOrCreate(userId);
-    const updatedUser: User = {
-      ...user,
-      integrations: {
-        ...user.integrations,
-        steamId
-      },
-      updatedAt: new Date().toISOString()
-    };
+  public findAuthById(userId: string): AuthUserRecord | null {
+    const db = getDatabase();
 
-    this.users.set(userId, updatedUser);
-    return updatedUser;
+    const row = db
+      .prepare(
+        `
+        SELECT id, email, password_hash, steam_id, created_at, updated_at
+        FROM users
+        WHERE id = ?
+      `
+      )
+      .get(userId) as UserRow | undefined;
+
+    if (!row) {
+      return null;
+    }
+
+    return mapRowToAuthRecord(row);
+  }
+
+  public findAuthByEmail(email: string): AuthUserRecord | null {
+    const db = getDatabase();
+
+    const row = db
+      .prepare(
+        `
+        SELECT id, email, password_hash, steam_id, created_at, updated_at
+        FROM users
+        WHERE email = ?
+      `
+      )
+      .get(email) as UserRow | undefined;
+
+    if (!row) {
+      return null;
+    }
+
+    return mapRowToAuthRecord(row);
+  }
+
+  public setSteamId(userId: string, steamId: string): User | null {
+    const db = getDatabase();
+
+    const updatedAt = new Date().toISOString();
+
+    const result = db
+      .prepare(
+        `
+        UPDATE users
+        SET steam_id = ?, updated_at = ?
+        WHERE id = ?
+      `
+      )
+      .run(steamId, updatedAt, userId);
+
+    if (result.changes === 0) {
+      return null;
+    }
+
+    return this.findById(userId);
   }
 }
 

@@ -1,4 +1,5 @@
 import { env } from "../../config/env.js";
+import type { User } from "../users/users.types.js";
 
 import { steamService } from "../integrations/steam/steam.service.js";
 
@@ -8,6 +9,13 @@ interface CallbackPayload {
   steamId?: string;
   syncedGames?: number;
   message?: string;
+}
+
+export interface PublicUser {
+  id: string;
+  email: string;
+  steamLinked: boolean;
+  steamId?: string;
 }
 
 class AuthService {
@@ -44,6 +52,15 @@ class AuthService {
     }
 
     return callbackUrl.toString();
+  }
+
+  public toPublicUser(user: User): PublicUser {
+    return {
+      id: user.id,
+      email: user.email,
+      steamLinked: user.integrations.steamId !== undefined,
+      steamId: user.integrations.steamId
+    };
   }
 }
 

@@ -20,13 +20,15 @@ interface SteamCallbackResult {
 }
 
 const AUTH_STATE_TTL_MS = 10 * 60 * 1000;
-const STEAM_CLAIMED_ID_PATTERN = /\/id\/(\d{17})$/;
+const STEAM_CLAIMED_ID_PATTERN = /\/openid\/id\/(\d{17})$/;
 
 class SteamService {
   private readonly pendingAuthStates = new Map<string, PendingAuthState>();
 
   public createAuthorization(userId: string): { authorizationUrl: string } {
     this.clearExpiredStates();
+
+    usersService.getRequiredUser(userId);
 
     const state = randomUUID();
     this.pendingAuthStates.set(state, {
@@ -84,7 +86,7 @@ class SteamService {
   }
 
   public async syncOwnedGames(userId: string): Promise<number> {
-    const user = usersService.getOrCreateUser(userId);
+    const user = usersService.getRequiredUser(userId);
     const steamId = user.integrations.steamId;
     if (!steamId) {
       throw new HttpError(400, "User is not linked to Steam", "STEAM_NOT_LINKED");
@@ -99,7 +101,7 @@ class SteamService {
   }
 
   public getLinkStatus(userId: string): { linked: boolean; steamId?: string } {
-    const user = usersService.getOrCreateUser(userId);
+    const user = usersService.getRequiredUser(userId);
     return {
       linked: user.integrations.steamId !== undefined,
       steamId: user.integrations.steamId

@@ -3,7 +3,7 @@ import { usersService } from "../users/users.service.js";
 
 class SyncService {
   public async syncUserLibrary(userId: string): Promise<{ steam: number }> {
-    const user = usersService.getOrCreateUser(userId);
+    const user = usersService.getRequiredUser(userId);
 
     let steamSynced = 0;
     if (user.integrations.steamId) {

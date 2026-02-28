@@ -5,12 +5,12 @@ import type { Game, GameProvider } from "./library.types.js";
 
 class LibraryService {
   public listUserGames(userId: string): Game[] {
-    usersService.getOrCreateUser(userId);
+    usersService.getRequiredUser(userId);
     return libraryRepository.listByUser(userId);
   }
 
   public replaceProviderGames(userId: string, provider: GameProvider, games: Game[]): void {
-    usersService.getOrCreateUser(userId);
+    usersService.getRequiredUser(userId);
     libraryRepository.replaceProviderGames(userId, provider, games);
   }
 }
