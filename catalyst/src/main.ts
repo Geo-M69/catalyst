@@ -16,6 +16,8 @@ interface SteamStartResponse {
 }
 
 const BACKEND_BASE_URL = "http://localhost:4000";
+const SPLASH_DURATION_MS = 3000;
+const TITLE_FADE_OUT_MS = 450;
 
 const welcomeTitleElement = document.getElementById("welcome-title");
 const authPanelElement = document.getElementById("auth-panel");
@@ -31,14 +33,6 @@ if (
   throw new Error("App root is missing required DOM elements");
 }
 
-const revealAuthPanel = (): void => {
-  window.setTimeout(() => {
-    welcomeTitleElement.hidden = true;
-    authPanelElement.hidden = false;
-    authPanelElement.classList.add("auth-card-reveal");
-  }, 3000);
-};
-
 const setStatusMessage = (message: string, isError = false): void => {
   statusMessageElement.textContent = message;
   statusMessageElement.classList.toggle("status-error", isError);
@@ -46,6 +40,28 @@ const setStatusMessage = (message: string, isError = false): void => {
 
 const setPendingState = (isPending: boolean): void => {
   steamButtonElement.disabled = isPending;
+};
+
+const replayFadeInInReverse = (element: HTMLElement, durationMs: number): void => {
+  element.style.setProperty("--title-fade-direction", "reverse");
+  element.style.setProperty("--title-fade-duration", `${durationMs}ms`);
+  element.classList.remove("fade-in");
+  void element.offsetWidth;
+  element.classList.add("fade-in");
+};
+
+const revealAuthPanel = (): void => {
+  const fadeOutStartMs = Math.max(0, SPLASH_DURATION_MS - TITLE_FADE_OUT_MS);
+
+  window.setTimeout(() => {
+    replayFadeInInReverse(welcomeTitleElement, TITLE_FADE_OUT_MS);
+  }, fadeOutStartMs);
+
+  window.setTimeout(() => {
+    welcomeTitleElement.hidden = true;
+    authPanelElement.hidden = false;
+    authPanelElement.classList.add("auth-card-reveal");
+  }, SPLASH_DURATION_MS);
 };
 
 const parseErrorMessage = async (response: Response): Promise<string> => {

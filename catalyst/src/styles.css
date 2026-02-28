@@ -44,7 +44,7 @@ body {
 h1 {
   margin: 0;
   font-family: "Junicode", serif;
-  font-weight: 300;
+  font-weight: 400;
 }
 
 .centered {
@@ -113,7 +113,11 @@ button:disabled {
 }
 
 .fade-in {
-  animation: fade-in 1.5s cubic-bezier(0.39, 0.575, 0.565, 1) both;
+  animation-name: fade-in;
+  animation-duration: var(--title-fade-duration, 1.5s);
+  animation-timing-function: cubic-bezier(0.39, 0.575, 0.565, 1);
+  animation-fill-mode: both;
+  animation-direction: var(--title-fade-direction, normal);
 }
 
 @keyframes fade-in-up {
