@@ -107,3 +107,29 @@ button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
+
+.scale-down-center {
+	animation: scale-down-center 1s cubic-bezier(0.250, 0.460, 0.450, 0.940) both;
+}
+
+.slide-bottom {
+	animation: slide-bottom 1s cubic-bezier(0.250, 0.460, 0.450, 0.940) both;
+}
+
+@keyframes scale-down-center {
+  0% {
+    transform: scale(1);
+  }
+  100% {
+    transform: scale(0.5);
+  }
+}
+
+@keyframes slide-bottom {
+  0% {
+    transform: translateY(0);
+  }
+  100% {
+    transform: translateY(100px);
+  }
+}

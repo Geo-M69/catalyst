@@ -1,3 +1,5 @@
+export {};
+
 interface PublicUser {
   id: string;
   email: string;
@@ -92,8 +94,8 @@ const applySteamCallbackStatusFromQuery = (): void => {
   }
 
   if (status === "success") {
-    const syncedGames = params.get("syncedGames") ?? "0";
-    setStatusMessage(`Steam login complete. Synced ${syncedGames} games.`);
+    window.location.replace("/src/mainPage/mainPage.html");
+    return;
   } else {
     const message = params.get("message") ?? "Steam login failed.";
     setStatusMessage(message, true);
