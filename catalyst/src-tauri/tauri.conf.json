@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.geo.catalyst",
   "build": {
-    "beforeDevCommand": "npm run dev:full",
+    "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
@@ -24,7 +24,12 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["msi"],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      }
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

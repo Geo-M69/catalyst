@@ -1,3 +1,5 @@
+import { invoke } from "@tauri-apps/api/core";
+
 export {};
 
 interface PublicUser {
@@ -7,15 +9,11 @@ interface PublicUser {
   steamId?: string;
 }
 
-interface SessionResponse {
+interface SteamAuthResponse {
   user: PublicUser;
+  syncedGames: number;
 }
 
-interface SteamStartResponse {
-  authorizationUrl: string;
-}
-
-const BACKEND_BASE_URL = "http://localhost:4000";
 const SPLASH_DURATION_MS = 3000;
 const TITLE_FADE_OUT_MS = 450;
 
@@ -60,98 +58,60 @@ const revealAuthPanel = (): void => {
   window.setTimeout(() => {
     welcomeTitleElement.hidden = true;
     authPanelElement.hidden = false;
-    authPanelElement.classList.add("auth-card-reveal");
+    authPanelElement.classList.add("fade-in");
   }, SPLASH_DURATION_MS);
 };
 
-const parseErrorMessage = async (response: Response): Promise<string> => {
-  try {
-    const body = (await response.json()) as {
-      error?: {
-        message?: string;
-      };
-    };
-
-    return body.error?.message ?? `Request failed with status ${response.status}`;
-  } catch {
-    return `Request failed with status ${response.status}`;
-  }
-};
-
-const requestJson = async <T>(path: string): Promise<T> => {
-  let response: Response;
-
-  try {
-    response = await fetch(`${BACKEND_BASE_URL}${path}`, {
-      method: "GET",
-      credentials: "include"
-    });
-  } catch {
-    throw new Error(
-      `Could not reach backend at ${BACKEND_BASE_URL}. Start backend and confirm CORS/origin settings.`
-    );
+const toErrorMessage = (error: unknown, fallbackMessage: string): string => {
+  if (typeof error === "string" && error.trim().length > 0) {
+    return error;
   }
 
-  if (!response.ok) {
-    throw new Error(await parseErrorMessage(response));
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
   }
 
-  return (await response.json()) as T;
+  return fallbackMessage;
 };
 
 const refreshSession = async (): Promise<void> => {
   try {
-    const session = await requestJson<SessionResponse>("/auth/session");
+    const user = await invoke<PublicUser | null>("get_session");
 
-    if (session.user.steamLinked) {
-      setStatusMessage(`Logged in with Steam (${session.user.steamId ?? "unknown"}).`);
+    if (!user) {
+      setStatusMessage("Not logged in. Click below to sign in with Steam.");
+      steamButtonElement.textContent = "Login with Steam";
+      return;
+    }
+
+    if (user.steamLinked) {
+      setStatusMessage(`Logged in with Steam (${user.steamId ?? "unknown"}).`);
       steamButtonElement.textContent = "Reconnect Steam";
       return;
     }
 
     setStatusMessage("Account session exists but Steam is not linked yet.");
     steamButtonElement.textContent = "Connect Steam";
-  } catch {
-    setStatusMessage("Not logged in. Click below to sign in with Steam.");
+  } catch (error) {
+    setStatusMessage(toErrorMessage(error, "Could not read current app session."), true);
     steamButtonElement.textContent = "Login with Steam";
   }
-};
-
-const applySteamCallbackStatusFromQuery = (): void => {
-  const params = new URLSearchParams(window.location.search);
-  const status = params.get("status");
-  if (!status) {
-    return;
-  }
-
-  if (status === "success") {
-    window.location.replace("/src/mainPage/mainPage.html");
-    return;
-  } else {
-    const message = params.get("message") ?? "Steam login failed.";
-    setStatusMessage(message, true);
-  }
-
-  params.delete("status");
-  params.delete("userId");
-  params.delete("steamId");
-  params.delete("syncedGames");
-  params.delete("message");
-
-  const nextQuery = params.toString();
-  const nextUrl = `${window.location.pathname}${nextQuery.length > 0 ? `?${nextQuery}` : ""}`;
-  window.history.replaceState({}, "", nextUrl);
 };
 
 const startSteamLogin = async (): Promise<void> => {
   try {
     setPendingState(true);
 
-    const result = await requestJson<SteamStartResponse>("/auth/steam/start");
-    window.location.assign(result.authorizationUrl);
+    const result = await invoke<SteamAuthResponse>("start_steam_auth");
+    const steamId = result.user.steamId ?? "unknown";
+    window.history.replaceState(
+      {},
+      "",
+      `${window.location.pathname}?status=success&steamId=${encodeURIComponent(steamId)}&syncedGames=${result.syncedGames}`
+    );
+    window.location.replace("/src/mainPage/mainPage.html");
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Could not start Steam login";
-    setStatusMessage(message, true);
+    setStatusMessage(toErrorMessage(error, "Could not start Steam login"), true);
     setPendingState(false);
   }
 };
@@ -161,5 +121,4 @@ steamButtonElement.addEventListener("click", () => {
 });
 
 revealAuthPanel();
-applySteamCallbackStatusFromQuery();
 void refreshSession();

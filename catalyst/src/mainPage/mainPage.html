@@ -1,11 +1,32 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Document</title>
-</head>
-<body>
-    
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Catalyst - Library</title>
+    <script type="module" src="/src/mainPage/mainPage.ts" defer></script>
+  </head>
+
+  <body>
+    <main class="centered app-shell">
+      <section class="auth-card">
+        <p id="main-status" class="status-message">Loading session...</p>
+        <p id="steam-status" class="status-message">Checking Steam status...</p>
+
+        <div class="button-row">
+          <button id="steam-link-button" class="login-button" type="button">Connect Steam</button>
+          <button id="steam-sync-button" class="secondary-button" type="button">Sync Steam</button>
+        </div>
+
+        <div class="button-row">
+          <button id="refresh-library-button" class="secondary-button" type="button">Refresh Library</button>
+          <button id="logout-button" class="danger-button" type="button">Logout</button>
+        </div>
+
+        <p id="library-summary" class="status-message">Loading library...</p>
+        <ul id="library-list" class="library-list"></ul>
+      </section>
+    </main>
+  </body>
 </html>

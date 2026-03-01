@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap');
+
 @font-face {
   font-family: "Junicode";
   src: url("./assets/fonts/Junicode/OTF/Junicode-Light.otf") format("opentype");
@@ -23,6 +25,10 @@
 }
 
 :root {
+  --font-inter: "Inter", "Helvetica Neue", Arial, sans-serif;
+  --font-inter-regular: 400;
+  --font-inter-medium: 500;
+  --font-inter-bold: 700;
   --color-background: #121212;
   --color-text: #ffffff;
   --color-accent: #f487b6;
@@ -31,6 +37,10 @@
   --color-error: #ff8686;
   --color-button-bg: #ffffff;
   --color-button-text: #1a1a1a;
+  --color-muted: rgba(255, 255, 255, 0.78);
+  --color-secondary-bg: rgba(255, 255, 255, 0.1);
+  --color-danger-bg: #9c2d47;
+  --color-input-bg: rgba(0, 0, 0, 0.22);
 }
 
 body {
@@ -39,6 +49,10 @@ body {
   background: var(--color-background);
   color: var(--color-text);
   font-family: sans-serif;
+}
+
+[hidden] {
+  display: none !important;
 }
 
 h1 {
@@ -54,10 +68,24 @@ h1 {
 }
 
 .app-shell {
+  --shell-gap: clamp(1rem, 4vh, 2.5rem);
   justify-content: center;
   min-height: 100vh;
-  padding: 2rem;
+  min-height: 100svh;
+  padding: var(--shell-gap) 2rem;
   box-sizing: border-box;
+}
+
+@media (max-height: 760px) {
+  .app-shell {
+    --shell-gap: clamp(2rem, 8svh, 3.5rem);
+  }
+}
+
+@media (max-height: 600px) {
+  .app-shell {
+    --shell-gap: clamp(2.25rem, 9svh, 4rem);
+  }
 }
 
 .title {
@@ -70,12 +98,25 @@ h1 {
 }
 
 .auth-card {
-  width: min(560px, 92vw);
-  padding: 1.25rem;
+  width: min(340px, 88vw);
+  height: min(500px, calc(100vh - (2 * var(--shell-gap))));
+  height: min(500px, calc(100svh - (2 * var(--shell-gap))));
+  padding: 1.5rem 1.25rem;
   border: 1px solid var(--color-card-border);
-  border-radius: 18px;
+  border-radius: 20px;
   background: var(--color-card-bg);
   backdrop-filter: blur(5px);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(0.75rem, 2vh, 1.25rem);
+}
+
+#auth-panel {
+  width: min(300px, 80vw);
+  background: rgba(255, 255, 255, 0.02);
+  --title-fade-duration: 1.2s;
 }
 
 .status-message {
@@ -87,29 +128,137 @@ h1 {
   color: var(--color-error);
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.auth-platform {
+  margin: 0;
+  font-family: var(--font-inter);
+  font-optical-sizing: auto;
+  font-size: clamp(2rem, 5.5vw, 2.6rem);
+  font-weight: 500;
+}
+
+.auth-card-center {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.steam-logo {
+  width: clamp(160px, 62%, 235px);
+  height: auto;
+}
+
 button {
   border: none;
-  border-radius: 10px;
+  border-radius: 24px;
   cursor: pointer;
   padding: 0.75rem 1rem;
-  font: inherit;
-  font-weight: 700;
+  font-family: var(--font-inter);
+  font-optical-sizing: auto;
+  font-size: inherit;
+  font-weight: var(--font-inter-bold);
+  transition:
+    filter 140ms ease,
+    transform 120ms ease,
+    box-shadow 140ms ease;
 }
 
 .login-button {
   width: 100%;
+  margin-top: auto;
   background-color: var(--color-button-bg);
   color: var(--color-button-text);
   font-size: 1.05rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+@media (hover: hover) {
+  .login-button:not(:disabled):hover {
+    filter: brightness(0.96);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.26);
+    transform: translateY(-1px);
+  }
+}
+
+.login-button:not(:disabled):active {
+  filter: brightness(0.9);
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.22);
+  transform: translateY(1px);
+}
+
+.secondary-button {
+  width: 100%;
+  background: var(--color-secondary-bg);
+  color: var(--color-text);
+}
+
+.danger-button {
+  width: 100%;
+  background: var(--color-danger-bg);
+  color: var(--color-text);
+}
+
+.steam-button {
+  margin-top: 0.9rem;
+}
+
+.auth-form {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.field-label {
+  font-size: 0.92rem;
+  color: var(--color-muted);
+}
+
+.text-input {
+  border: 1px solid var(--color-card-border);
+  border-radius: 10px;
+  background: var(--color-input-bg);
+  color: var(--color-text);
+  padding: 0.68rem 0.75rem;
+  font: inherit;
+}
+
+.text-input:focus {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.button-row {
+  display: flex;
+  gap: 0.65rem;
+  margin-top: 0.45rem;
+}
+
+.library-list {
+  margin: 0.5rem 0 0;
+  padding: 0 0 0 1rem;
+  max-height: 300px;
+  overflow: auto;
+}
+
+.library-list li {
+  margin: 0.35rem 0;
 }
 
 button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
-}
-
-.auth-card-reveal {
-  animation: fade-in-up 320ms ease-out both;
 }
 
 .fade-in {
@@ -120,18 +269,6 @@ button:disabled {
   animation-direction: var(--title-fade-direction, normal);
 }
 
-@keyframes fade-in-up {
-  0% {
-    opacity: 0;
-    transform: translateY(16px);
-  }
-
-  100% {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
 @keyframes fade-in {
   0% {
     opacity: 0;
@@ -139,5 +276,11 @@ button:disabled {
 
   100% {
     opacity: 1;
+  }
+}
+
+@media (max-width: 720px) {
+  .button-row {
+    flex-direction: column;
   }
 }
