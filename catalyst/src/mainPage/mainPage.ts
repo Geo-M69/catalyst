@@ -2,8 +2,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { createFilterPanel } from "./components/filterPanel";
 import { createGameContextMenu } from "./components/gameContextMenu";
 import { renderGameGrid } from "./components/gameGrid";
-import { createGamePropertiesPanel } from "./components/gamePropertiesPanel";
-import { renderOptionsPanel } from "./components/optionsPanel";
+import {
+  createGamePropertiesPanel,
+  type GameBetaAccessCodeValidationResult,
+  type GamePropertiesPersistedSettings,
+  type GamePrivacySettings,
+  type GameVersionBetaOption,
+} from "./components/gamePropertiesPanel";
 import { applyLibraryFilters } from "./filtering";
 import type { CollectionResponse, GameResponse, LibraryResponse, PublicUser } from "./types";
 
@@ -21,8 +26,7 @@ const librarySummaryElement = document.getElementById("library-summary");
 const refreshLibraryButton = document.getElementById("refresh-library-button");
 const filterPanelElement = document.getElementById("filter-panel");
 const libraryGridElement = document.getElementById("library-grid");
-const optionsListElement = document.getElementById("options-list");
-const panelRightElement = document.querySelector(".panel-right");
+const libraryAspectShellElement = document.getElementById("library-aspect-shell");
 
 if (
   !(sessionAccountElement instanceof HTMLElement)
@@ -37,8 +41,7 @@ if (
   || !(refreshLibraryButton instanceof HTMLButtonElement)
   || !(filterPanelElement instanceof HTMLElement)
   || !(libraryGridElement instanceof HTMLElement)
-  || !(optionsListElement instanceof HTMLElement)
-  || !(panelRightElement instanceof HTMLElement)
+  || !(libraryAspectShellElement instanceof HTMLElement)
 ) {
   throw new Error("Main page is missing required DOM elements");
 }
@@ -54,10 +57,30 @@ const GRID_CARD_WIDTH_MAX_PX = 320;
 const GRID_CARD_WIDTH_STEP_PX = 14;
 const GRID_CARD_WIDTH_STORAGE_KEY = "catalyst.library.gridCardMinWidthPx";
 const APP_NAME = "Catalyst";
+const LIBRARY_SOFT_LOCK_ASPECTS: ReadonlyArray<{ label: string; ratio: number }> = [
+  { label: "16:9", ratio: 16 / 9 },
+  { label: "21:9", ratio: 21 / 9 },
+  { label: "32:9", ratio: 32 / 9 },
+];
 
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
-let optionHighlightTimeoutId: number | null = null;
 let closeGameContextMenu: (() => void) | null = null;
+
+interface GameVersionBetasPayload {
+  options: GameVersionBetaOption[];
+  warning?: string;
+}
+
+interface GamePrivacySettingsPayload {
+  hideInLibrary: boolean;
+  markAsPrivate: boolean;
+  overlayDataDeleted: boolean;
+}
+
+interface GameInstallationDetailsPayload {
+  installPath?: string;
+  sizeOnDiskBytes?: number;
+}
 
 const closeSessionAccountMenu = (): void => {
   sessionAccountMenuElement.hidden = true;
@@ -90,40 +113,6 @@ const setSessionStatus = (steamConnected: boolean, isError = false): void => {
 const setLibrarySummaryCounts = (filteredCount: number, totalCount: number): void => {
   librarySummaryElement.textContent = `${filteredCount} of ${totalCount} games shown.`;
   librarySummaryElement.classList.remove("status-error");
-};
-
-const focusOptionsPanel = (titleToHighlight: string | null): void => {
-  panelRightElement.scrollIntoView({ behavior: "smooth", block: "start" });
-
-  const optionItems = Array.from(optionsListElement.querySelectorAll(".option-item"));
-  const highlightedItem = optionItems.find((optionItem) => {
-    if (!(optionItem instanceof HTMLElement)) {
-      return false;
-    }
-
-    if (titleToHighlight === null) {
-      return true;
-    }
-
-    const titleElement = optionItem.querySelector(".option-title");
-    return titleElement?.textContent?.trim() === titleToHighlight;
-  });
-
-  if (!(highlightedItem instanceof HTMLElement)) {
-    return;
-  }
-
-  highlightedItem.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  highlightedItem.classList.add("option-item-highlight");
-
-  if (optionHighlightTimeoutId !== null) {
-    window.clearTimeout(optionHighlightTimeoutId);
-  }
-
-  optionHighlightTimeoutId = window.setTimeout(() => {
-    highlightedItem.classList.remove("option-item-highlight");
-    optionHighlightTimeoutId = null;
-  }, 1400);
 };
 
 const toErrorMessage = (error: unknown, fallbackMessage: string): string => {
@@ -189,6 +178,35 @@ const setGridCardWidthPx = (value: number, persistValue = true): void => {
   if (persistValue) {
     persistGridCardWidthPx(clampedValue);
   }
+};
+
+const applyLibraryAspectSoftLock = (): void => {
+  const viewportWidth = Math.max(window.innerWidth, 1);
+  const viewportHeight = Math.max(window.innerHeight, 1);
+  const viewportRatio = viewportWidth / viewportHeight;
+
+  let targetAspect = LIBRARY_SOFT_LOCK_ASPECTS[0];
+  let smallestRatioDistance = Number.POSITIVE_INFINITY;
+  for (const candidate of LIBRARY_SOFT_LOCK_ASPECTS) {
+    const ratioDistance = Math.abs(viewportRatio - candidate.ratio);
+    if (ratioDistance < smallestRatioDistance) {
+      smallestRatioDistance = ratioDistance;
+      targetAspect = candidate;
+    }
+  }
+
+  // Use a "cover" fit so the main layout always fills the body without bars.
+  let frameWidth = viewportWidth;
+  let frameHeight = Math.ceil(frameWidth / targetAspect.ratio);
+  if (frameHeight < viewportHeight) {
+    frameHeight = viewportHeight;
+    frameWidth = Math.ceil(frameHeight * targetAspect.ratio);
+  }
+
+  libraryAspectShellElement.style.setProperty("--library-aspect-width", `${Math.max(frameWidth, 1)}px`);
+  libraryAspectShellElement.style.setProperty("--library-aspect-height", `${Math.max(frameHeight, 1)}px`);
+  libraryAspectShellElement.style.setProperty("--library-aspect-ratio", `${targetAspect.ratio}`);
+  libraryAspectShellElement.dataset.aspectLabel = targetAspect.label;
 };
 
 const registerGridZoomShortcut = (): void => {
@@ -264,13 +282,176 @@ const listCollectionsForGame = async (game: GameResponse): Promise<CollectionRes
   });
 };
 
+const listGameLanguagesForGame = async (game: GameResponse): Promise<string[]> => {
+  try {
+    return await invoke<string[]>("list_game_languages", {
+      provider: game.provider,
+      externalId: game.externalId,
+    });
+  } catch {
+    return [];
+  }
+};
+
+const listGameVersionBetasForGame = async (game: GameResponse): Promise<GameVersionBetasPayload> => {
+  try {
+    return await invoke<GameVersionBetasPayload>("list_game_versions_betas", {
+      provider: game.provider,
+      externalId: game.externalId,
+    });
+  } catch {
+    return {
+      options: [],
+      warning: "Could not load beta branch metadata from Steam.",
+    };
+  }
+};
+
+const validateGameBetaAccessCodeForGame = async (
+  game: GameResponse,
+  accessCode: string
+): Promise<GameBetaAccessCodeValidationResult> => {
+  try {
+    return await invoke<GameBetaAccessCodeValidationResult>("validate_game_beta_access_code", {
+      provider: game.provider,
+      externalId: game.externalId,
+      accessCode,
+    });
+  } catch {
+    return {
+      valid: false,
+      message: "Could not validate this code right now.",
+    };
+  }
+};
+
+const getGamePrivacySettingsForGame = async (game: GameResponse): Promise<GamePrivacySettingsPayload | null> => {
+  try {
+    return await invoke<GamePrivacySettingsPayload>("get_game_privacy_settings", {
+      provider: game.provider,
+      externalId: game.externalId,
+    });
+  } catch {
+    return null;
+  }
+};
+
+const setGamePrivacySettingsForGame = async (
+  game: GameResponse,
+  settings: Pick<GamePrivacySettings, "hideInLibrary" | "markAsPrivate">
+): Promise<void> => {
+  await invoke("set_game_privacy_settings", {
+    provider: game.provider,
+    externalId: game.externalId,
+    hideInLibrary: settings.hideInLibrary,
+    markAsPrivate: settings.markAsPrivate,
+  });
+};
+
+const clearGameOverlayDataForGame = async (game: GameResponse): Promise<void> => {
+  await invoke("clear_game_overlay_data", {
+    provider: game.provider,
+    externalId: game.externalId,
+  });
+};
+
+const getGameInstallationDetailsForGame = async (game: GameResponse): Promise<GameInstallationDetailsPayload | null> => {
+  try {
+    return await invoke<GameInstallationDetailsPayload>("get_game_installation_details", {
+      provider: game.provider,
+      externalId: game.externalId,
+    });
+  } catch {
+    return null;
+  }
+};
+
+const getGamePropertiesSettingsForGame = async (
+  game: GameResponse
+): Promise<GamePropertiesPersistedSettings | null> => {
+  try {
+    return await invoke<GamePropertiesPersistedSettings>("get_game_properties_settings", {
+      provider: game.provider,
+      externalId: game.externalId,
+    });
+  } catch {
+    return null;
+  }
+};
+
+const setGamePropertiesSettingsForGame = async (
+  game: GameResponse,
+  settings: GamePropertiesPersistedSettings
+): Promise<void> => {
+  await invoke("set_game_properties_settings", {
+    provider: game.provider,
+    externalId: game.externalId,
+    settings,
+  });
+};
+
+const browseGameInstalledFilesForGame = async (game: GameResponse): Promise<void> => {
+  await invoke("browse_game_installed_files", {
+    provider: game.provider,
+    externalId: game.externalId,
+  });
+};
+
+const backupGameFilesForGame = async (game: GameResponse): Promise<void> => {
+  await invoke("backup_game_files", {
+    provider: game.provider,
+    externalId: game.externalId,
+  });
+};
+
+const verifyGameFilesForGame = async (game: GameResponse): Promise<void> => {
+  await invoke("verify_game_files", {
+    provider: game.provider,
+    externalId: game.externalId,
+  });
+};
+
 const openGameProperties = async (game: GameResponse): Promise<void> => {
-  const collections = await listCollectionsForGame(game);
+  const [collections, availableLanguages, versionBetasPayload, privacySettings, installationDetails, persistedSettings] = await Promise.all([
+    listCollectionsForGame(game),
+    listGameLanguagesForGame(game),
+    listGameVersionBetasForGame(game),
+    getGamePrivacySettingsForGame(game),
+    getGameInstallationDetailsForGame(game),
+    getGamePropertiesSettingsForGame(game),
+  ]);
   gamePropertiesPanel.open({
     game,
     collections: collections
       .filter((collection) => collection.containsGame)
       .map((collection) => collection.name),
+    availableLanguages,
+    availableVersionOptions: versionBetasPayload.options,
+    availableVersionOptionsWarning: versionBetasPayload.warning,
+    persistedSettings: persistedSettings ?? undefined,
+    saveSettings: async (settings) => {
+      await setGamePropertiesSettingsForGame(game, settings);
+    },
+    installationDetails: installationDetails ?? undefined,
+    browseInstalledFiles: async () => {
+      await browseGameInstalledFilesForGame(game);
+    },
+    backupInstalledFiles: async () => {
+      await backupGameFilesForGame(game);
+    },
+    verifyInstalledFiles: async () => {
+      await verifyGameFilesForGame(game);
+    },
+    privacySettings: privacySettings ?? undefined,
+    setPrivacySettings: async (settings) => {
+      await setGamePrivacySettingsForGame(game, settings);
+    },
+    deleteOverlayData: async () => {
+      await clearGameOverlayDataForGame(game);
+    },
+    validateBetaAccessCode: async (accessCode: string) => {
+      return validateGameBetaAccessCodeForGame(game, accessCode);
+    },
   });
 };
 
@@ -411,12 +592,10 @@ document.addEventListener("pointerdown", (event) => {
 
 sessionAccountLinkedButton.addEventListener("click", () => {
   closeSessionAccountMenu();
-  focusOptionsPanel("Connected Accounts");
 });
 
 sessionAccountSettingsButton.addEventListener("click", () => {
   closeSessionAccountMenu();
-  focusOptionsPanel(null);
 });
 
 const refreshLibrary = async (syncBeforeLoad = false, importSteamCollections = false): Promise<void> => {
@@ -481,8 +660,10 @@ refreshLibraryButton.addEventListener("click", () => {
   void refreshLibrary(true, true);
 });
 
+window.addEventListener("resize", applyLibraryAspectSoftLock);
+
 const initialize = async (): Promise<void> => {
-  renderOptionsPanel(optionsListElement);
+  applyLibraryAspectSoftLock();
   registerGridZoomShortcut();
   setLibrarySummaryCounts(0, 0);
 

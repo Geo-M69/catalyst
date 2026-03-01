@@ -4,13 +4,14 @@ use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
+    process::Command,
     sync::Mutex,
     thread,
     time::{Duration, Instant},
 };
 
 use bcrypt::{hash, verify, DEFAULT_COST};
-use chrono::{Duration as ChronoDuration, Utc};
+use chrono::{Duration as ChronoDuration, TimeZone, Utc};
 use regex::Regex;
 use reqwest::blocking::Client;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -24,9 +25,14 @@ const STEAM_OPENID_ENDPOINT: &str = "https://steamcommunity.com/openid/login";
 const STEAM_WEB_API_ENDPOINT: &str =
     "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/";
 const STEAM_APP_DETAILS_ENDPOINT: &str = "https://store.steampowered.com/api/appdetails";
+const STEAM_APP_BETAS_ENDPOINT: &str = "https://api.steampowered.com/ISteamApps/GetAppBetas/v1/";
+const STEAM_APP_BETA_CODE_CHECK_ENDPOINT: &str =
+    "https://api.steampowered.com/ISteamApps/CheckAppBetaPassword/v1/";
 const STEAM_CALLBACK_TIMEOUT: Duration = Duration::from_secs(180);
 const STEAM_APP_DETAILS_BATCH_SIZE: usize = 75;
 const STEAM_APP_METADATA_CACHE_TTL_HOURS: i64 = 24 * 7;
+const STEAM_APP_LANGUAGES_CACHE_TTL_HOURS: i64 = 24 * 7;
+const STEAM_APP_BETAS_CACHE_TTL_HOURS: i64 = 24 * 7;
 const SESSION_TTL_DAYS: i64 = 30;
 const STEAM_ID64_ACCOUNT_ID_BASE: u64 = 76_561_197_960_265_728;
 
@@ -167,6 +173,94 @@ struct SteamCollectionsImportResponse {
     memberships_added: usize,
     skipped_games: usize,
     tags_discovered: usize,
+}
+
+#[derive(Serialize, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+struct GamePrivacySettingsResponse {
+    hide_in_library: bool,
+    mark_as_private: bool,
+    overlay_data_deleted: bool,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct GameInstallationDetailsResponse {
+    install_path: Option<String>,
+    size_on_disk_bytes: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct GameGeneralSettingsPayload {
+    language: String,
+    launch_options: String,
+    steam_overlay_enabled: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct GameCompatibilitySettingsPayload {
+    force_steam_play_compatibility_tool: bool,
+    steam_play_compatibility_tool: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct GameUpdatesSettingsPayload {
+    automatic_updates_mode: String,
+    background_downloads_mode: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct GameControllerSettingsPayload {
+    steam_input_override: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct GameVersionsBetasSettingsPayload {
+    private_access_code: String,
+    selected_version_id: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct GamePropertiesSettingsPayload {
+    general: GameGeneralSettingsPayload,
+    compatibility: GameCompatibilitySettingsPayload,
+    updates: GameUpdatesSettingsPayload,
+    controller: GameControllerSettingsPayload,
+    game_versions_betas: GameVersionsBetasSettingsPayload,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct GameVersionBetaOptionResponse {
+    id: String,
+    name: String,
+    description: String,
+    last_updated: String,
+    build_id: Option<String>,
+    requires_access_code: bool,
+    is_default: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GameVersionBetasResponse {
+    options: Vec<GameVersionBetaOptionResponse>,
+    warning: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GameBetaAccessCodeValidationResponse {
+    valid: bool,
+    message: String,
+    branch_id: Option<String>,
+    branch_name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -418,6 +512,519 @@ fn list_collections(
 }
 
 #[tauri::command]
+fn list_game_languages(
+    provider: String,
+    external_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    let connection = open_connection(&state.db_path)?;
+    cleanup_expired_sessions(&connection)?;
+    let user = get_authenticated_user(state.inner(), &connection)?;
+    let (normalized_provider, normalized_external_id) =
+        normalize_game_identity_input(&provider, &external_id)?;
+    ensure_owned_game_exists(
+        &connection,
+        &user.id,
+        &normalized_provider,
+        &normalized_external_id,
+    )?;
+
+    if normalized_provider != "steam" {
+        return Ok(Vec::new());
+    }
+
+    let app_id = match normalized_external_id.parse::<u64>() {
+        Ok(parsed) => parsed,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    let stale_before = Utc::now() - ChronoDuration::hours(STEAM_APP_LANGUAGES_CACHE_TTL_HOURS);
+    let cached_languages_entry = find_cached_steam_app_languages(&connection, app_id)?;
+    if let Some((cached_languages, fetched_at)) = cached_languages_entry.as_ref() {
+        if *fetched_at >= stale_before {
+            return Ok(cached_languages.clone());
+        }
+    }
+
+    let client = build_http_client()?;
+    match fetch_steam_supported_languages(&client, app_id) {
+        Ok(fetched_languages) => {
+            cache_steam_app_languages(&connection, app_id, &fetched_languages)?;
+            Ok(fetched_languages)
+        }
+        Err(fetch_error) => {
+            if let Some((cached_languages, _)) = cached_languages_entry {
+                return Ok(cached_languages);
+            }
+
+            Err(fetch_error)
+        }
+    }
+}
+
+#[tauri::command]
+fn get_game_privacy_settings(
+    provider: String,
+    external_id: String,
+    state: State<'_, AppState>,
+) -> Result<GamePrivacySettingsResponse, String> {
+    let connection = open_connection(&state.db_path)?;
+    cleanup_expired_sessions(&connection)?;
+    let user = get_authenticated_user(state.inner(), &connection)?;
+    let (normalized_provider, normalized_external_id) =
+        normalize_game_identity_input(&provider, &external_id)?;
+    ensure_owned_game_exists(
+        &connection,
+        &user.id,
+        &normalized_provider,
+        &normalized_external_id,
+    )?;
+
+    load_game_privacy_settings(
+        &connection,
+        &user.id,
+        &normalized_provider,
+        &normalized_external_id,
+    )
+}
+
+#[tauri::command]
+fn set_game_privacy_settings(
+    provider: String,
+    external_id: String,
+    hide_in_library: bool,
+    mark_as_private: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let connection = open_connection(&state.db_path)?;
+    cleanup_expired_sessions(&connection)?;
+    let user = get_authenticated_user(state.inner(), &connection)?;
+    let (normalized_provider, normalized_external_id) =
+        normalize_game_identity_input(&provider, &external_id)?;
+    ensure_owned_game_exists(
+        &connection,
+        &user.id,
+        &normalized_provider,
+        &normalized_external_id,
+    )?;
+
+    let mut settings = load_game_privacy_settings(
+        &connection,
+        &user.id,
+        &normalized_provider,
+        &normalized_external_id,
+    )?;
+    settings.hide_in_library = hide_in_library;
+    settings.mark_as_private = mark_as_private;
+    save_game_privacy_settings(
+        &connection,
+        &user.id,
+        &normalized_provider,
+        &normalized_external_id,
+        settings,
+    )
+}
+
+#[tauri::command]
+fn clear_game_overlay_data(
+    provider: String,
+    external_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let connection = open_connection(&state.db_path)?;
+    cleanup_expired_sessions(&connection)?;
+    let user = get_authenticated_user(state.inner(), &connection)?;
+    let (normalized_provider, normalized_external_id) =
+        normalize_game_identity_input(&provider, &external_id)?;
+    ensure_owned_game_exists(
+        &connection,
+        &user.id,
+        &normalized_provider,
+        &normalized_external_id,
+    )?;
+
+    let mut settings = load_game_privacy_settings(
+        &connection,
+        &user.id,
+        &normalized_provider,
+        &normalized_external_id,
+    )?;
+    settings.overlay_data_deleted = true;
+    save_game_privacy_settings(
+        &connection,
+        &user.id,
+        &normalized_provider,
+        &normalized_external_id,
+        settings,
+    )
+}
+
+#[tauri::command]
+fn get_game_properties_settings(
+    provider: String,
+    external_id: String,
+    state: State<'_, AppState>,
+) -> Result<GamePropertiesSettingsPayload, String> {
+    let connection = open_connection(&state.db_path)?;
+    cleanup_expired_sessions(&connection)?;
+    let user = get_authenticated_user(state.inner(), &connection)?;
+    let (normalized_provider, normalized_external_id) =
+        normalize_game_identity_input(&provider, &external_id)?;
+    ensure_owned_game_exists(
+        &connection,
+        &user.id,
+        &normalized_provider,
+        &normalized_external_id,
+    )?;
+
+    load_game_properties_settings(
+        &connection,
+        &user.id,
+        &normalized_provider,
+        &normalized_external_id,
+    )
+}
+
+#[tauri::command]
+fn set_game_properties_settings(
+    provider: String,
+    external_id: String,
+    settings: GamePropertiesSettingsPayload,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let connection = open_connection(&state.db_path)?;
+    cleanup_expired_sessions(&connection)?;
+    let user = get_authenticated_user(state.inner(), &connection)?;
+    let (normalized_provider, normalized_external_id) =
+        normalize_game_identity_input(&provider, &external_id)?;
+    ensure_owned_game_exists(
+        &connection,
+        &user.id,
+        &normalized_provider,
+        &normalized_external_id,
+    )?;
+
+    let normalized_settings = normalize_game_properties_settings_payload(settings);
+    save_game_properties_settings(
+        &connection,
+        &user.id,
+        &normalized_provider,
+        &normalized_external_id,
+        &normalized_settings,
+    )?;
+
+    if normalized_provider == "steam" {
+        let app_id = normalized_external_id
+            .parse::<u64>()
+            .map_err(|_| String::from("Steam external_id must be a numeric app ID"))?;
+        if let Err(error) = apply_steam_game_properties_settings(
+            state.inner(),
+            &user,
+            app_id,
+            &normalized_settings,
+        ) {
+            eprintln!(
+                "Could not apply Steam game properties for app {}: {}",
+                app_id, error
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn get_game_installation_details(
+    provider: String,
+    external_id: String,
+    state: State<'_, AppState>,
+) -> Result<GameInstallationDetailsResponse, String> {
+    let connection = open_connection(&state.db_path)?;
+    cleanup_expired_sessions(&connection)?;
+    let user = get_authenticated_user(state.inner(), &connection)?;
+    let (normalized_provider, normalized_external_id) =
+        normalize_game_identity_input(&provider, &external_id)?;
+    ensure_owned_game_exists(
+        &connection,
+        &user.id,
+        &normalized_provider,
+        &normalized_external_id,
+    )?;
+
+    if normalized_provider != "steam" {
+        return Ok(GameInstallationDetailsResponse {
+            install_path: None,
+            size_on_disk_bytes: None,
+        });
+    }
+
+    let app_id = match normalized_external_id.parse::<u64>() {
+        Ok(parsed) => parsed,
+        Err(_) => {
+            return Ok(GameInstallationDetailsResponse {
+                install_path: None,
+                size_on_disk_bytes: None,
+            });
+        }
+    };
+
+    let manifest_path =
+        match resolve_steam_manifest_path_for_app_id(state.steam_root_override.as_deref(), app_id)
+        {
+            Ok(path) => path,
+            Err(_) => {
+                return Ok(GameInstallationDetailsResponse {
+                    install_path: None,
+                    size_on_disk_bytes: None,
+                });
+            }
+        };
+
+    let manifest_contents = fs::read_to_string(&manifest_path).map_err(|error| {
+        format!(
+            "Failed to read Steam app manifest at {}: {error}",
+            manifest_path.display()
+        )
+    })?;
+    let install_path = parse_steam_manifest_install_directory(&manifest_contents)
+        .ok()
+        .and_then(|install_dir_name| {
+            manifest_path
+                .parent()
+                .map(|steamapps_dir| steamapps_dir.join("common").join(install_dir_name))
+        })
+        .map(|path| path.display().to_string());
+    let size_on_disk_bytes = parse_steam_manifest_size_on_disk_bytes(&manifest_contents);
+
+    Ok(GameInstallationDetailsResponse {
+        install_path,
+        size_on_disk_bytes,
+    })
+}
+
+#[tauri::command]
+fn list_game_versions_betas(
+    provider: String,
+    external_id: String,
+    state: State<'_, AppState>,
+) -> Result<GameVersionBetasResponse, String> {
+    let connection = open_connection(&state.db_path)?;
+    cleanup_expired_sessions(&connection)?;
+    let user = get_authenticated_user(state.inner(), &connection)?;
+    let (normalized_provider, normalized_external_id) =
+        normalize_game_identity_input(&provider, &external_id)?;
+    ensure_owned_game_exists(
+        &connection,
+        &user.id,
+        &normalized_provider,
+        &normalized_external_id,
+    )?;
+
+    if normalized_provider != "steam" {
+        return Ok(GameVersionBetasResponse {
+            options: default_game_version_beta_options(),
+            warning: None,
+        });
+    }
+
+    let app_id = match normalized_external_id.parse::<u64>() {
+        Ok(parsed) => parsed,
+        Err(_) => {
+            return Ok(GameVersionBetasResponse {
+                options: default_game_version_beta_options(),
+                warning: Some(String::from("This Steam app ID is invalid.")),
+            });
+        }
+    };
+
+    let stale_before = Utc::now() - ChronoDuration::hours(STEAM_APP_BETAS_CACHE_TTL_HOURS);
+    let cached_options_entry = find_cached_steam_app_betas(&connection, app_id)?;
+    if let Some((cached_options, fetched_at)) = cached_options_entry.as_ref() {
+        if *fetched_at >= stale_before {
+            return Ok(GameVersionBetasResponse {
+                options: cached_options.clone(),
+                warning: None,
+            });
+        }
+    }
+
+    let Some(api_key) = state
+        .steam_api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        if let Some((cached_options, _)) = cached_options_entry.as_ref() {
+            return Ok(GameVersionBetasResponse {
+                options: cached_options.clone(),
+                warning: Some(String::from(
+                    "Using cached beta branch data because STEAM_API_KEY is not configured.",
+                )),
+            });
+        }
+
+        return Ok(GameVersionBetasResponse {
+            options: default_game_version_beta_options(),
+            warning: Some(String::from(
+                "Live beta branch data is unavailable because STEAM_API_KEY is not configured.",
+            )),
+        });
+    };
+
+    let client = build_http_client()?;
+    match fetch_steam_game_version_betas(&client, app_id, api_key) {
+        Ok(options) => {
+            if !options.is_empty() {
+                cache_steam_app_betas(&connection, app_id, &options)?;
+                return Ok(GameVersionBetasResponse {
+                    options,
+                    warning: None,
+                });
+            }
+
+            if let Some((cached_options, _)) = cached_options_entry.as_ref() {
+                return Ok(GameVersionBetasResponse {
+                    options: cached_options.clone(),
+                    warning: Some(String::from(
+                        "Steam returned no beta branch data. Showing cached data.",
+                    )),
+                });
+            }
+
+            Ok(GameVersionBetasResponse {
+                options: default_game_version_beta_options(),
+                warning: Some(String::from(
+                    "Steam returned no beta branch data for this app.",
+                )),
+            })
+        }
+        Err(fetch_error) => {
+            if is_forbidden_http_error(&fetch_error) {
+                match fetch_steam_game_version_betas_from_store(&client, app_id) {
+                    Ok(fallback_options) => {
+                        if !fallback_options.is_empty() {
+                            cache_steam_app_betas(&connection, app_id, &fallback_options)?;
+                            return Ok(GameVersionBetasResponse {
+                                options: fallback_options,
+                                warning: Some(String::from(
+                                    "Using public Steam branch metadata (partner betas API returned 403). Private branch visibility may be limited.",
+                                )),
+                            });
+                        }
+                    }
+                    Err(fallback_error) => {
+                        eprintln!(
+                            "Steam betas partner API and store fallback both failed for app {app_id}: {fallback_error}"
+                        );
+                    }
+                }
+            }
+
+            eprintln!("Failed to fetch Steam beta branches for app {app_id}: {fetch_error}");
+            if let Some((cached_options, _)) = cached_options_entry.as_ref() {
+                return Ok(GameVersionBetasResponse {
+                    options: cached_options.clone(),
+                    warning: Some(format!(
+                        "Could not refresh beta branch data: {} Using cached data.",
+                        normalize_backend_warning_message(&fetch_error)
+                    )),
+                });
+            }
+            Ok(GameVersionBetasResponse {
+                options: default_game_version_beta_options(),
+                warning: Some(normalize_backend_warning_message(&fetch_error)),
+            })
+        }
+    }
+}
+
+#[tauri::command]
+fn validate_game_beta_access_code(
+    provider: String,
+    external_id: String,
+    access_code: String,
+    state: State<'_, AppState>,
+) -> Result<GameBetaAccessCodeValidationResponse, String> {
+    let connection = open_connection(&state.db_path)?;
+    cleanup_expired_sessions(&connection)?;
+    let user = get_authenticated_user(state.inner(), &connection)?;
+    let (normalized_provider, normalized_external_id) =
+        normalize_game_identity_input(&provider, &external_id)?;
+    ensure_owned_game_exists(
+        &connection,
+        &user.id,
+        &normalized_provider,
+        &normalized_external_id,
+    )?;
+
+    if normalized_provider != "steam" {
+        return Ok(GameBetaAccessCodeValidationResponse {
+            valid: false,
+            message: String::from("Beta access code validation is only available for Steam games."),
+            branch_id: None,
+            branch_name: None,
+        });
+    }
+
+    let trimmed_access_code = access_code.trim();
+    if trimmed_access_code.is_empty() {
+        return Ok(GameBetaAccessCodeValidationResponse {
+            valid: false,
+            message: String::from("Enter an access code before checking."),
+            branch_id: None,
+            branch_name: None,
+        });
+    }
+
+    let app_id = match normalized_external_id.parse::<u64>() {
+        Ok(parsed) => parsed,
+        Err(_) => {
+            return Ok(GameBetaAccessCodeValidationResponse {
+                valid: false,
+                message: String::from("This Steam app ID is invalid."),
+                branch_id: None,
+                branch_name: None,
+            });
+        }
+    };
+
+    let Some(api_key) = state
+        .steam_api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(GameBetaAccessCodeValidationResponse {
+            valid: false,
+            message: String::from(
+                "Beta access code validation is unavailable because STEAM_API_KEY is not configured.",
+            ),
+            branch_id: None,
+            branch_name: None,
+        });
+    };
+
+    let client = build_http_client()?;
+    match fetch_steam_beta_access_code_validation(&client, app_id, api_key, trimmed_access_code) {
+        Ok(validation) => Ok(validation),
+        Err(fetch_error) => Ok(GameBetaAccessCodeValidationResponse {
+            valid: false,
+            message: if is_forbidden_http_error(&fetch_error) {
+                String::from(
+                    "Steam returned 403 for beta code validation. This usually requires publisher-level API access.",
+                )
+            } else if fetch_error.trim().is_empty() {
+                String::from("Could not validate this code right now.")
+            } else {
+                normalize_backend_warning_message(&fetch_error)
+            },
+            branch_id: None,
+            branch_name: None,
+        }),
+    }
+}
+
+#[tauri::command]
 fn create_collection(name: String, state: State<'_, AppState>) -> Result<CollectionResponse, String> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
@@ -454,13 +1061,40 @@ fn add_game_to_collection(
 }
 
 #[tauri::command]
-fn play_game(provider: String, external_id: String, state: State<'_, AppState>) -> Result<(), String> {
+fn play_game(
+    provider: String,
+    external_id: String,
+    launch_options: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
     let (provider, external_id) = normalize_game_identity_input(&provider, &external_id)?;
     ensure_owned_game_exists(&connection, &user.id, &provider, &external_id)?;
-    open_provider_game_uri(&provider, &external_id, "play")
+    let resolved_launch_options = match launch_options
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(value) => Some(value.to_owned()),
+        None => load_game_properties_settings(&connection, &user.id, &provider, &external_id)
+            .ok()
+            .and_then(|settings| {
+                let trimmed_value = settings.general.launch_options.trim();
+                if trimmed_value.is_empty() {
+                    None
+                } else {
+                    Some(trimmed_value.to_owned())
+                }
+            }),
+    };
+    open_provider_game_uri(
+        &provider,
+        &external_id,
+        "play",
+        resolved_launch_options.as_deref(),
+    )
 }
 
 #[tauri::command]
@@ -470,8 +1104,69 @@ fn install_game(provider: String, external_id: String, state: State<'_, AppState
     let user = get_authenticated_user(state.inner(), &connection)?;
     let (provider, external_id) = normalize_game_identity_input(&provider, &external_id)?;
     ensure_owned_game_exists(&connection, &user.id, &provider, &external_id)?;
-    open_provider_game_uri(&provider, &external_id, "install")?;
+    open_provider_game_uri(&provider, &external_id, "install", None)?;
     mark_game_as_installed(&connection, &user.id, &provider, &external_id)
+}
+
+#[tauri::command]
+fn browse_game_installed_files(
+    provider: String,
+    external_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let connection = open_connection(&state.db_path)?;
+    cleanup_expired_sessions(&connection)?;
+    let user = get_authenticated_user(state.inner(), &connection)?;
+    let (provider, external_id) = normalize_game_identity_input(&provider, &external_id)?;
+    ensure_owned_game_exists(&connection, &user.id, &provider, &external_id)?;
+
+    if provider != "steam" {
+        return Err(String::from(
+            "Browsing installed files is only supported for Steam games.",
+        ));
+    }
+
+    let app_id = external_id
+        .parse::<u64>()
+        .map_err(|_| String::from("Steam external_id must be a numeric app ID"))?;
+    let install_directory =
+        resolve_steam_install_directory_for_app_id(state.steam_root_override.as_deref(), app_id)?;
+    if !install_directory.is_dir() {
+        return Err(format!(
+            "Install directory is unavailable: {}",
+            install_directory.display()
+        ));
+    }
+
+    open_path_in_file_manager(&install_directory)
+}
+
+#[tauri::command]
+fn backup_game_files(
+    provider: String,
+    external_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let connection = open_connection(&state.db_path)?;
+    cleanup_expired_sessions(&connection)?;
+    let user = get_authenticated_user(state.inner(), &connection)?;
+    let (provider, external_id) = normalize_game_identity_input(&provider, &external_id)?;
+    ensure_owned_game_exists(&connection, &user.id, &provider, &external_id)?;
+    open_provider_game_uri(&provider, &external_id, "backup", None)
+}
+
+#[tauri::command]
+fn verify_game_files(
+    provider: String,
+    external_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let connection = open_connection(&state.db_path)?;
+    cleanup_expired_sessions(&connection)?;
+    let user = get_authenticated_user(state.inner(), &connection)?;
+    let (provider, external_id) = normalize_game_identity_input(&provider, &external_id)?;
+    ensure_owned_game_exists(&connection, &user.id, &provider, &external_id)?;
+    open_provider_game_uri(&provider, &external_id, "validate", None)
 }
 
 #[tauri::command]
@@ -977,6 +1672,24 @@ fn resolve_steam_userdata_directory(steam_root: &Path, steam_id: &str) -> Result
     ))
 }
 
+fn resolve_steam_localconfig_path(
+    steam_root_override: Option<&str>,
+    steam_id: &str,
+) -> Result<PathBuf, String> {
+    let steam_root = resolve_steam_root_path(steam_root_override)
+        .ok_or_else(|| String::from("Could not locate local Steam installation"))?;
+    let userdata_directory = resolve_steam_userdata_directory(&steam_root, steam_id)?;
+    let localconfig_path = userdata_directory.join("config").join("localconfig.vdf");
+    if !localconfig_path.is_file() {
+        return Err(format!(
+            "Could not locate Steam localconfig.vdf at {}",
+            localconfig_path.display()
+        ));
+    }
+
+    Ok(localconfig_path)
+}
+
 fn steam_userdata_candidate_directory_names(steam_id: &str) -> Result<Vec<String>, String> {
     let trimmed_steam_id = steam_id.trim();
     if trimmed_steam_id.is_empty() {
@@ -1181,6 +1894,113 @@ fn parse_steam_manifest_app_id(file_name: &str) -> Option<u64> {
     app_id.parse::<u64>().ok()
 }
 
+fn resolve_steam_manifest_path_for_app_id(
+    steam_root_override: Option<&str>,
+    app_id: u64,
+) -> Result<PathBuf, String> {
+    let Some(steam_root) = resolve_steam_root_path(steam_root_override) else {
+        return Err(String::from("Could not locate local Steam installation"));
+    };
+
+    let steamapps_directories = resolve_steamapps_directories(&steam_root)?;
+    let manifest_file_name = format!("appmanifest_{app_id}.acf");
+    for steamapps_directory in steamapps_directories {
+        let manifest_path = steamapps_directory.join(&manifest_file_name);
+        if manifest_path.is_file() {
+            return Ok(manifest_path);
+        }
+    }
+
+    Err(format!(
+        "Could not find Steam app manifest for app {app_id}. Install the game first."
+    ))
+}
+
+fn parse_steam_manifest_install_directory(manifest_contents: &str) -> Result<String, String> {
+    let install_dir_pattern = Regex::new(r#"^\s*"installdir"\s*"([^"]+)""#)
+        .map_err(|error| format!("Failed to compile Steam install directory pattern: {error}"))?;
+
+    for line in manifest_contents.lines() {
+        let Some(captures) = install_dir_pattern.captures(line) else {
+            continue;
+        };
+        let Some(raw_install_dir) = captures.get(1).map(|value| value.as_str()) else {
+            continue;
+        };
+        let decoded_install_dir = decode_steam_vdf_value(raw_install_dir);
+        let trimmed_install_dir = decoded_install_dir.trim();
+        if trimmed_install_dir.is_empty() {
+            continue;
+        }
+
+        return Ok(trimmed_install_dir.to_owned());
+    }
+
+    Err(String::from(
+        "Could not determine install directory from Steam app manifest.",
+    ))
+}
+
+fn parse_steam_manifest_size_on_disk_bytes(manifest_contents: &str) -> Option<u64> {
+    let size_pattern = Regex::new(r#"^\s*"SizeOnDisk"\s*"([^"]+)""#).ok()?;
+
+    for line in manifest_contents.lines() {
+        let Some(captures) = size_pattern.captures(line) else {
+            continue;
+        };
+        let Some(raw_size) = captures.get(1).map(|value| value.as_str()) else {
+            continue;
+        };
+        let decoded_size = decode_steam_vdf_value(raw_size);
+        let trimmed_size = decoded_size.trim();
+        if trimmed_size.is_empty() {
+            continue;
+        }
+
+        if let Ok(parsed_size) = trimmed_size.parse::<u64>() {
+            return Some(parsed_size);
+        }
+    }
+
+    None
+}
+
+fn resolve_steam_install_directory_for_app_id(
+    steam_root_override: Option<&str>,
+    app_id: u64,
+) -> Result<PathBuf, String> {
+    let manifest_path = resolve_steam_manifest_path_for_app_id(steam_root_override, app_id)?;
+    let manifest_contents = fs::read_to_string(&manifest_path).map_err(|error| {
+        format!(
+            "Failed to read Steam app manifest at {}: {error}",
+            manifest_path.display()
+        )
+    })?;
+    let install_dir_name = parse_steam_manifest_install_directory(&manifest_contents)?;
+    let steamapps_directory = manifest_path.parent().ok_or_else(|| {
+        format!(
+            "Failed to resolve Steam library directory for manifest {}",
+            manifest_path.display()
+        )
+    })?;
+
+    Ok(steamapps_directory.join("common").join(install_dir_name))
+}
+
+fn open_path_in_file_manager(path: &Path) -> Result<(), String> {
+    let open_result = if cfg!(target_os = "windows") {
+        Command::new("explorer").arg(path).spawn()
+    } else if cfg!(target_os = "macos") {
+        Command::new("open").arg(path).spawn()
+    } else {
+        Command::new("xdg-open").arg(path).spawn()
+    };
+
+    open_result
+        .map(|_| ())
+        .map_err(|error| format!("Failed to open path {}: {error}", path.display()))
+}
+
 fn resolve_steam_game_kinds(
     connection: &Connection,
     client: &Client,
@@ -1337,6 +2157,695 @@ fn fetch_steam_app_types_batch(
     }
 
     Ok(app_types)
+}
+
+fn fetch_steam_supported_languages(client: &Client, app_id: u64) -> Result<Vec<String>, String> {
+    let mut request_url = Url::parse(STEAM_APP_DETAILS_ENDPOINT)
+        .map_err(|error| format!("Failed to parse Steam app details endpoint: {error}"))?;
+    request_url
+        .query_pairs_mut()
+        .append_pair("appids", &app_id.to_string())
+        .append_pair("l", "english");
+
+    let response = client
+        .get(request_url)
+        .send()
+        .map_err(|error| format!("Steam app details request failed: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Steam app details request failed with status {}",
+            response.status()
+        ));
+    }
+
+    let payload = response
+        .json::<serde_json::Value>()
+        .map_err(|error| format!("Failed to decode Steam app details response: {error}"))?;
+
+    let key = app_id.to_string();
+    let Some(entry) = payload.get(&key) else {
+        return Ok(Vec::new());
+    };
+    let Some(true) = entry.get("success").and_then(serde_json::Value::as_bool) else {
+        return Ok(Vec::new());
+    };
+
+    let raw_languages = entry
+        .get("data")
+        .and_then(|value| value.get("supported_languages"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+
+    Ok(parse_steam_supported_languages(raw_languages))
+}
+
+fn default_game_version_beta_options() -> Vec<GameVersionBetaOptionResponse> {
+    vec![GameVersionBetaOptionResponse {
+        id: String::from("public"),
+        name: String::from("Default Public Version"),
+        description: String::from("Most common version of the game"),
+        last_updated: String::from("Unavailable"),
+        build_id: None,
+        requires_access_code: false,
+        is_default: true,
+    }]
+}
+
+fn normalize_game_version_beta_options(
+    options: &[GameVersionBetaOptionResponse],
+) -> Vec<GameVersionBetaOptionResponse> {
+    let mut normalized_options = Vec::new();
+    let mut seen = HashSet::new();
+
+    for option in options {
+        let normalized_id = option.id.trim();
+        if normalized_id.is_empty() {
+            continue;
+        }
+
+        let dedupe_key = normalized_id.to_ascii_lowercase();
+        if !seen.insert(dedupe_key) {
+            continue;
+        }
+
+        let normalized_name = option.name.trim();
+        let normalized_description = option.description.trim();
+        let normalized_last_updated = option.last_updated.trim();
+        let normalized_build_id = option
+            .build_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
+        let normalized_is_default = option.is_default || normalized_id.eq_ignore_ascii_case("public");
+
+        normalized_options.push(GameVersionBetaOptionResponse {
+            id: normalized_id.to_owned(),
+            name: if normalized_name.is_empty() {
+                normalized_id.to_owned()
+            } else {
+                normalized_name.to_owned()
+            },
+            description: if normalized_description.is_empty() {
+                if normalized_is_default {
+                    String::from("Most common version of the game")
+                } else if option.requires_access_code {
+                    String::from("Requires access code")
+                } else {
+                    String::from("No description available")
+                }
+            } else {
+                normalized_description.to_owned()
+            },
+            last_updated: if normalized_last_updated.is_empty() {
+                String::from("Unavailable")
+            } else {
+                normalized_last_updated.to_owned()
+            },
+            build_id: normalized_build_id,
+            requires_access_code: option.requires_access_code,
+            is_default: normalized_is_default,
+        });
+    }
+
+    normalized_options.sort_by(|left, right| {
+        if left.is_default != right.is_default {
+            if left.is_default {
+                return std::cmp::Ordering::Less;
+            }
+            return std::cmp::Ordering::Greater;
+        }
+
+        left.name
+            .to_ascii_lowercase()
+            .cmp(&right.name.to_ascii_lowercase())
+    });
+
+    normalized_options
+}
+
+fn normalize_backend_warning_message(message: &str) -> String {
+    let compact = message
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if compact.is_empty() {
+        return String::from("Could not load beta branch data from Steam.");
+    }
+
+    if compact.chars().count() <= 220 {
+        return compact;
+    }
+
+    let mut shortened = compact.chars().take(217).collect::<String>();
+    shortened.push_str("...");
+    shortened
+}
+
+fn is_forbidden_http_error(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    normalized.contains("status 403") || normalized.contains("forbidden")
+}
+
+fn fetch_steam_game_version_betas(
+    client: &Client,
+    app_id: u64,
+    api_key: &str,
+) -> Result<Vec<GameVersionBetaOptionResponse>, String> {
+    let mut request_url = Url::parse(STEAM_APP_BETAS_ENDPOINT)
+        .map_err(|error| format!("Failed to parse Steam beta endpoint: {error}"))?;
+    request_url
+        .query_pairs_mut()
+        .append_pair("key", api_key)
+        .append_pair("appid", &app_id.to_string());
+
+    let response = client
+        .get(request_url)
+        .send()
+        .map_err(|error| format!("Steam betas request failed: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Steam betas request failed with status {}",
+            response.status()
+        ));
+    }
+
+    let payload = response
+        .json::<serde_json::Value>()
+        .map_err(|error| format!("Failed to decode Steam betas response: {error}"))?;
+
+    Ok(parse_steam_game_version_betas_payload(&payload, app_id))
+}
+
+fn fetch_steam_game_version_betas_from_store(
+    client: &Client,
+    app_id: u64,
+) -> Result<Vec<GameVersionBetaOptionResponse>, String> {
+    let mut request_url = Url::parse(STEAM_APP_DETAILS_ENDPOINT)
+        .map_err(|error| format!("Failed to parse Steam app details endpoint: {error}"))?;
+    request_url
+        .query_pairs_mut()
+        .append_pair("appids", &app_id.to_string())
+        .append_pair("l", "english");
+
+    let response = client
+        .get(request_url)
+        .send()
+        .map_err(|error| format!("Steam app details request failed: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Steam app details request failed with status {}",
+            response.status()
+        ));
+    }
+
+    let payload = response
+        .json::<serde_json::Value>()
+        .map_err(|error| format!("Failed to decode Steam app details response: {error}"))?;
+
+    Ok(parse_steam_game_version_betas_payload(&payload, app_id))
+}
+
+fn fetch_steam_beta_access_code_validation(
+    client: &Client,
+    app_id: u64,
+    api_key: &str,
+    access_code: &str,
+) -> Result<GameBetaAccessCodeValidationResponse, String> {
+    let mut request_url = Url::parse(STEAM_APP_BETA_CODE_CHECK_ENDPOINT)
+        .map_err(|error| format!("Failed to parse Steam beta code check endpoint: {error}"))?;
+    request_url
+        .query_pairs_mut()
+        .append_pair("key", api_key)
+        .append_pair("appid", &app_id.to_string())
+        .append_pair("betapassword", access_code);
+
+    let response = client
+        .get(request_url)
+        .send()
+        .map_err(|error| format!("Steam beta code check failed: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Steam beta code check failed with status {}",
+            response.status()
+        ));
+    }
+
+    let payload = response
+        .json::<serde_json::Value>()
+        .map_err(|error| format!("Failed to decode Steam beta code check response: {error}"))?;
+
+    Ok(parse_steam_beta_access_code_validation_payload(&payload))
+}
+
+fn parse_steam_game_version_betas_payload(
+    payload: &serde_json::Value,
+    app_id: u64,
+) -> Vec<GameVersionBetaOptionResponse> {
+    let app_id_key = app_id.to_string();
+    let maybe_branch_map = payload
+        .get("response")
+        .and_then(|response| response.get("betas"))
+        .and_then(serde_json::Value::as_object)
+        .or_else(|| payload.get("betas").and_then(serde_json::Value::as_object))
+        .or_else(|| {
+            payload
+                .get(&app_id_key)
+                .and_then(|entry| entry.get("data"))
+                .and_then(|data| data.get("depots"))
+                .and_then(|depots| depots.get("branches"))
+                .and_then(serde_json::Value::as_object)
+        })
+        .or_else(|| {
+            payload
+                .get("data")
+                .and_then(|data| data.get("depots"))
+                .and_then(|depots| depots.get("branches"))
+                .and_then(serde_json::Value::as_object)
+        });
+
+    let mut options = Vec::new();
+    if let Some(branch_map) = maybe_branch_map {
+        for (branch_id_raw, branch_data) in branch_map {
+            let branch_id = branch_id_raw.trim();
+            if branch_id.is_empty() {
+                continue;
+            }
+
+            let Some(branch_object) = branch_data.as_object() else {
+                continue;
+            };
+
+            let is_default = branch_id.eq_ignore_ascii_case("public");
+            let requires_access_code = parse_json_bool(
+                get_json_value_by_keys_case_insensitive(
+                    branch_object,
+                    &["pwdrequired", "password_required", "requires_password"],
+                ),
+            );
+            let build_id = get_json_value_by_keys_case_insensitive(
+                branch_object,
+                &["buildid", "build_id", "build"],
+            )
+            .and_then(parse_json_text_value);
+            let last_updated = format_steam_beta_last_updated(
+                get_json_value_by_keys_case_insensitive(
+                    branch_object,
+                    &["timeupdated", "lastupdated", "updated_at", "last_update"],
+                ),
+            );
+            let description = get_json_value_by_keys_case_insensitive(
+                branch_object,
+                &["description", "desc", "notes"],
+            )
+            .and_then(parse_json_text_value)
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| {
+                if is_default {
+                    String::from("Most common version of the game")
+                } else if requires_access_code {
+                    String::from("Requires access code")
+                } else {
+                    String::from("No description available")
+                }
+            });
+
+            options.push(GameVersionBetaOptionResponse {
+                id: branch_id.to_owned(),
+                name: if is_default {
+                    String::from("Default Public Version")
+                } else {
+                    branch_id.to_owned()
+                },
+                description,
+                last_updated,
+                build_id,
+                requires_access_code,
+                is_default,
+            });
+        }
+    }
+
+    normalize_game_version_beta_options(&options)
+}
+
+fn parse_steam_beta_access_code_validation_payload(
+    payload: &serde_json::Value,
+) -> GameBetaAccessCodeValidationResponse {
+    let response_object = payload
+        .get("response")
+        .and_then(serde_json::Value::as_object)
+        .or_else(|| payload.as_object());
+
+    let Some(response_object) = response_object else {
+        return GameBetaAccessCodeValidationResponse {
+            valid: false,
+            message: String::from("Could not parse Steam beta code check response."),
+            branch_id: None,
+            branch_name: None,
+        };
+    };
+
+    let branch_id = get_json_value_by_keys_case_insensitive(
+        response_object,
+        &["betaname", "beta_name", "branch", "branch_name"],
+    )
+    .and_then(parse_json_text_value)
+    .map(|value| value.trim().to_owned())
+    .filter(|value| !value.is_empty());
+
+    let explicit_valid = parse_json_bool(get_json_value_by_keys_case_insensitive(
+        response_object,
+        &["result", "success", "valid", "is_valid", "matched"],
+    ));
+    let valid = explicit_valid || branch_id.is_some();
+
+    if !valid {
+        return GameBetaAccessCodeValidationResponse {
+            valid: false,
+            message: String::from("Code is invalid or no beta branch is associated with it."),
+            branch_id: None,
+            branch_name: None,
+        };
+    }
+
+    let branch_name = branch_id.clone();
+    GameBetaAccessCodeValidationResponse {
+        valid: true,
+        message: if let Some(branch) = branch_name.as_deref() {
+            format!("Code accepted. Branch unlocked: {branch}.")
+        } else {
+            String::from("Code accepted.")
+        },
+        branch_id,
+        branch_name,
+    }
+}
+
+fn get_json_value_by_keys_case_insensitive<'a>(
+    object: &'a serde_json::Map<String, serde_json::Value>,
+    keys: &[&str],
+) -> Option<&'a serde_json::Value> {
+    for key in keys {
+        if let Some(value) = object.get(*key) {
+            return Some(value);
+        }
+    }
+
+    let normalized_keys = keys
+        .iter()
+        .map(|key| key.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    object.iter().find_map(|(key, value)| {
+        let normalized_key = key.to_ascii_lowercase();
+        if normalized_keys.iter().any(|candidate| candidate == &normalized_key) {
+            Some(value)
+        } else {
+            None
+        }
+    })
+}
+
+fn parse_json_text_value(value: &serde_json::Value) -> Option<String> {
+    if let Some(text) = value.as_str() {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        return Some(trimmed.to_owned());
+    }
+
+    if let Some(number) = value.as_i64() {
+        return Some(number.to_string());
+    }
+
+    if let Some(number) = value.as_u64() {
+        return Some(number.to_string());
+    }
+
+    None
+}
+
+fn parse_json_bool(value: Option<&serde_json::Value>) -> bool {
+    let Some(value) = value else {
+        return false;
+    };
+
+    if let Some(as_bool) = value.as_bool() {
+        return as_bool;
+    }
+
+    if let Some(as_number) = value.as_i64() {
+        return as_number > 0;
+    }
+
+    if let Some(as_number) = value.as_u64() {
+        return as_number > 0;
+    }
+
+    if let Some(as_text) = value.as_str() {
+        let normalized = as_text.trim().to_ascii_lowercase();
+        return normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "ok";
+    }
+
+    false
+}
+
+fn format_steam_beta_last_updated(raw_value: Option<&serde_json::Value>) -> String {
+    let Some(raw_value) = raw_value else {
+        return String::from("Unavailable");
+    };
+
+    if let Some(timestamp) = raw_value.as_i64() {
+        if let Some(parsed_timestamp) = Utc.timestamp_opt(timestamp, 0).single() {
+            return parsed_timestamp.format("%b %d, %Y").to_string();
+        }
+    }
+
+    if let Some(timestamp_text) = raw_value.as_str() {
+        let trimmed = timestamp_text.trim();
+        if trimmed.is_empty() {
+            return String::from("Unavailable");
+        }
+
+        if let Ok(parsed_timestamp) = trimmed.parse::<i64>() {
+            if let Some(utc_timestamp) = Utc.timestamp_opt(parsed_timestamp, 0).single() {
+                return utc_timestamp.format("%b %d, %Y").to_string();
+            }
+        }
+
+        if let Ok(parsed_timestamp) = chrono::DateTime::parse_from_rfc3339(trimmed) {
+            return parsed_timestamp
+                .with_timezone(&Utc)
+                .format("%b %d, %Y")
+                .to_string();
+        }
+
+        return trimmed.to_owned();
+    }
+
+    String::from("Unavailable")
+}
+
+fn find_cached_steam_app_betas(
+    connection: &Connection,
+    app_id: u64,
+) -> Result<Option<(Vec<GameVersionBetaOptionResponse>, chrono::DateTime<Utc>)>, String> {
+    let cached = connection
+        .query_row(
+            "SELECT betas_json, fetched_at FROM steam_app_betas WHERE app_id = ?1",
+            params![app_id.to_string()],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|error| format!("Failed to query cached Steam app betas: {error}"))?;
+
+    let Some((betas_json, fetched_at)) = cached else {
+        return Ok(None);
+    };
+
+    let fetched_at = match chrono::DateTime::parse_from_rfc3339(&fetched_at) {
+        Ok(timestamp) => timestamp.with_timezone(&Utc),
+        Err(_) => return Ok(None),
+    };
+    let parsed_options = serde_json::from_str::<Vec<GameVersionBetaOptionResponse>>(&betas_json)
+        .map_err(|error| format!("Failed to decode cached Steam app betas: {error}"))?;
+    let normalized_options = normalize_game_version_beta_options(&parsed_options);
+
+    Ok(Some((normalized_options, fetched_at)))
+}
+
+fn cache_steam_app_betas(
+    connection: &Connection,
+    app_id: u64,
+    options: &[GameVersionBetaOptionResponse],
+) -> Result<(), String> {
+    let normalized_options = normalize_game_version_beta_options(options);
+    let serialized_options = serde_json::to_string(&normalized_options)
+        .map_err(|error| format!("Failed to encode Steam app betas cache entry: {error}"))?;
+
+    connection
+        .execute(
+            "
+            INSERT INTO steam_app_betas (app_id, betas_json, fetched_at)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(app_id) DO UPDATE SET
+              betas_json = excluded.betas_json,
+              fetched_at = excluded.fetched_at
+            ",
+            params![
+                app_id.to_string(),
+                serialized_options,
+                Utc::now().to_rfc3339()
+            ],
+        )
+        .map_err(|error| format!("Failed to cache Steam app betas: {error}"))?;
+
+    Ok(())
+}
+
+fn find_cached_steam_app_languages(
+    connection: &Connection,
+    app_id: u64,
+) -> Result<Option<(Vec<String>, chrono::DateTime<Utc>)>, String> {
+    let cached = connection
+        .query_row(
+            "SELECT languages_json, fetched_at FROM steam_app_languages WHERE app_id = ?1",
+            params![app_id.to_string()],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|error| format!("Failed to query cached Steam app languages: {error}"))?;
+
+    let Some((languages_json, fetched_at)) = cached else {
+        return Ok(None);
+    };
+
+    let fetched_at = match chrono::DateTime::parse_from_rfc3339(&fetched_at) {
+        Ok(timestamp) => timestamp.with_timezone(&Utc),
+        Err(_) => return Ok(None),
+    };
+    let parsed_languages = serde_json::from_str::<Vec<String>>(&languages_json)
+        .map_err(|error| format!("Failed to decode cached Steam app languages: {error}"))?;
+    let normalized_languages = normalize_language_list(&parsed_languages);
+
+    Ok(Some((normalized_languages, fetched_at)))
+}
+
+fn cache_steam_app_languages(
+    connection: &Connection,
+    app_id: u64,
+    languages: &[String],
+) -> Result<(), String> {
+    let normalized_languages = normalize_language_list(languages);
+    let serialized_languages = serde_json::to_string(&normalized_languages)
+        .map_err(|error| format!("Failed to encode Steam app languages cache entry: {error}"))?;
+
+    connection
+        .execute(
+            "
+            INSERT INTO steam_app_languages (app_id, languages_json, fetched_at)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(app_id) DO UPDATE SET
+              languages_json = excluded.languages_json,
+              fetched_at = excluded.fetched_at
+            ",
+            params![
+                app_id.to_string(),
+                serialized_languages,
+                Utc::now().to_rfc3339()
+            ],
+        )
+        .map_err(|error| format!("Failed to cache Steam app languages: {error}"))?;
+
+    Ok(())
+}
+
+fn parse_steam_supported_languages(raw_value: &str) -> Vec<String> {
+    if raw_value.trim().is_empty() {
+        return Vec::new();
+    }
+
+    let with_breaks_replaced = raw_value
+        .replace("<br />", ",")
+        .replace("<br/>", ",")
+        .replace("<br>", ",");
+    let without_tags = match Regex::new(r"(?is)<[^>]+>") {
+        Ok(tag_regex) => tag_regex.replace_all(&with_breaks_replaced, "").into_owned(),
+        Err(_) => with_breaks_replaced,
+    };
+    let decoded = decode_basic_html_entities(&without_tags);
+
+    let mut languages = Vec::new();
+    let mut seen = HashSet::new();
+
+    for token in decoded.split([',', ';', '\n']) {
+        let compact = token
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .trim_matches(|character: char| {
+                character == '*'
+                    || character == ':'
+                    || character == '.'
+                    || character == '-'
+                    || character == '('
+                    || character == ')'
+            })
+            .trim()
+            .to_owned();
+
+        if compact.is_empty() {
+            continue;
+        }
+
+        let normalized = compact.to_ascii_lowercase();
+        if normalized.contains("full audio support")
+            || normalized.contains("languages supported")
+            || normalized == "supported languages"
+            || normalized == "not supported"
+            || normalized == "none"
+        {
+            continue;
+        }
+
+        if seen.insert(normalized) {
+            languages.push(compact);
+        }
+    }
+
+    normalize_language_list(&languages)
+}
+
+fn normalize_language_list(raw_languages: &[String]) -> Vec<String> {
+    let mut normalized_languages = Vec::new();
+    let mut seen = HashSet::new();
+
+    for language in raw_languages {
+        let trimmed = language.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let dedupe_key = trimmed.to_ascii_lowercase();
+        if seen.insert(dedupe_key) {
+            normalized_languages.push(trimmed.to_owned());
+        }
+    }
+
+    normalized_languages
+}
+
+fn decode_basic_html_entities(value: &str) -> String {
+    value
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace("&nbsp;", " ")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
 }
 
 fn normalize_steam_app_type(value: &str) -> String {
@@ -2025,6 +3534,128 @@ fn vdf_collect_objects_by_key<'a>(value: &'a VdfValue, key: &str, output: &mut V
     }
 }
 
+fn vdf_get_or_insert_object_mut<'a>(value: &'a mut VdfValue, key: &str) -> &'a mut VdfValue {
+    if matches!(value, VdfValue::Text(_)) {
+        *value = VdfValue::Object(Vec::new());
+    }
+
+    let VdfValue::Object(entries) = value else {
+        unreachable!()
+    };
+
+    if let Some(entry_index) = entries
+        .iter()
+        .position(|(entry_key, _)| entry_key.eq_ignore_ascii_case(key))
+    {
+        if !matches!(entries[entry_index].1, VdfValue::Object(_)) {
+            entries[entry_index].1 = VdfValue::Object(Vec::new());
+        }
+        return &mut entries[entry_index].1;
+    }
+
+    entries.push((key.to_owned(), VdfValue::Object(Vec::new())));
+    let last_index = entries.len() - 1;
+    &mut entries[last_index].1
+}
+
+fn vdf_ensure_object_path_mut<'a>(value: &'a mut VdfValue, path: &[&str]) -> &'a mut VdfValue {
+    if path.is_empty() {
+        return value;
+    }
+
+    let child = vdf_get_or_insert_object_mut(value, path[0]);
+    vdf_ensure_object_path_mut(child, &path[1..])
+}
+
+fn vdf_set_text_entry(value: &mut VdfValue, key: &str, text: &str) {
+    if matches!(value, VdfValue::Text(_)) {
+        *value = VdfValue::Object(Vec::new());
+    }
+
+    let VdfValue::Object(entries) = value else {
+        unreachable!()
+    };
+    if let Some(entry_index) = entries
+        .iter()
+        .position(|(entry_key, _)| entry_key.eq_ignore_ascii_case(key))
+    {
+        entries[entry_index].1 = VdfValue::Text(text.to_owned());
+        return;
+    }
+
+    entries.push((key.to_owned(), VdfValue::Text(text.to_owned())));
+}
+
+fn vdf_remove_entry(value: &mut VdfValue, key: &str) {
+    let VdfValue::Object(entries) = value else {
+        return;
+    };
+    entries.retain(|(entry_key, _)| !entry_key.eq_ignore_ascii_case(key));
+}
+
+fn escape_vdf_text(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            other => escaped.push(other),
+        }
+    }
+
+    escaped
+}
+
+fn serialize_vdf_entry(key: &str, value: &VdfValue, depth: usize, output: &mut String) {
+    let indent = "\t".repeat(depth);
+    output.push_str(&indent);
+    output.push('"');
+    output.push_str(&escape_vdf_text(key));
+    output.push('"');
+
+    match value {
+        VdfValue::Text(text) => {
+            output.push('\t');
+            output.push('"');
+            output.push_str(&escape_vdf_text(text));
+            output.push('"');
+            output.push('\n');
+        }
+        VdfValue::Object(entries) => {
+            output.push('\n');
+            output.push_str(&indent);
+            output.push_str("{\n");
+            for (entry_key, entry_value) in entries {
+                serialize_vdf_entry(entry_key, entry_value, depth + 1, output);
+            }
+            output.push_str(&indent);
+            output.push_str("}\n");
+        }
+    }
+}
+
+fn serialize_vdf_document(value: &VdfValue) -> String {
+    let mut output = String::new();
+    match value {
+        VdfValue::Object(entries) => {
+            for (entry_key, entry_value) in entries {
+                serialize_vdf_entry(entry_key, entry_value, 0, &mut output);
+            }
+        }
+        VdfValue::Text(text) => {
+            output.push('"');
+            output.push_str(&escape_vdf_text(text));
+            output.push('"');
+            output.push('\n');
+        }
+    }
+
+    output
+}
+
 fn parse_collection_name_candidate(raw_value: &str) -> Option<String> {
     let normalized = raw_value.replace('\0', "");
     let normalized = normalized.trim();
@@ -2183,15 +3814,32 @@ fn import_steam_collections_for_user(
     })
 }
 
-fn open_provider_game_uri(provider: &str, external_id: &str, action: &str) -> Result<(), String> {
+fn encode_steam_launch_options(launch_options: &str) -> String {
+    url::form_urlencoded::byte_serialize(launch_options.as_bytes()).collect::<String>()
+}
+
+fn open_provider_game_uri(
+    provider: &str,
+    external_id: &str,
+    action: &str,
+    launch_options: Option<&str>,
+) -> Result<(), String> {
     match provider {
         "steam" => {
             let app_id = external_id
                 .parse::<u64>()
                 .map_err(|_| String::from("Steam external_id must be a numeric app ID"))?;
             let uri = match action {
-                "play" => format!("steam://run/{app_id}"),
+                "play" => match launch_options {
+                    Some(value) => {
+                        let encoded_options = encode_steam_launch_options(value);
+                        format!("steam://run/{app_id}//{encoded_options}/")
+                    }
+                    None => format!("steam://run/{app_id}"),
+                },
                 "install" => format!("steam://install/{app_id}"),
+                "validate" => format!("steam://validate/{app_id}"),
+                "backup" => format!("steam://backup/{app_id}"),
                 _ => return Err(String::from("Unsupported Steam action")),
             };
 
@@ -2219,6 +3867,365 @@ fn mark_game_as_installed(
     if updated_rows == 0 {
         return Err(String::from("Game not found for current user"));
     }
+
+    Ok(())
+}
+
+fn default_game_properties_settings_payload() -> GamePropertiesSettingsPayload {
+    GamePropertiesSettingsPayload {
+        general: GameGeneralSettingsPayload {
+            language: String::from("English"),
+            launch_options: String::new(),
+            steam_overlay_enabled: true,
+        },
+        compatibility: GameCompatibilitySettingsPayload {
+            force_steam_play_compatibility_tool: false,
+            steam_play_compatibility_tool: String::from("Proton Experimental"),
+        },
+        updates: GameUpdatesSettingsPayload {
+            automatic_updates_mode: String::from("use-global-setting"),
+            background_downloads_mode: String::from("pause-while-playing-global"),
+        },
+        controller: GameControllerSettingsPayload {
+            steam_input_override: String::from("use-default-settings"),
+        },
+        game_versions_betas: GameVersionsBetasSettingsPayload {
+            private_access_code: String::new(),
+            selected_version_id: String::from("public"),
+        },
+    }
+}
+
+fn normalize_game_properties_mode(value: String, allowed_modes: &[&str], fallback_mode: &str) -> String {
+    let trimmed_value = value.trim();
+    if trimmed_value.is_empty() {
+        return fallback_mode.to_owned();
+    }
+
+    for allowed_mode in allowed_modes {
+        if allowed_mode.eq_ignore_ascii_case(trimmed_value) {
+            return (*allowed_mode).to_owned();
+        }
+    }
+
+    fallback_mode.to_owned()
+}
+
+fn normalize_game_properties_settings_payload(
+    settings: GamePropertiesSettingsPayload,
+) -> GamePropertiesSettingsPayload {
+    let defaults = default_game_properties_settings_payload();
+
+    let language = settings.general.language.trim();
+    let compatibility_tool = settings.compatibility.steam_play_compatibility_tool.trim();
+    let private_access_code = settings.game_versions_betas.private_access_code.trim();
+    let selected_version_id = settings.game_versions_betas.selected_version_id.trim();
+    GamePropertiesSettingsPayload {
+        general: GameGeneralSettingsPayload {
+            language: if language.is_empty() {
+                defaults.general.language
+            } else {
+                language.to_owned()
+            },
+            launch_options: settings.general.launch_options.trim().to_owned(),
+            steam_overlay_enabled: settings.general.steam_overlay_enabled,
+        },
+        compatibility: GameCompatibilitySettingsPayload {
+            force_steam_play_compatibility_tool: settings
+                .compatibility
+                .force_steam_play_compatibility_tool,
+            steam_play_compatibility_tool: if compatibility_tool.is_empty() {
+                defaults.compatibility.steam_play_compatibility_tool
+            } else {
+                compatibility_tool.to_owned()
+            },
+        },
+        updates: GameUpdatesSettingsPayload {
+            automatic_updates_mode: normalize_game_properties_mode(
+                settings.updates.automatic_updates_mode,
+                &[
+                    "use-global-setting",
+                    "wait-until-launch",
+                    "let-steam-decide",
+                    "immediately-download",
+                ],
+                &defaults.updates.automatic_updates_mode,
+            ),
+            background_downloads_mode: normalize_game_properties_mode(
+                settings.updates.background_downloads_mode,
+                &[
+                    "pause-while-playing-global",
+                    "always-allow",
+                    "never-allow",
+                ],
+                &defaults.updates.background_downloads_mode,
+            ),
+        },
+        controller: GameControllerSettingsPayload {
+            steam_input_override: normalize_game_properties_mode(
+                settings.controller.steam_input_override,
+                &[
+                    "use-default-settings",
+                    "disable-steam-input",
+                    "enable-steam-input",
+                ],
+                &defaults.controller.steam_input_override,
+            ),
+        },
+        game_versions_betas: GameVersionsBetasSettingsPayload {
+            private_access_code: private_access_code.to_owned(),
+            selected_version_id: if selected_version_id.is_empty() {
+                defaults.game_versions_betas.selected_version_id
+            } else {
+                selected_version_id.to_owned()
+            },
+        },
+    }
+}
+
+fn load_game_properties_settings(
+    connection: &Connection,
+    user_id: &str,
+    provider: &str,
+    external_id: &str,
+) -> Result<GamePropertiesSettingsPayload, String> {
+    let row = connection
+        .query_row(
+            "
+            SELECT settings_json
+            FROM game_properties_settings
+            WHERE user_id = ?1 AND provider = ?2 AND external_id = ?3
+            ",
+            params![user_id, provider, external_id],
+            |record| record.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| format!("Failed to query game properties settings: {error}"))?;
+
+    let Some(settings_json) = row else {
+        return Ok(default_game_properties_settings_payload());
+    };
+    let parsed_settings = serde_json::from_str::<GamePropertiesSettingsPayload>(&settings_json)
+        .unwrap_or_else(|_| default_game_properties_settings_payload());
+    Ok(normalize_game_properties_settings_payload(parsed_settings))
+}
+
+fn save_game_properties_settings(
+    connection: &Connection,
+    user_id: &str,
+    provider: &str,
+    external_id: &str,
+    settings: &GamePropertiesSettingsPayload,
+) -> Result<(), String> {
+    let serialized_settings = serde_json::to_string(settings)
+        .map_err(|error| format!("Failed to serialize game properties settings: {error}"))?;
+    connection
+        .execute(
+            "
+            INSERT INTO game_properties_settings (
+              user_id,
+              provider,
+              external_id,
+              settings_json,
+              updated_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            ON CONFLICT(user_id, provider, external_id) DO UPDATE SET
+              settings_json = excluded.settings_json,
+              updated_at = excluded.updated_at
+            ",
+            params![
+                user_id,
+                provider,
+                external_id,
+                serialized_settings,
+                Utc::now().to_rfc3339(),
+            ],
+        )
+        .map_err(|error| format!("Failed to persist game properties settings: {error}"))?;
+
+    Ok(())
+}
+
+fn map_compatibility_tool_label_to_steam_name(label: &str) -> String {
+    let normalized = label.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "proton experimental" => String::from("proton_experimental"),
+        "proton hotfix" => String::from("proton_hotfix"),
+        "proton 9.0-4" => String::from("proton_9"),
+        "proton 8.0-5" => String::from("proton_8"),
+        "proton 7.0-6" => String::from("proton_7"),
+        "steam linux runtime 3.0 (sniper)" => String::from("sniper"),
+        "steam linux runtime 2.0 (soldier)" => String::from("soldier"),
+        _ => label.trim().to_owned(),
+    }
+}
+
+fn apply_steam_game_properties_settings(
+    state: &AppState,
+    user: &UserRow,
+    app_id: u64,
+    settings: &GamePropertiesSettingsPayload,
+) -> Result<(), String> {
+    let steam_id = user
+        .steam_id
+        .as_deref()
+        .ok_or_else(|| String::from("Steam is not linked for this account"))?;
+    let localconfig_path = resolve_steam_localconfig_path(state.steam_root_override.as_deref(), steam_id)?;
+    let localconfig_contents = fs::read_to_string(&localconfig_path).map_err(|error| {
+        format!(
+            "Failed to read Steam localconfig at {}: {error}",
+            localconfig_path.display()
+        )
+    })?;
+    let mut localconfig_value = parse_vdf_document(&localconfig_contents)?;
+
+    let app_id_key = app_id.to_string();
+    let apps_object = vdf_ensure_object_path_mut(
+        &mut localconfig_value,
+        &["UserLocalConfigStore", "Software", "Valve", "Steam", "apps"],
+    );
+    let app_settings_object = vdf_ensure_object_path_mut(apps_object, &[app_id_key.as_str()]);
+
+    let launch_options = settings.general.launch_options.trim();
+    if launch_options.is_empty() {
+        vdf_remove_entry(app_settings_object, "LaunchOptions");
+    } else {
+        vdf_set_text_entry(app_settings_object, "LaunchOptions", launch_options);
+    }
+
+    match settings.updates.automatic_updates_mode.as_str() {
+        "use-global-setting" => vdf_remove_entry(app_settings_object, "AutoUpdateBehavior"),
+        "wait-until-launch" => vdf_set_text_entry(app_settings_object, "AutoUpdateBehavior", "1"),
+        "let-steam-decide" => vdf_set_text_entry(app_settings_object, "AutoUpdateBehavior", "0"),
+        "immediately-download" => vdf_set_text_entry(app_settings_object, "AutoUpdateBehavior", "2"),
+        _ => {}
+    }
+
+    match settings.updates.background_downloads_mode.as_str() {
+        "pause-while-playing-global" => {
+            vdf_remove_entry(app_settings_object, "AllowDownloadsWhileRunning")
+        }
+        "always-allow" => {
+            vdf_set_text_entry(app_settings_object, "AllowDownloadsWhileRunning", "1")
+        }
+        "never-allow" => {
+            vdf_set_text_entry(app_settings_object, "AllowDownloadsWhileRunning", "0")
+        }
+        _ => {}
+    }
+
+    match settings.controller.steam_input_override.as_str() {
+        "use-default-settings" => vdf_remove_entry(app_settings_object, "SteamInput"),
+        "disable-steam-input" => vdf_set_text_entry(app_settings_object, "SteamInput", "0"),
+        "enable-steam-input" => vdf_set_text_entry(app_settings_object, "SteamInput", "1"),
+        _ => {}
+    }
+
+    let compat_mapping_object = vdf_ensure_object_path_mut(
+        &mut localconfig_value,
+        &[
+            "UserLocalConfigStore",
+            "Software",
+            "Valve",
+            "Steam",
+            "CompatToolMapping",
+        ],
+    );
+    if settings.compatibility.force_steam_play_compatibility_tool {
+        let compat_mapping_entry = vdf_ensure_object_path_mut(compat_mapping_object, &[app_id_key.as_str()]);
+        let compat_name = map_compatibility_tool_label_to_steam_name(
+            &settings.compatibility.steam_play_compatibility_tool,
+        );
+        if compat_name.is_empty() {
+            vdf_remove_entry(compat_mapping_object, &app_id_key);
+        } else {
+            vdf_set_text_entry(compat_mapping_entry, "name", &compat_name);
+            vdf_set_text_entry(compat_mapping_entry, "config", "");
+            vdf_set_text_entry(compat_mapping_entry, "priority", "250");
+        }
+    } else {
+        vdf_remove_entry(compat_mapping_object, &app_id_key);
+    }
+
+    let serialized_localconfig = serialize_vdf_document(&localconfig_value);
+    fs::write(&localconfig_path, serialized_localconfig).map_err(|error| {
+        format!(
+            "Failed to write Steam localconfig at {}: {error}",
+            localconfig_path.display()
+        )
+    })
+}
+
+fn load_game_privacy_settings(
+    connection: &Connection,
+    user_id: &str,
+    provider: &str,
+    external_id: &str,
+) -> Result<GamePrivacySettingsResponse, String> {
+    let row = connection
+        .query_row(
+            "
+            SELECT hide_in_library, mark_as_private, overlay_data_deleted
+            FROM game_privacy_settings
+            WHERE user_id = ?1 AND provider = ?2 AND external_id = ?3
+            ",
+            params![user_id, provider, external_id],
+            |record| {
+                Ok(GamePrivacySettingsResponse {
+                    hide_in_library: record.get::<_, i64>(0)? != 0,
+                    mark_as_private: record.get::<_, i64>(1)? != 0,
+                    overlay_data_deleted: record.get::<_, i64>(2)? != 0,
+                })
+            },
+        )
+        .optional()
+        .map_err(|error| format!("Failed to query game privacy settings: {error}"))?;
+
+    Ok(row.unwrap_or(GamePrivacySettingsResponse {
+        hide_in_library: false,
+        mark_as_private: false,
+        overlay_data_deleted: false,
+    }))
+}
+
+fn save_game_privacy_settings(
+    connection: &Connection,
+    user_id: &str,
+    provider: &str,
+    external_id: &str,
+    settings: GamePrivacySettingsResponse,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "
+            INSERT INTO game_privacy_settings (
+              user_id,
+              provider,
+              external_id,
+              hide_in_library,
+              mark_as_private,
+              overlay_data_deleted,
+              updated_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            ON CONFLICT(user_id, provider, external_id) DO UPDATE SET
+              hide_in_library = excluded.hide_in_library,
+              mark_as_private = excluded.mark_as_private,
+              overlay_data_deleted = excluded.overlay_data_deleted,
+              updated_at = excluded.updated_at
+            ",
+            params![
+                user_id,
+                provider,
+                external_id,
+                if settings.hide_in_library { 1 } else { 0 },
+                if settings.mark_as_private { 1 } else { 0 },
+                if settings.overlay_data_deleted { 1 } else { 0 },
+                Utc::now().to_rfc3339(),
+            ],
+        )
+        .map_err(|error| format!("Failed to persist game privacy settings: {error}"))?;
 
     Ok(())
 }
@@ -2670,6 +4677,32 @@ fn initialize_database(db_path: &Path) -> Result<(), String> {
             CREATE INDEX IF NOT EXISTS idx_collection_games_collection_id
               ON collection_games(collection_id);
 
+            CREATE TABLE IF NOT EXISTS game_privacy_settings (
+              user_id TEXT NOT NULL,
+              provider TEXT NOT NULL,
+              external_id TEXT NOT NULL,
+              hide_in_library INTEGER NOT NULL DEFAULT 0,
+              mark_as_private INTEGER NOT NULL DEFAULT 0,
+              overlay_data_deleted INTEGER NOT NULL DEFAULT 0,
+              updated_at TEXT NOT NULL,
+              PRIMARY KEY (user_id, provider, external_id),
+              FOREIGN KEY (user_id, provider, external_id) REFERENCES games(user_id, provider, external_id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_game_privacy_settings_user_id ON game_privacy_settings(user_id);
+
+            CREATE TABLE IF NOT EXISTS game_properties_settings (
+              user_id TEXT NOT NULL,
+              provider TEXT NOT NULL,
+              external_id TEXT NOT NULL,
+              settings_json TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              PRIMARY KEY (user_id, provider, external_id),
+              FOREIGN KEY (user_id, provider, external_id) REFERENCES games(user_id, provider, external_id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_game_properties_settings_user_id ON game_properties_settings(user_id);
+
             CREATE TABLE IF NOT EXISTS steam_app_metadata (
               app_id TEXT PRIMARY KEY,
               app_type TEXT NOT NULL,
@@ -2677,6 +4710,22 @@ fn initialize_database(db_path: &Path) -> Result<(), String> {
             );
 
             CREATE INDEX IF NOT EXISTS idx_steam_app_metadata_fetched_at ON steam_app_metadata(fetched_at);
+
+            CREATE TABLE IF NOT EXISTS steam_app_languages (
+              app_id TEXT PRIMARY KEY,
+              languages_json TEXT NOT NULL,
+              fetched_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_steam_app_languages_fetched_at ON steam_app_languages(fetched_at);
+
+            CREATE TABLE IF NOT EXISTS steam_app_betas (
+              app_id TEXT PRIMARY KEY,
+              betas_json TEXT NOT NULL,
+              fetched_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_steam_app_betas_fetched_at ON steam_app_betas(fetched_at);
             ",
         )
         .map_err(|error| format!("Failed to run SQLite migrations: {error}"))?;
@@ -2786,10 +4835,22 @@ pub fn run() {
             sync_steam_library,
             set_game_favorite,
             list_collections,
+            list_game_languages,
+            get_game_privacy_settings,
+            set_game_privacy_settings,
+            clear_game_overlay_data,
+            get_game_properties_settings,
+            set_game_properties_settings,
+            get_game_installation_details,
+            list_game_versions_betas,
+            validate_game_beta_access_code,
             create_collection,
             add_game_to_collection,
             play_game,
             install_game,
+            browse_game_installed_files,
+            backup_game_files,
+            verify_game_files,
             import_steam_collections
         ])
         .run(tauri::generate_context!())

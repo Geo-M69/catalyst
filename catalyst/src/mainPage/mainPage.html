@@ -8,7 +8,8 @@
     <script type="module" src="/src/mainPage/mainPage.ts" defer></script>
   </head>
 
-  <body class="library-page">
+<body class="library-page">
+    <div id="library-aspect-shell" class="library-aspect-shell" data-aspect-label="16:9">
     <main class="launcher-library" aria-label="Game launcher library view">
       <section class="library-column panel-left" aria-label="Library filters">
         <header class="panel-heading-stack panel-left-heading">
@@ -55,14 +56,7 @@
         <div id="library-grid" class="library-grid-scroll" aria-live="polite"></div>
       </section>
 
-      <aside class="library-column panel-right" aria-label="Launcher options">
-        <header class="panel-heading-stack">
-          <h2 class="panel-title">Options</h2>
-          <p class="status-message">Placeholder settings list for future launcher options.</p>
-        </header>
-
-        <ul id="options-list" class="options-list" aria-label="Options placeholder list"></ul>
-      </aside>
     </main>
+    </div>
   </body>
 </html>
