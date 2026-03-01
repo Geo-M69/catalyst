@@ -73,7 +73,10 @@ const GRID_CARD_WIDTH_CSS_VAR = "--game-grid-card-min-width";
 const GRID_CARD_WIDTH_DEFAULT_PX = 180;
 const GRID_CARD_WIDTH_MIN_PX = 140;
 const GRID_CARD_WIDTH_MAX_PX = 320;
-const GRID_CARD_WIDTH_STEP_PX = 14;
+const GRID_CARD_WIDTH_STEP_PX = 8;
+const GRID_CARD_WIDTH_FINE_STEP_PX = 2;
+const GRID_ZOOM_WHEEL_THRESHOLD_PX = 100;
+const WHEEL_DELTA_LINE_HEIGHT_PX = 16;
 const GRID_CARD_WIDTH_STORAGE_KEY = "catalyst.library.gridCardMinWidthPx";
 const APP_NAME = "Catalyst";
 const DOWNLOAD_POLL_INTERVAL_MS = 2500;
@@ -426,6 +429,18 @@ const setGridCardWidthPx = (value: number, persistValue = true): void => {
   }
 };
 
+const normalizeWheelDeltaToPx = (event: WheelEvent): number => {
+  if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) {
+    return event.deltaY * WHEEL_DELTA_LINE_HEIGHT_PX;
+  }
+
+  if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
+    return event.deltaY * window.innerHeight;
+  }
+
+  return event.deltaY;
+};
+
 const applyLibraryAspectSoftLock = (): void => {
   const viewportWidth = Math.max(window.innerWidth, 1);
   const viewportHeight = Math.max(window.innerHeight, 1);
@@ -458,6 +473,7 @@ const applyLibraryAspectSoftLock = (): void => {
 const registerGridZoomShortcut = (): void => {
   const initialWidth = readStoredGridCardWidthPx() ?? readGridCardWidthPx();
   setGridCardWidthPx(initialWidth, false);
+  let accumulatedZoomDeltaPx = 0;
 
   libraryGridElement.addEventListener("wheel", (event) => {
     if (!event.ctrlKey || event.deltaY === 0) {
@@ -465,8 +481,28 @@ const registerGridZoomShortcut = (): void => {
     }
 
     event.preventDefault();
-    const delta = event.deltaY < 0 ? GRID_CARD_WIDTH_STEP_PX : -GRID_CARD_WIDTH_STEP_PX;
-    setGridCardWidthPx(readGridCardWidthPx() + delta);
+    const deltaPx = normalizeWheelDeltaToPx(event);
+    if (deltaPx === 0) {
+      return;
+    }
+
+    if (accumulatedZoomDeltaPx !== 0 && Math.sign(accumulatedZoomDeltaPx) !== Math.sign(deltaPx)) {
+      accumulatedZoomDeltaPx = 0;
+    }
+
+    accumulatedZoomDeltaPx += deltaPx;
+    const steps = Math.trunc(Math.abs(accumulatedZoomDeltaPx) / GRID_ZOOM_WHEEL_THRESHOLD_PX);
+    if (steps === 0) {
+      return;
+    }
+
+    const cardWidthStepPx = event.shiftKey ? GRID_CARD_WIDTH_FINE_STEP_PX : GRID_CARD_WIDTH_STEP_PX;
+    const zoomDirection = accumulatedZoomDeltaPx < 0 ? 1 : -1;
+    const currentWidth = readGridCardWidthPx();
+    setGridCardWidthPx(currentWidth + (zoomDirection * cardWidthStepPx * steps));
+
+    const remainingDeltaPx = Math.abs(accumulatedZoomDeltaPx) % GRID_ZOOM_WHEEL_THRESHOLD_PX;
+    accumulatedZoomDeltaPx = remainingDeltaPx * Math.sign(accumulatedZoomDeltaPx);
   }, { passive: false });
 };
 
