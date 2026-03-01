@@ -245,16 +245,7 @@ button {
   margin-top: 0.45rem;
 }
 
-.library-list {
-  margin: 0.5rem 0 0;
-  padding: 0 0 0 1rem;
-  max-height: 300px;
-  overflow: auto;
-}
 
-.library-list li {
-  margin: 0.35rem 0;
-}
 
 button:disabled {
   opacity: 0.6;
@@ -313,13 +304,23 @@ button:disabled {
 }
 
 .games {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.library-list {
+  margin: 0.5rem 0 0;
+  padding: 0;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  overflow-y: auto;
+  gap: 1rem;
+  max-height: 60vh;
+  overflow: auto;
   scrollbar-width: thin;
   scrollbar-color: darkgray transparent;
-  column-gap: 10px;
 }
+
 
 .options {
   width: 25%;

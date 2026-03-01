@@ -47,16 +47,28 @@ const steamSyncButton = document.getElementById("steam-sync-button");
 const refreshLibraryButton = document.getElementById("refresh-library-button");
 const logoutButton = document.getElementById("logout-button");
 
+// verify expected DOM elements are present; log which ones are missing
+// to make debugging easier when initialization fails.
 if (
   !(statusElement instanceof HTMLElement) ||
   !(steamStatusElement instanceof HTMLElement) ||
   !(librarySummaryElement instanceof HTMLElement) ||
-  !(libraryListElement instanceof HTMLUListElement) ||
+  !(libraryListElement instanceof HTMLElement) ||
   !(steamLinkButton instanceof HTMLButtonElement) ||
   !(steamSyncButton instanceof HTMLButtonElement) ||
   !(refreshLibraryButton instanceof HTMLButtonElement) ||
   !(logoutButton instanceof HTMLButtonElement)
 ) {
+  console.error("DOM element lookup failure:", {
+    statusElement,
+    steamStatusElement,
+    librarySummaryElement,
+    libraryListElement,
+    steamLinkButton,
+    steamSyncButton,
+    refreshLibraryButton,
+    logoutButton,
+  });
   throw new Error("Main page is missing required DOM elements");
 }
 
@@ -103,19 +115,34 @@ const toErrorMessage = (error: unknown, fallbackMessage: string): string => {
 };
 
 const renderLibrary = (games: GameResponse[]): void => {
+  // first make a copy of the list
+  const copy = [...games];
+  console.log("renderLibrary games:", games);
   libraryListElement.replaceChildren();
 
-  if (games.length === 0) {
+  if (copy.length === 0) {
     const emptyItem = document.createElement("li");
     emptyItem.textContent = "No games synced yet.";
     libraryListElement.append(emptyItem);
     return;
   }
 
-  for (const game of games) {
-    const item = document.createElement("li");
+  for (const game of copy) {
+    const item = document.createElement("div");
     const hours = (game.playtimeMinutes / 60).toFixed(1);
-    item.textContent = `${game.name} (${game.provider.toUpperCase()}) - ${hours}h`;
+    const img = document.createElement("img");
+    if (game.artworkUrl) {
+      img.src = game.artworkUrl;
+      img.alt = game.name;
+    }
+    else {
+      img.alt = game.name;
+    }
+    img.className = "game-tile-image";
+    item.append(img);
+    const itemText = document.createElement("div");
+    itemText.textContent = `${game.name} (${game.provider.toUpperCase()}) - ${hours}h`;
+    item.append(itemText);
     libraryListElement.append(item);
   }
 };
