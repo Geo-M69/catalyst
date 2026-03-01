@@ -61,14 +61,11 @@ h1 {
   font-weight: 400;
 }
 
-.centered {
+.app-shell {
+  --shell-gap: clamp(1rem, 4vh, 2.5rem);
   display: flex;
   flex-direction: column;
   align-items: center;
-}
-
-.app-shell {
-  --shell-gap: clamp(1rem, 4vh, 2.5rem);
   justify-content: center;
   min-height: 100vh;
   min-height: 100svh;
