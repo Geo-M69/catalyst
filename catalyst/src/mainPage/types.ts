@@ -19,6 +19,8 @@ export interface GameResponse {
   lastPlayedAt?: string;
   platforms?: string[];
   genres?: string[];
+  steamTags?: string[];
+  collections?: string[];
 }
 
 export interface CollectionResponse {
@@ -54,6 +56,8 @@ export type SortOption =
 
 export interface LibraryFilters {
   search: string;
+  steamTag: string;
+  collection: string;
   filterBy: FilterByOption;
   platform: PlatformFilter;
   source: SourceFilter;

@@ -360,6 +360,11 @@ button:disabled {
   letter-spacing: 0.01em;
 }
 
+.panel-middle .panel-title {
+  font-family: var(--font-inter);
+  font-weight: 640;
+}
+
 .panel-heading {
   display: flex;
   align-items: flex-start;
@@ -377,19 +382,27 @@ button:disabled {
 }
 
 .panel-left-heading {
-  gap: 0.65rem;
+  gap: 0.9rem;
 }
 
 .panel-left .panel-title {
   font-family: var(--font-inter);
-  font-size: clamp(1.35rem, 1.7vw, 1.55rem);
-  font-weight: 640;
+  font-size: clamp(1.14rem, 1.42vw, 1.28rem);
+  font-weight: 620;
   color: rgba(255, 255, 255, 0.94);
   letter-spacing: 0.01em;
 }
 
 .session-account {
   position: relative;
+  margin-bottom: 0.2rem;
+}
+
+.session-account-divider {
+  height: 1px;
+  width: 100%;
+  background: rgba(255, 255, 255, 0.12);
+  opacity: var(--session-account-divider-opacity, 1);
 }
 
 .session-account-button {
@@ -429,8 +442,8 @@ button:disabled {
 .session-account-label {
   flex: 1;
   min-width: 0;
-  font-size: 0.85rem;
-  font-weight: 520;
+  font-size: 1rem;
+  font-weight: 560;
   line-height: 1.35;
   color: inherit;
   overflow-wrap: anywhere;
@@ -478,7 +491,7 @@ button:disabled {
   color: rgba(255, 255, 255, 0.88);
   padding: 0.52rem 0.64rem;
   text-align: left;
-  font-size: 0.88rem;
+  font-size: 1rem;
   font-weight: 520;
   line-height: 1.3;
   box-shadow: none;
@@ -734,11 +747,11 @@ button:disabled {
 }
 
 .filter-select-field {
-  position: relative;
+  position: static;
 }
 
 .filter-select-field.is-open {
-  z-index: 15;
+  z-index: auto;
 }
 
 .filter-select-trigger {
@@ -774,14 +787,15 @@ button:disabled {
 }
 
 .filter-select-menu {
-  position: absolute;
-  top: calc(100% + 0.32rem);
-  left: 0;
-  right: 0;
-  z-index: 25;
+  position: static;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 0.32rem;
   display: grid;
   gap: 0.16rem;
   padding: 0.3rem;
+  max-height: 220px;
+  overflow-y: auto;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 12px;
   background: #121212;
@@ -1921,6 +1935,427 @@ button:disabled {
 
   .game-properties-privacy-header {
     grid-template-columns: 1fr;
+  }
+}
+
+.install-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 146;
+  background: rgba(0, 0, 0, 0.6);
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+}
+
+.install-dialog-panel {
+  width: min(560px, calc(100vw - 2rem));
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  background: #121212;
+  box-sizing: border-box;
+  padding: 0.85rem 0.95rem 0.95rem;
+  display: grid;
+  gap: 0.86rem;
+}
+
+.install-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-bottom: 0.66rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.install-dialog-title {
+  margin: 0;
+  font-size: 1.45rem;
+  font-weight: 650;
+  color: rgba(255, 255, 255, 0.96);
+}
+
+.install-dialog-close {
+  width: auto;
+  min-width: 78px;
+  min-height: 2.35rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  background: #121212;
+  color: rgba(255, 255, 255, 0.86);
+  font-size: 0.9rem;
+  font-weight: 550;
+  box-shadow: none;
+}
+
+@media (hover: hover) {
+  .install-dialog-close:hover {
+    border-color: rgba(255, 255, 255, 0.2);
+    color: rgba(255, 255, 255, 0.94);
+  }
+}
+
+.install-dialog-close:focus-visible {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
+.install-dialog-game-row {
+  display: grid;
+  grid-template-columns: 94px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.78rem;
+  padding-bottom: 0.64rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.install-dialog-artwork {
+  width: 94px;
+  height: 44px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.install-dialog-artwork-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.install-dialog-artwork-placeholder {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  font-size: 0.88rem;
+  font-weight: 650;
+  color: rgba(255, 255, 255, 0.92);
+  letter-spacing: 0.04em;
+}
+
+.install-dialog-game-meta {
+  min-width: 0;
+  display: grid;
+  gap: 0.18rem;
+}
+
+.install-dialog-game-name {
+  margin: 0;
+  font-size: 1.02rem;
+  color: rgba(255, 255, 255, 0.94);
+  line-height: 1.28;
+  overflow-wrap: anywhere;
+}
+
+.install-dialog-game-provider {
+  margin: 0;
+  font-size: 0.79rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.56);
+}
+
+.install-dialog-game-size {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.7);
+  text-align: right;
+}
+
+.install-dialog-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem 1rem;
+}
+
+.install-dialog-checkbox {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 2rem;
+  color: rgba(255, 255, 255, 0.86);
+  font-size: 0.93rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.install-dialog-checkbox-input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.install-dialog-checkbox-indicator {
+  width: 1.08rem;
+  height: 1.08rem;
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.04);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.install-dialog-checkbox-indicator::after {
+  content: "";
+  width: 0.27rem;
+  height: 0.56rem;
+  border-right: 2px solid rgba(255, 255, 255, 0.98);
+  border-bottom: 2px solid rgba(255, 255, 255, 0.98);
+  transform: translateY(-1px) rotate(45deg) scale(0);
+  transition: transform 140ms ease;
+}
+
+.install-dialog-checkbox-input:checked + .install-dialog-checkbox-indicator {
+  border-color: rgba(255, 255, 255, 0.54);
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.install-dialog-checkbox-input:checked + .install-dialog-checkbox-indicator::after {
+  transform: translateY(-1px) rotate(45deg) scale(1);
+}
+
+.install-dialog-checkbox-input:focus-visible + .install-dialog-checkbox-indicator {
+  outline: 2px solid rgba(255, 255, 255, 0.34);
+  outline-offset: 1px;
+}
+
+.install-dialog-checkbox-input:disabled + .install-dialog-checkbox-indicator {
+  opacity: 0.5;
+}
+
+.install-dialog-checkbox-input:disabled ~ .install-dialog-checkbox-text {
+  opacity: 0.55;
+}
+
+.install-dialog-location-section {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.install-dialog-location-title {
+  margin: 0;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.73);
+  font-weight: 620;
+}
+
+.install-dialog-location-select {
+  display: grid;
+  gap: 0.34rem;
+}
+
+.install-dialog-location-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 0.4rem;
+}
+
+.install-dialog-location-trigger {
+  width: 100%;
+  min-height: 2.85rem;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 10px;
+  background: #121212;
+  color: rgba(255, 255, 255, 0.93);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.62rem;
+  padding: 0.62rem 0.8rem;
+  text-align: left;
+  box-shadow: none;
+}
+
+.install-dialog-location-trigger-summary {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.76rem;
+}
+
+.install-dialog-location-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.install-dialog-location-free {
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.8);
+  text-transform: uppercase;
+}
+
+.install-dialog-location-caret {
+  width: 0.64rem;
+  height: 0.42rem;
+  background: rgba(255, 255, 255, 0.66);
+  clip-path: polygon(50% 100%, 0 0, 100% 0);
+  opacity: 0.82;
+  transition: transform 140ms ease, opacity 140ms ease;
+}
+
+.install-dialog-location-select.is-open .install-dialog-location-trigger {
+  border-color: rgba(255, 255, 255, 0.24);
+}
+
+.install-dialog-location-select.is-open .install-dialog-location-caret {
+  transform: rotate(180deg);
+  opacity: 0.98;
+}
+
+.install-dialog-location-trigger:focus-visible {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
+.install-dialog-location-settings {
+  width: 2.85rem;
+  min-width: 2.85rem;
+  min-height: 2.85rem;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: #121212;
+  color: rgba(255, 255, 255, 0.62);
+  display: grid;
+  place-items: center;
+  box-shadow: none;
+}
+
+.install-dialog-location-settings-icon {
+  width: 0.92rem;
+  height: 0.92rem;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  position: relative;
+}
+
+.install-dialog-location-settings-icon::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0.22rem;
+  height: 0.22rem;
+  border-radius: 50%;
+  background: currentColor;
+  transform: translate(-50%, -50%);
+}
+
+.install-dialog-location-menu {
+  display: grid;
+  gap: 0.16rem;
+  padding: 0.3rem;
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  background: #121212;
+}
+
+.install-dialog-location-menu[hidden] {
+  display: none;
+}
+
+.install-dialog-location-option {
+  width: 100%;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.86);
+  padding: 0.52rem 0.64rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.72rem;
+  text-align: left;
+  font-size: 0.92rem;
+  font-weight: 510;
+  line-height: 1.3;
+  box-shadow: none;
+}
+
+@media (hover: hover) {
+  .install-dialog-location-option:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.95);
+  }
+}
+
+.install-dialog-location-option:focus-visible {
+  outline: none;
+  background: rgba(255, 255, 255, 0.11);
+  color: rgba(255, 255, 255, 0.98);
+}
+
+.install-dialog-location-option.is-selected {
+  background: rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.99);
+}
+
+.install-dialog-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin-top: 0.1rem;
+}
+
+.install-dialog-button {
+  min-height: 2.7rem;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: #121212;
+  color: rgba(255, 255, 255, 0.93);
+  font-size: 1rem;
+  font-weight: 620;
+  box-shadow: none;
+}
+
+.install-dialog-button:focus-visible {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
+.install-dialog-button-install {
+  background: rgba(255, 255, 255, 0.17);
+}
+
+@media (hover: hover) {
+  .install-dialog-button:hover {
+    border-color: rgba(255, 255, 255, 0.24);
+  }
+
+  .install-dialog-button-install:hover {
+    background: rgba(255, 255, 255, 0.22);
+  }
+}
+
+@media (max-width: 700px) {
+  .install-dialog-game-row {
+    grid-template-columns: 84px minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .install-dialog-game-size {
+    grid-column: 2;
+    text-align: left;
+  }
+
+  .install-dialog-options {
+    display: grid;
+    gap: 0.48rem;
   }
 }
 

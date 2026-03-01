@@ -25,11 +25,33 @@ const hasTag = (values: string[] | undefined, expected: string): boolean => {
   return values.some((value) => normalize(value) === expected);
 };
 
+const hasExactTag = (values: string[] | undefined, expected: string): boolean => {
+  if (expected.length === 0) {
+    return true;
+  }
+  if (!values || values.length === 0) {
+    return false;
+  }
+  return values.some((value) => normalize(value) === expected);
+};
+
+const includesTagText = (values: string[] | undefined, expected: string): boolean => {
+  if (expected.length === 0) {
+    return true;
+  }
+  if (!values || values.length === 0) {
+    return false;
+  }
+  return values.some((value) => normalize(value).includes(expected));
+};
+
 export const applyLibraryFilters = (
   games: GameResponse[],
   filters: LibraryFilters
 ): GameResponse[] => {
   const searchTerm = normalize(filters.search);
+  const steamTagFilter = normalize(filters.steamTag);
+  const collectionFilter = normalize(filters.collection);
   const now = Date.now();
   const thirtyDaysAgo = now - (30 * 24 * 60 * 60 * 1000);
 
@@ -44,6 +66,8 @@ export const applyLibraryFilters = (
       && !normalize(game.name).includes(searchTerm)
       && !normalize(game.provider).includes(searchTerm)
       && !normalize(game.kind).includes(searchTerm)
+      && !includesTagText(game.steamTags, searchTerm)
+      && !includesTagText(game.collections, searchTerm)
     ) {
       return false;
     }
@@ -79,6 +103,14 @@ export const applyLibraryFilters = (
     }
 
     if (filters.source !== "all" && source !== filters.source) {
+      return false;
+    }
+
+    if (steamTagFilter.length > 0 && (source !== "steam" || !hasExactTag(game.steamTags, steamTagFilter))) {
+      return false;
+    }
+
+    if (collectionFilter.length > 0 && !hasExactTag(game.collections, collectionFilter)) {
       return false;
     }
 

@@ -25,6 +25,8 @@ const STEAM_OPENID_ENDPOINT: &str = "https://steamcommunity.com/openid/login";
 const STEAM_WEB_API_ENDPOINT: &str =
     "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/";
 const STEAM_APP_DETAILS_ENDPOINT: &str = "https://store.steampowered.com/api/appdetails";
+const STEAM_STORE_APP_ENDPOINT: &str = "https://store.steampowered.com/app";
+const STEAM_CALLBACK_PUBLIC_HOST: &str = "catalyst";
 const STEAM_APP_BETAS_ENDPOINT: &str = "https://api.steampowered.com/ISteamApps/GetAppBetas/v1/";
 const STEAM_APP_BETA_CODE_CHECK_ENDPOINT: &str =
     "https://api.steampowered.com/ISteamApps/CheckAppBetaPassword/v1/";
@@ -33,6 +35,7 @@ const STEAM_APP_DETAILS_BATCH_SIZE: usize = 75;
 const STEAM_APP_METADATA_CACHE_TTL_HOURS: i64 = 24 * 7;
 const STEAM_APP_LANGUAGES_CACHE_TTL_HOURS: i64 = 24 * 7;
 const STEAM_APP_BETAS_CACHE_TTL_HOURS: i64 = 24 * 7;
+const STEAM_APP_STORE_TAGS_CACHE_TTL_HOURS: i64 = 24 * 7;
 const SESSION_TTL_DAYS: i64 = 30;
 const STEAM_ID64_ACCOUNT_ID_BASE: u64 = 76_561_197_960_265_728;
 
@@ -41,6 +44,7 @@ struct AppState {
     session_token_path: PathBuf,
     steam_api_key: Option<String>,
     steam_local_install_detection: bool,
+    steam_settings_debug_logging: bool,
     steam_root_override: Option<String>,
     current_session_token: Mutex<Option<String>>,
 }
@@ -51,6 +55,7 @@ impl AppState {
         session_token_path: PathBuf,
         steam_api_key: Option<String>,
         steam_local_install_detection: bool,
+        steam_settings_debug_logging: bool,
         steam_root_override: Option<String>,
     ) -> Self {
         Self {
@@ -58,6 +63,7 @@ impl AppState {
             session_token_path,
             steam_api_key,
             steam_local_install_detection,
+            steam_settings_debug_logging,
             steam_root_override,
             current_session_token: Mutex::new(None),
         }
@@ -129,6 +135,8 @@ struct GameResponse {
     artwork_url: Option<String>,
     last_synced_at: String,
     favorite: bool,
+    steam_tags: Vec<String>,
+    collections: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -188,6 +196,13 @@ struct GamePrivacySettingsResponse {
 struct GameInstallationDetailsResponse {
     install_path: Option<String>,
     size_on_disk_bytes: Option<u64>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct GameInstallLocationResponse {
+    path: String,
+    free_space_bytes: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -803,6 +818,105 @@ fn get_game_installation_details(
 }
 
 #[tauri::command]
+fn get_game_install_size_estimate(
+    provider: String,
+    external_id: String,
+    state: State<'_, AppState>,
+) -> Result<Option<u64>, String> {
+    let connection = open_connection(&state.db_path)?;
+    cleanup_expired_sessions(&connection)?;
+    let user = get_authenticated_user(state.inner(), &connection)?;
+    let (normalized_provider, normalized_external_id) =
+        normalize_game_identity_input(&provider, &external_id)?;
+    ensure_owned_game_exists(
+        &connection,
+        &user.id,
+        &normalized_provider,
+        &normalized_external_id,
+    )?;
+
+    if normalized_provider != "steam" {
+        return Ok(None);
+    }
+
+    let app_id = match normalized_external_id.parse::<u64>() {
+        Ok(parsed) => parsed,
+        Err(_) => return Ok(None),
+    };
+
+    if let Ok(manifest_path) =
+        resolve_steam_manifest_path_for_app_id(state.steam_root_override.as_deref(), app_id)
+    {
+        if let Ok(manifest_contents) = fs::read_to_string(&manifest_path) {
+            if let Some(size_on_disk_bytes) = parse_steam_manifest_size_on_disk_bytes(&manifest_contents)
+            {
+                return Ok(Some(size_on_disk_bytes));
+            }
+        }
+    }
+
+    let client = build_http_client()?;
+    fetch_steam_install_size_estimate_from_store(&client, app_id)
+}
+
+#[tauri::command]
+fn list_game_install_locations(
+    provider: String,
+    external_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<GameInstallLocationResponse>, String> {
+    let connection = open_connection(&state.db_path)?;
+    cleanup_expired_sessions(&connection)?;
+    let user = get_authenticated_user(state.inner(), &connection)?;
+    let (normalized_provider, normalized_external_id) =
+        normalize_game_identity_input(&provider, &external_id)?;
+    ensure_owned_game_exists(
+        &connection,
+        &user.id,
+        &normalized_provider,
+        &normalized_external_id,
+    )?;
+
+    if normalized_provider != "steam" {
+        return Ok(Vec::new());
+    }
+
+    let Some(steam_root) = resolve_steam_root_path(state.steam_root_override.as_deref()) else {
+        return Ok(Vec::new());
+    };
+    let steamapps_directories = resolve_steamapps_directories(&steam_root)?;
+
+    let mut locations = Vec::new();
+    let mut seen_paths = HashSet::new();
+    for steamapps_directory in steamapps_directories {
+        let library_path = steamapps_directory
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or(steamapps_directory);
+        let path_label = library_path.display().to_string();
+        let normalized_key = path_label.to_ascii_lowercase();
+        if !seen_paths.insert(normalized_key) {
+            continue;
+        }
+
+        locations.push(GameInstallLocationResponse {
+            free_space_bytes: detect_available_disk_space_bytes(&library_path),
+            path: path_label,
+        });
+    }
+
+    if locations.is_empty() {
+        let path_label = steam_root.display().to_string();
+        locations.push(GameInstallLocationResponse {
+            free_space_bytes: detect_available_disk_space_bytes(&steam_root),
+            path: path_label,
+        });
+    }
+
+    Ok(locations)
+}
+
+#[tauri::command]
 fn list_game_versions_betas(
     provider: String,
     external_id: String,
@@ -1098,12 +1212,26 @@ fn play_game(
 }
 
 #[tauri::command]
-fn install_game(provider: String, external_id: String, state: State<'_, AppState>) -> Result<(), String> {
+fn install_game(
+    provider: String,
+    external_id: String,
+    install_path: Option<String>,
+    create_desktop_shortcut: Option<bool>,
+    create_application_shortcut: Option<bool>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
     let (provider, external_id) = normalize_game_identity_input(&provider, &external_id)?;
     ensure_owned_game_exists(&connection, &user.id, &provider, &external_id)?;
+    // Steam currently controls install destination and shortcut behavior from its own flow.
+    // Keep receiving these values so the UI can evolve without breaking command contracts.
+    let _ = (
+        install_path,
+        create_desktop_shortcut,
+        create_application_shortcut,
+    );
     open_provider_game_uri(&provider, &external_id, "install", None)?;
     mark_game_as_installed(&connection, &user.id, &provider, &external_id)
 }
@@ -1252,8 +1380,10 @@ fn complete_steam_auth_flow(
         .port();
 
     let state_token = Uuid::new_v4().to_string();
-    let callback_url = format!("http://127.0.0.1:{port}/auth/steam/callback?state={state_token}");
-    let realm = format!("http://127.0.0.1:{port}");
+    let callback_url = format!(
+        "http://{STEAM_CALLBACK_PUBLIC_HOST}:{port}/auth/steam/callback?state={state_token}"
+    );
+    let realm = format!("http://{STEAM_CALLBACK_PUBLIC_HOST}:{port}");
     let authorization_url = build_steam_authorization_url(&callback_url, &realm)?;
 
     webbrowser::open(&authorization_url)
@@ -1333,14 +1463,15 @@ fn wait_for_steam_callback(
     loop {
         if Instant::now() >= deadline {
             return Err(String::from(
-                "Timed out waiting for Steam callback. Complete Steam sign-in in your browser, and if Windows Firewall prompts for Catalyst, allow local/private access.",
+                "Timed out waiting for Steam callback. Complete Steam sign-in in your browser, ensure 'catalyst' resolves to 127.0.0.1, and if Windows Firewall prompts for Catalyst, allow local/private access.",
             ));
         }
 
         match listener.accept() {
             Ok((mut stream, _)) => {
                 let request_target = read_http_request_target(&mut stream)?;
-                let callback_url = Url::parse(&format!("http://127.0.0.1{request_target}"))
+                let callback_url =
+                    Url::parse(&format!("http://{STEAM_CALLBACK_PUBLIC_HOST}{request_target}"))
                     .map_err(|error| format!("Failed to parse callback URL: {error}"))?;
                 let callback_params = callback_url
                     .query_pairs()
@@ -1532,6 +1663,10 @@ fn sync_steam_games_for_user(
     } else {
         HashMap::new()
     };
+    let steam_owned_app_ids = steam_owned_games
+        .iter()
+        .map(|game| game.appid)
+        .collect::<Vec<_>>();
     let resolved_kinds = resolve_steam_game_kinds(connection, client, &steam_owned_games)?;
     let games = steam_owned_games
         .into_iter()
@@ -1549,6 +1684,10 @@ fn sync_steam_games_for_user(
             map_steam_game(game, resolved_kind, installed)
         })
         .collect::<Vec<_>>();
+
+    if let Err(error) = refresh_steam_store_tags_cache(connection, client, &steam_owned_app_ids) {
+        eprintln!("Steam Store tag sync failed: {error}");
+    }
 
     replace_provider_games(connection, &user.id, "steam", &games)?;
     Ok(games.len())
@@ -1965,6 +2104,26 @@ fn parse_steam_manifest_size_on_disk_bytes(manifest_contents: &str) -> Option<u6
     None
 }
 
+fn detect_available_disk_space_bytes(path: &Path) -> Option<u64> {
+    if cfg!(target_os = "windows") {
+        return None;
+    }
+
+    let output = Command::new("df")
+        .arg("-Pk")
+        .arg(path)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    let data_row = stdout.lines().nth(1)?;
+    let available_kib = data_row.split_whitespace().nth(3)?.parse::<u64>().ok()?;
+    Some(available_kib.saturating_mul(1024))
+}
+
 fn resolve_steam_install_directory_for_app_id(
     steam_root_override: Option<&str>,
     app_id: u64,
@@ -2159,6 +2318,171 @@ fn fetch_steam_app_types_batch(
     Ok(app_types)
 }
 
+fn refresh_steam_store_tags_cache(
+    connection: &Connection,
+    client: &Client,
+    app_ids: &[u64],
+) -> Result<(), String> {
+    let stale_before = Utc::now() - ChronoDuration::hours(STEAM_APP_STORE_TAGS_CACHE_TTL_HOURS);
+    let mut seen_app_ids = HashSet::new();
+
+    for app_id in app_ids {
+        if !seen_app_ids.insert(*app_id) {
+            continue;
+        }
+
+        if find_cached_steam_store_tags(connection, *app_id, stale_before)?.is_some() {
+            continue;
+        }
+
+        let fetched_tags = match fetch_steam_store_user_tags(client, *app_id) {
+            Ok(tags) => tags,
+            Err(error) => {
+                eprintln!("Could not fetch Steam Store tags for app {app_id}: {error}");
+                Vec::new()
+            }
+        };
+        cache_steam_store_tags(connection, *app_id, &fetched_tags)?;
+    }
+
+    Ok(())
+}
+
+fn find_cached_steam_store_tags(
+    connection: &Connection,
+    app_id: u64,
+    stale_before: chrono::DateTime<Utc>,
+) -> Result<Option<Vec<String>>, String> {
+    let cached = connection
+        .query_row(
+            "SELECT tags_json, fetched_at FROM steam_app_store_tags WHERE app_id = ?1",
+            params![app_id.to_string()],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|error| format!("Failed to query cached Steam Store tags: {error}"))?;
+
+    let Some((tags_json, fetched_at)) = cached else {
+        return Ok(None);
+    };
+
+    let is_fresh = chrono::DateTime::parse_from_rfc3339(&fetched_at)
+        .map(|timestamp| timestamp.with_timezone(&Utc) >= stale_before)
+        .unwrap_or(false);
+    if !is_fresh {
+        return Ok(None);
+    }
+
+    let parsed_tags = serde_json::from_str::<Vec<String>>(&tags_json).unwrap_or_default();
+    Ok(Some(normalize_steam_store_tags(&parsed_tags)))
+}
+
+fn cache_steam_store_tags(
+    connection: &Connection,
+    app_id: u64,
+    tags: &[String],
+) -> Result<(), String> {
+    let normalized_tags = normalize_steam_store_tags(tags);
+    let tags_json = serde_json::to_string(&normalized_tags)
+        .map_err(|error| format!("Failed to encode Steam Store tags cache entry: {error}"))?;
+
+    connection
+        .execute(
+            "
+            INSERT INTO steam_app_store_tags (app_id, tags_json, fetched_at)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(app_id) DO UPDATE SET
+              tags_json = excluded.tags_json,
+              fetched_at = excluded.fetched_at
+            ",
+            params![app_id.to_string(), tags_json, Utc::now().to_rfc3339()],
+        )
+        .map_err(|error| format!("Failed to cache Steam Store tags: {error}"))?;
+
+    Ok(())
+}
+
+fn fetch_steam_store_user_tags(client: &Client, app_id: u64) -> Result<Vec<String>, String> {
+    let mut request_url = Url::parse(&format!("{STEAM_STORE_APP_ENDPOINT}/{app_id}/"))
+        .map_err(|error| format!("Failed to parse Steam Store endpoint: {error}"))?;
+    request_url
+        .query_pairs_mut()
+        .append_pair("l", "english")
+        .append_pair("cc", "us");
+
+    let response = client
+        .get(request_url)
+        .send()
+        .map_err(|error| format!("Steam Store tags request failed: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Steam Store tags request failed with status {}",
+            response.status()
+        ));
+    }
+
+    let html = response
+        .text()
+        .map_err(|error| format!("Failed to decode Steam Store tags response: {error}"))?;
+    Ok(parse_steam_store_user_tags_from_html(&html))
+}
+
+fn parse_steam_store_user_tags_from_html(html: &str) -> Vec<String> {
+    let tag_regex = match Regex::new(
+        r#"(?is)<a[^>]*\bclass\s*=\s*"[^"]*\bapp_tag\b[^"]*"[^>]*>(.*?)</a>"#,
+    ) {
+        Ok(regex) => regex,
+        Err(_) => return Vec::new(),
+    };
+    let strip_markup_regex = Regex::new(r"(?is)<[^>]+>").ok();
+    let mut tags = Vec::new();
+    let mut seen = HashSet::new();
+
+    for captures in tag_regex.captures_iter(html) {
+        let Some(raw_text) = captures.get(1).map(|value| value.as_str()) else {
+            continue;
+        };
+
+        let without_markup = if let Some(strip_regex) = strip_markup_regex.as_ref() {
+            strip_regex.replace_all(raw_text, " ").into_owned()
+        } else {
+            raw_text.to_owned()
+        };
+        let decoded = decode_basic_html_entities(&without_markup);
+        let compact = decoded.split_whitespace().collect::<Vec<_>>().join(" ");
+        let normalized = compact.trim();
+        if normalized.is_empty() || normalized == "+" {
+            continue;
+        }
+
+        let dedupe_key = normalized.to_ascii_lowercase();
+        if seen.insert(dedupe_key) {
+            tags.push(normalized.to_owned());
+        }
+    }
+
+    tags
+}
+
+fn normalize_steam_store_tags(raw_tags: &[String]) -> Vec<String> {
+    let mut normalized_tags = Vec::new();
+    let mut seen = HashSet::new();
+
+    for tag in raw_tags {
+        let normalized = tag.trim();
+        if normalized.is_empty() || normalized == "+" {
+            continue;
+        }
+
+        let dedupe_key = normalized.to_ascii_lowercase();
+        if seen.insert(dedupe_key) {
+            normalized_tags.push(normalized.to_owned());
+        }
+    }
+
+    normalized_tags
+}
+
 fn fetch_steam_supported_languages(client: &Client, app_id: u64) -> Result<Vec<String>, String> {
     let mut request_url = Url::parse(STEAM_APP_DETAILS_ENDPOINT)
         .map_err(|error| format!("Failed to parse Steam app details endpoint: {error}"))?;
@@ -2197,6 +2521,188 @@ fn fetch_steam_supported_languages(client: &Client, app_id: u64) -> Result<Vec<S
         .unwrap_or_default();
 
     Ok(parse_steam_supported_languages(raw_languages))
+}
+
+fn fetch_steam_install_size_estimate_from_store(
+    client: &Client,
+    app_id: u64,
+) -> Result<Option<u64>, String> {
+    let mut request_url = Url::parse(STEAM_APP_DETAILS_ENDPOINT)
+        .map_err(|error| format!("Failed to parse Steam app details endpoint: {error}"))?;
+    request_url
+        .query_pairs_mut()
+        .append_pair("appids", &app_id.to_string())
+        .append_pair("l", "english")
+        .append_pair("cc", "us");
+
+    let response = client
+        .get(request_url)
+        .send()
+        .map_err(|error| format!("Steam app details request failed: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Steam app details request failed with status {}",
+            response.status()
+        ));
+    }
+
+    let payload = response
+        .json::<serde_json::Value>()
+        .map_err(|error| format!("Failed to decode Steam app details response: {error}"))?;
+
+    let app_id_key = app_id.to_string();
+    let Some(entry) = payload.get(&app_id_key) else {
+        return Ok(None);
+    };
+    let Some(true) = entry.get("success").and_then(serde_json::Value::as_bool) else {
+        return Ok(None);
+    };
+    let Some(data) = entry.get("data").and_then(serde_json::Value::as_object) else {
+        return Ok(None);
+    };
+
+    let mut max_size_bytes: Option<u64> = None;
+    for requirements_field in ["pc_requirements", "mac_requirements", "linux_requirements"] {
+        let Some(requirements_value) = data.get(requirements_field) else {
+            continue;
+        };
+        if let Some(size_bytes) = parse_steam_install_size_from_requirements_value(requirements_value)
+        {
+            max_size_bytes = match max_size_bytes {
+                Some(existing_max) => Some(existing_max.max(size_bytes)),
+                None => Some(size_bytes),
+            };
+        }
+    }
+
+    Ok(max_size_bytes)
+}
+
+fn parse_steam_install_size_from_requirements_value(value: &serde_json::Value) -> Option<u64> {
+    let mut candidate_texts = Vec::new();
+    collect_steam_requirement_text_candidates(value, &mut candidate_texts);
+
+    let mut max_size_bytes: Option<u64> = None;
+    for candidate_text in &candidate_texts {
+        if let Some(parsed_size) = parse_steam_install_size_from_requirement_text(candidate_text) {
+            max_size_bytes = match max_size_bytes {
+                Some(existing_max) => Some(existing_max.max(parsed_size)),
+                None => Some(parsed_size),
+            };
+        }
+    }
+
+    max_size_bytes
+}
+
+fn collect_steam_requirement_text_candidates(value: &serde_json::Value, output: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(text) => {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                output.push(trimmed.to_owned());
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_steam_requirement_text_candidates(item, output);
+            }
+        }
+        serde_json::Value::Object(object) => {
+            for key in ["minimum", "recommended"] {
+                if let Some(candidate) = object.get(key).and_then(serde_json::Value::as_str) {
+                    let trimmed = candidate.trim();
+                    if !trimmed.is_empty() {
+                        output.push(trimmed.to_owned());
+                    }
+                }
+            }
+
+            for value in object.values() {
+                if let Some(candidate) = value.as_str() {
+                    let trimmed = candidate.trim();
+                    if !trimmed.is_empty() {
+                        output.push(trimmed.to_owned());
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn parse_steam_install_size_from_requirement_text(raw_text: &str) -> Option<u64> {
+    if raw_text.trim().is_empty() {
+        return None;
+    }
+
+    let with_breaks_replaced = raw_text
+        .replace("<br />", "\n")
+        .replace("<br/>", "\n")
+        .replace("<br>", "\n");
+    let without_tags = match Regex::new(r"(?is)<[^>]+>") {
+        Ok(tag_regex) => tag_regex.replace_all(&with_breaks_replaced, "").into_owned(),
+        Err(_) => with_breaks_replaced,
+    };
+    let decoded = decode_basic_html_entities(&without_tags);
+    let size_pattern = match Regex::new(r"(?i)([0-9]+(?:[.,][0-9]+)?)\s*(tb|gb|mb|kb)") {
+        Ok(regex) => regex,
+        Err(_) => return None,
+    };
+
+    let mut max_size_bytes: Option<u64> = None;
+    for line in decoded.lines() {
+        let normalized_line = line.trim();
+        if normalized_line.is_empty() {
+            continue;
+        }
+
+        let lowercased_line = normalized_line.to_ascii_lowercase();
+        let looks_like_storage_requirement = lowercased_line.contains("storage")
+            || lowercased_line.contains("disk space")
+            || lowercased_line.contains("available space")
+            || lowercased_line.contains("space required");
+        if !looks_like_storage_requirement {
+            continue;
+        }
+
+        for captures in size_pattern.captures_iter(normalized_line) {
+            let Some(amount_raw) = captures.get(1).map(|value| value.as_str()) else {
+                continue;
+            };
+            let Some(unit_raw) = captures.get(2).map(|value| value.as_str()) else {
+                continue;
+            };
+
+            let normalized_amount = amount_raw.replace(',', ".");
+            let Ok(amount) = normalized_amount.parse::<f64>() else {
+                continue;
+            };
+            if !(amount.is_finite() && amount > 0.0) {
+                continue;
+            }
+
+            let multiplier = match unit_raw.to_ascii_uppercase().as_str() {
+                "TB" => 1024_f64 * 1024_f64 * 1024_f64 * 1024_f64,
+                "GB" => 1024_f64 * 1024_f64 * 1024_f64,
+                "MB" => 1024_f64 * 1024_f64,
+                "KB" => 1024_f64,
+                _ => continue,
+            };
+            let estimated_bytes = (amount * multiplier).round();
+            if !(estimated_bytes.is_finite() && estimated_bytes > 0.0) {
+                continue;
+            }
+
+            let estimated_bytes = estimated_bytes as u64;
+            max_size_bytes = match max_size_bytes {
+                Some(existing_max) => Some(existing_max.max(estimated_bytes)),
+                None => Some(estimated_bytes),
+            };
+        }
+    }
+
+    max_size_bytes
 }
 
 fn default_game_version_beta_options() -> Vec<GameVersionBetaOptionResponse> {
@@ -3008,6 +3514,8 @@ fn replace_provider_games(
 }
 
 fn list_games_by_user(connection: &Connection, user_id: &str) -> Result<Vec<GameResponse>, String> {
+    let collections_by_game = load_collection_names_by_game(connection, user_id)?;
+    let steam_tags_by_game = load_steam_tags_by_game(connection, user_id)?;
     let mut statement = connection
         .prepare(
             "
@@ -3040,6 +3548,19 @@ fn list_games_by_user(connection: &Connection, user_id: &str) -> Result<Vec<Game
             let external_id: String = row.get(1)?;
             let installed_raw: i64 = row.get(5)?;
             let favorite_raw: i64 = row.get(8)?;
+            let game_key = game_membership_key(&provider, &external_id);
+            let steam_tags = if provider.eq_ignore_ascii_case("steam") {
+                steam_tags_by_game
+                    .get(&external_id)
+                    .cloned()
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let collections = collections_by_game
+                .get(&game_key)
+                .cloned()
+                .unwrap_or_default();
             Ok(GameResponse {
                 id: format!("{provider}:{external_id}"),
                 provider,
@@ -3051,12 +3572,127 @@ fn list_games_by_user(connection: &Connection, user_id: &str) -> Result<Vec<Game
                 artwork_url: row.get(6)?,
                 last_synced_at: row.get(7)?,
                 favorite: favorite_raw > 0,
+                steam_tags,
+                collections,
             })
         })
         .map_err(|error| format!("Failed to query library rows: {error}"))?;
 
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|error| format!("Failed to decode library rows: {error}"))
+}
+
+fn game_membership_key(provider: &str, external_id: &str) -> String {
+    format!(
+        "{}:{}",
+        provider.trim().to_ascii_lowercase(),
+        external_id.trim()
+    )
+}
+
+fn load_collection_names_by_game(
+    connection: &Connection,
+    user_id: &str,
+) -> Result<HashMap<String, Vec<String>>, String> {
+    let mut statement = connection
+        .prepare(
+            "
+            SELECT
+              membership.provider,
+              membership.external_id,
+              c.name
+            FROM collection_games membership
+            JOIN collections c
+              ON c.id = membership.collection_id
+             AND c.user_id = membership.user_id
+            WHERE membership.user_id = ?1
+            ORDER BY c.name COLLATE NOCASE ASC
+            ",
+        )
+        .map_err(|error| format!("Failed to prepare collection membership query: {error}"))?;
+
+    let rows = statement
+        .query_map(params![user_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|error| format!("Failed to query collection memberships: {error}"))?;
+
+    let mut collections_by_game: HashMap<String, Vec<String>> = HashMap::new();
+    let mut seen_names_by_game: HashMap<String, HashSet<String>> = HashMap::new();
+
+    for row in rows {
+        let (provider, external_id, raw_collection_name) = row
+            .map_err(|error| format!("Failed to decode collection membership row: {error}"))?;
+        let collection_name = raw_collection_name.trim();
+        if collection_name.is_empty() {
+            continue;
+        }
+
+        let key = game_membership_key(&provider, &external_id);
+        let dedupe_key = collection_name.to_ascii_lowercase();
+        let seen_names = seen_names_by_game
+            .entry(key.clone())
+            .or_insert_with(HashSet::new);
+        if !seen_names.insert(dedupe_key) {
+            continue;
+        }
+
+        collections_by_game
+            .entry(key)
+            .or_insert_with(Vec::new)
+            .push(collection_name.to_owned());
+    }
+
+    Ok(collections_by_game)
+}
+
+fn load_steam_tags_by_game(
+    connection: &Connection,
+    user_id: &str,
+) -> Result<HashMap<String, Vec<String>>, String> {
+    let mut statement = connection
+        .prepare(
+            "
+            SELECT
+              g.external_id,
+              t.tags_json
+            FROM games g
+            LEFT JOIN steam_app_store_tags t
+              ON t.app_id = g.external_id
+            WHERE g.user_id = ?1
+              AND g.provider = 'steam'
+            ",
+        )
+        .map_err(|error| format!("Failed to prepare Steam Store tag query: {error}"))?;
+
+    let rows = statement
+        .query_map(params![user_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        })
+        .map_err(|error| format!("Failed to query Steam Store tags: {error}"))?;
+
+    let mut steam_tags_by_game: HashMap<String, Vec<String>> = HashMap::new();
+
+    for row in rows {
+        let (external_id, tags_json) =
+            row.map_err(|error| format!("Failed to decode Steam Store tag row: {error}"))?;
+        let Some(tags_json) = tags_json else {
+            continue;
+        };
+        let parsed_tags = serde_json::from_str::<Vec<String>>(&tags_json).unwrap_or_default();
+        let normalized_tags = normalize_steam_store_tags(&parsed_tags);
+        if normalized_tags.is_empty() {
+            continue;
+        }
+
+        steam_tags_by_game.insert(external_id, normalized_tags);
+    }
+
+    Ok(steam_tags_by_game)
 }
 
 fn normalize_game_identity_input(
@@ -4061,6 +4697,12 @@ fn map_compatibility_tool_label_to_steam_name(label: &str) -> String {
     }
 }
 
+fn log_steam_settings_debug(state: &AppState, message: &str) {
+    if state.steam_settings_debug_logging {
+        eprintln!("[catalyst:steam-settings] {message}");
+    }
+}
+
 fn apply_steam_game_properties_settings(
     state: &AppState,
     user: &UserRow,
@@ -4072,6 +4714,14 @@ fn apply_steam_game_properties_settings(
         .as_deref()
         .ok_or_else(|| String::from("Steam is not linked for this account"))?;
     let localconfig_path = resolve_steam_localconfig_path(state.steam_root_override.as_deref(), steam_id)?;
+    log_steam_settings_debug(
+        state,
+        &format!(
+            "Applying settings for app {} using localconfig {}",
+            app_id,
+            localconfig_path.display()
+        ),
+    );
     let localconfig_contents = fs::read_to_string(&localconfig_path).map_err(|error| {
         format!(
             "Failed to read Steam localconfig at {}: {error}",
@@ -4090,35 +4740,73 @@ fn apply_steam_game_properties_settings(
     let launch_options = settings.general.launch_options.trim();
     if launch_options.is_empty() {
         vdf_remove_entry(app_settings_object, "LaunchOptions");
+        log_steam_settings_debug(state, &format!("app {}: cleared LaunchOptions", app_id));
     } else {
         vdf_set_text_entry(app_settings_object, "LaunchOptions", launch_options);
+        log_steam_settings_debug(
+            state,
+            &format!("app {}: set LaunchOptions to {:?}", app_id, launch_options),
+        );
     }
 
     match settings.updates.automatic_updates_mode.as_str() {
-        "use-global-setting" => vdf_remove_entry(app_settings_object, "AutoUpdateBehavior"),
-        "wait-until-launch" => vdf_set_text_entry(app_settings_object, "AutoUpdateBehavior", "1"),
-        "let-steam-decide" => vdf_set_text_entry(app_settings_object, "AutoUpdateBehavior", "0"),
-        "immediately-download" => vdf_set_text_entry(app_settings_object, "AutoUpdateBehavior", "2"),
+        "use-global-setting" => {
+            vdf_remove_entry(app_settings_object, "AutoUpdateBehavior");
+            log_steam_settings_debug(state, &format!("app {}: cleared AutoUpdateBehavior", app_id));
+        }
+        "wait-until-launch" => {
+            vdf_set_text_entry(app_settings_object, "AutoUpdateBehavior", "1");
+            log_steam_settings_debug(state, &format!("app {}: set AutoUpdateBehavior=1", app_id));
+        }
+        "let-steam-decide" => {
+            vdf_set_text_entry(app_settings_object, "AutoUpdateBehavior", "0");
+            log_steam_settings_debug(state, &format!("app {}: set AutoUpdateBehavior=0", app_id));
+        }
+        "immediately-download" => {
+            vdf_set_text_entry(app_settings_object, "AutoUpdateBehavior", "2");
+            log_steam_settings_debug(state, &format!("app {}: set AutoUpdateBehavior=2", app_id));
+        }
         _ => {}
     }
 
     match settings.updates.background_downloads_mode.as_str() {
         "pause-while-playing-global" => {
-            vdf_remove_entry(app_settings_object, "AllowDownloadsWhileRunning")
+            vdf_remove_entry(app_settings_object, "AllowDownloadsWhileRunning");
+            log_steam_settings_debug(
+                state,
+                &format!("app {}: cleared AllowDownloadsWhileRunning", app_id),
+            );
         }
         "always-allow" => {
-            vdf_set_text_entry(app_settings_object, "AllowDownloadsWhileRunning", "1")
+            vdf_set_text_entry(app_settings_object, "AllowDownloadsWhileRunning", "1");
+            log_steam_settings_debug(
+                state,
+                &format!("app {}: set AllowDownloadsWhileRunning=1", app_id),
+            );
         }
         "never-allow" => {
-            vdf_set_text_entry(app_settings_object, "AllowDownloadsWhileRunning", "0")
+            vdf_set_text_entry(app_settings_object, "AllowDownloadsWhileRunning", "0");
+            log_steam_settings_debug(
+                state,
+                &format!("app {}: set AllowDownloadsWhileRunning=0", app_id),
+            );
         }
         _ => {}
     }
 
     match settings.controller.steam_input_override.as_str() {
-        "use-default-settings" => vdf_remove_entry(app_settings_object, "SteamInput"),
-        "disable-steam-input" => vdf_set_text_entry(app_settings_object, "SteamInput", "0"),
-        "enable-steam-input" => vdf_set_text_entry(app_settings_object, "SteamInput", "1"),
+        "use-default-settings" => {
+            vdf_remove_entry(app_settings_object, "SteamInput");
+            log_steam_settings_debug(state, &format!("app {}: cleared SteamInput", app_id));
+        }
+        "disable-steam-input" => {
+            vdf_set_text_entry(app_settings_object, "SteamInput", "0");
+            log_steam_settings_debug(state, &format!("app {}: set SteamInput=0", app_id));
+        }
+        "enable-steam-input" => {
+            vdf_set_text_entry(app_settings_object, "SteamInput", "1");
+            log_steam_settings_debug(state, &format!("app {}: set SteamInput=1", app_id));
+        }
         _ => {}
     }
 
@@ -4139,13 +4827,28 @@ fn apply_steam_game_properties_settings(
         );
         if compat_name.is_empty() {
             vdf_remove_entry(compat_mapping_object, &app_id_key);
+            log_steam_settings_debug(
+                state,
+                &format!("app {}: cleared CompatToolMapping entry (empty compat name)", app_id),
+            );
         } else {
             vdf_set_text_entry(compat_mapping_entry, "name", &compat_name);
             vdf_set_text_entry(compat_mapping_entry, "config", "");
             vdf_set_text_entry(compat_mapping_entry, "priority", "250");
+            log_steam_settings_debug(
+                state,
+                &format!(
+                    "app {}: set CompatToolMapping name={:?}, priority=250",
+                    app_id, compat_name
+                ),
+            );
         }
     } else {
         vdf_remove_entry(compat_mapping_object, &app_id_key);
+        log_steam_settings_debug(
+            state,
+            &format!("app {}: removed CompatToolMapping override", app_id),
+        );
     }
 
     let serialized_localconfig = serialize_vdf_document(&localconfig_value);
@@ -4154,7 +4857,12 @@ fn apply_steam_game_properties_settings(
             "Failed to write Steam localconfig at {}: {error}",
             localconfig_path.display()
         )
-    })
+    })?;
+    log_steam_settings_debug(
+        state,
+        &format!("app {}: wrote Steam localconfig successfully", app_id),
+    );
+    Ok(())
 }
 
 fn load_game_privacy_settings(
@@ -4726,6 +5434,14 @@ fn initialize_database(db_path: &Path) -> Result<(), String> {
             );
 
             CREATE INDEX IF NOT EXISTS idx_steam_app_betas_fetched_at ON steam_app_betas(fetched_at);
+
+            CREATE TABLE IF NOT EXISTS steam_app_store_tags (
+              app_id TEXT PRIMARY KEY,
+              tags_json TEXT NOT NULL,
+              fetched_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_steam_app_store_tags_fetched_at ON steam_app_store_tags(fetched_at);
             ",
         )
         .map_err(|error| format!("Failed to run SQLite migrations: {error}"))?;
@@ -4807,6 +5523,7 @@ pub fn run() {
                 .map(|value| value.trim().to_owned())
                 .filter(|value| !value.is_empty());
             let steam_local_install_detection = env_flag("STEAM_LOCAL_INSTALL_DETECTION", true);
+            let steam_settings_debug_logging = env_flag("STEAM_SETTINGS_DEBUG_LOGGING", false);
             let steam_root_override = std::env::var("STEAM_ROOT_OVERRIDE")
                 .ok()
                 .map(|value| value.trim().to_owned())
@@ -4817,6 +5534,7 @@ pub fn run() {
                 session_token_path,
                 steam_api_key,
                 steam_local_install_detection,
+                steam_settings_debug_logging,
                 steam_root_override,
             );
             restore_persisted_session(&state)?;
@@ -4842,6 +5560,8 @@ pub fn run() {
             get_game_properties_settings,
             set_game_properties_settings,
             get_game_installation_details,
+            get_game_install_size_estimate,
+            list_game_install_locations,
             list_game_versions_betas,
             validate_game_beta_access_code,
             create_collection,

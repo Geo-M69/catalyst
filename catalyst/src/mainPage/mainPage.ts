@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { createFilterPanel } from "./components/filterPanel";
 import { createGameContextMenu } from "./components/gameContextMenu";
 import { renderGameGrid } from "./components/gameGrid";
+import { createInstallDialog } from "./components/installDialog";
 import {
   createGamePropertiesPanel,
   type GameBetaAccessCodeValidationResult,
@@ -18,10 +19,8 @@ const sessionAccountElement = document.getElementById("session-account");
 const sessionAccountButton = document.getElementById("session-account-button");
 const sessionAccountLabelElement = document.getElementById("session-account-label");
 const sessionAccountMenuElement = document.getElementById("session-account-menu");
-const sessionAccountSteamButton = document.getElementById("session-account-steam");
-const sessionAccountSteamIndicator = document.getElementById("session-account-steam-indicator");
-const sessionAccountLinkedButton = document.getElementById("session-account-linked");
-const sessionAccountSettingsButton = document.getElementById("session-account-settings");
+const sessionAccountManageButton = document.getElementById("session-account-manage");
+const sessionAccountSignOutButton = document.getElementById("session-account-signout");
 const librarySummaryElement = document.getElementById("library-summary");
 const refreshLibraryButton = document.getElementById("refresh-library-button");
 const filterPanelElement = document.getElementById("filter-panel");
@@ -33,10 +32,8 @@ if (
   || !(sessionAccountButton instanceof HTMLButtonElement)
   || !(sessionAccountLabelElement instanceof HTMLElement)
   || !(sessionAccountMenuElement instanceof HTMLElement)
-  || !(sessionAccountSteamButton instanceof HTMLButtonElement)
-  || !(sessionAccountSteamIndicator instanceof HTMLElement)
-  || !(sessionAccountLinkedButton instanceof HTMLButtonElement)
-  || !(sessionAccountSettingsButton instanceof HTMLButtonElement)
+  || !(sessionAccountManageButton instanceof HTMLButtonElement)
+  || !(sessionAccountSignOutButton instanceof HTMLButtonElement)
   || !(librarySummaryElement instanceof HTMLElement)
   || !(refreshLibraryButton instanceof HTMLButtonElement)
   || !(filterPanelElement instanceof HTMLElement)
@@ -66,6 +63,48 @@ const LIBRARY_SOFT_LOCK_ASPECTS: ReadonlyArray<{ label: string; ratio: number }>
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
 let closeGameContextMenu: (() => void) | null = null;
 
+const collectSteamTagSuggestions = (games: GameResponse[]): string[] => {
+  const tagsByKey = new Map<string, string>();
+
+  for (const game of games) {
+    for (const rawTag of game.steamTags ?? []) {
+      const tag = rawTag.trim();
+      if (tag.length === 0) {
+        continue;
+      }
+      const key = tag.toLocaleLowerCase();
+      if (!tagsByKey.has(key)) {
+        tagsByKey.set(key, tag);
+      }
+    }
+  }
+
+  return [...tagsByKey.values()].sort((left, right) =>
+    left.localeCompare(right, undefined, { sensitivity: "base" })
+  );
+};
+
+const collectCollectionSuggestions = (games: GameResponse[]): string[] => {
+  const collectionsByKey = new Map<string, string>();
+
+  for (const game of games) {
+    for (const rawCollection of game.collections ?? []) {
+      const collection = rawCollection.trim();
+      if (collection.length === 0) {
+        continue;
+      }
+      const key = collection.toLocaleLowerCase();
+      if (!collectionsByKey.has(key)) {
+        collectionsByKey.set(key, collection);
+      }
+    }
+  }
+
+  return [...collectionsByKey.values()].sort((left, right) =>
+    left.localeCompare(right, undefined, { sensitivity: "base" })
+  );
+};
+
 interface GameVersionBetasPayload {
   options: GameVersionBetaOption[];
   warning?: string;
@@ -82,6 +121,13 @@ interface GameInstallationDetailsPayload {
   sizeOnDiskBytes?: number;
 }
 
+interface GameInstallLocationPayload {
+  path: string;
+  freeSpaceBytes?: number;
+}
+
+type GameInstallSizeEstimatePayload = number | null;
+
 const closeSessionAccountMenu = (): void => {
   sessionAccountMenuElement.hidden = true;
   sessionAccountElement.classList.remove("is-open");
@@ -95,18 +141,15 @@ const openSessionAccountMenu = (): void => {
 };
 
 const getSessionMenuActionItems = (): HTMLButtonElement[] => {
-  return [sessionAccountLinkedButton, sessionAccountSettingsButton].filter((button) => !button.disabled);
+  return [sessionAccountManageButton, sessionAccountSignOutButton].filter((button) => !button.disabled);
 };
 
 const setSessionStatus = (steamConnected: boolean, isError = false): void => {
   steamLinked = steamConnected && !isError;
   sessionAccountLabelElement.textContent = APP_NAME;
-  sessionAccountSteamButton.classList.toggle("is-connected", steamConnected && !isError);
-  sessionAccountSteamButton.classList.toggle("is-disconnected", !steamConnected || isError);
-  sessionAccountSteamIndicator.setAttribute("aria-label", steamConnected && !isError ? "Steam connected" : "Steam disconnected");
   sessionAccountButton.classList.toggle("is-error", isError);
-  sessionAccountLinkedButton.disabled = isError;
-  sessionAccountSettingsButton.disabled = isError;
+  sessionAccountManageButton.disabled = isError;
+  sessionAccountSignOutButton.disabled = false;
   closeSessionAccountMenu();
 };
 
@@ -227,6 +270,8 @@ const registerGridZoomShortcut = (): void => {
 const setAllGames = (games: GameResponse[]): void => {
   allGames = games;
   gameById = new Map(games.map((game) => [game.id, game]));
+  filterPanel.setSteamTagSuggestions(collectSteamTagSuggestions(games));
+  filterPanel.setCollectionSuggestions(collectCollectionSuggestions(games));
 };
 
 const resolveGameFromCard = (card: HTMLElement): GameResponse | null => {
@@ -274,6 +319,7 @@ const filterPanel = createFilterPanel(filterPanelElement, () => {
 });
 
 const gamePropertiesPanel = createGamePropertiesPanel();
+const installDialog = createInstallDialog();
 
 const listCollectionsForGame = async (game: GameResponse): Promise<CollectionResponse[]> => {
   return invoke<CollectionResponse[]>("list_collections", {
@@ -358,6 +404,28 @@ const clearGameOverlayDataForGame = async (game: GameResponse): Promise<void> =>
 const getGameInstallationDetailsForGame = async (game: GameResponse): Promise<GameInstallationDetailsPayload | null> => {
   try {
     return await invoke<GameInstallationDetailsPayload>("get_game_installation_details", {
+      provider: game.provider,
+      externalId: game.externalId,
+    });
+  } catch {
+    return null;
+  }
+};
+
+const listGameInstallLocationsForGame = async (game: GameResponse): Promise<GameInstallLocationPayload[]> => {
+  try {
+    return await invoke<GameInstallLocationPayload[]>("list_game_install_locations", {
+      provider: game.provider,
+      externalId: game.externalId,
+    });
+  } catch {
+    return [];
+  }
+};
+
+const getGameInstallSizeEstimateForGame = async (game: GameResponse): Promise<number | null> => {
+  try {
+    return await invoke<GameInstallSizeEstimatePayload>("get_game_install_size_estimate", {
       provider: game.provider,
       externalId: game.externalId,
     });
@@ -473,9 +541,25 @@ const gameContextMenu = createGameContextMenu({
       });
     },
     installGame: async (game) => {
+      const [installLocations, installSizeBytes] = await Promise.all([
+        listGameInstallLocationsForGame(game),
+        getGameInstallSizeEstimateForGame(game),
+      ]);
+      const installRequest = await installDialog.open({
+        game,
+        locations: installLocations,
+        installSizeBytes: typeof installSizeBytes === "number" ? installSizeBytes : undefined,
+      });
+      if (installRequest === null) {
+        return;
+      }
+
       await invoke("install_game", {
         provider: game.provider,
         externalId: game.externalId,
+        installPath: installRequest.installPath,
+        createDesktopShortcut: installRequest.createDesktopShortcut,
+        createApplicationShortcut: installRequest.createApplicationShortcut,
       });
       updateGameInState(game.id, (existingGame) => ({ ...existingGame, installed: true }));
       renderFilteredLibrary();
@@ -590,12 +674,20 @@ document.addEventListener("pointerdown", (event) => {
   }
 });
 
-sessionAccountLinkedButton.addEventListener("click", () => {
+sessionAccountManageButton.addEventListener("click", () => {
   closeSessionAccountMenu();
 });
 
-sessionAccountSettingsButton.addEventListener("click", () => {
+sessionAccountSignOutButton.addEventListener("click", () => {
   closeSessionAccountMenu();
+  void (async () => {
+    try {
+      await invoke("logout");
+      window.location.replace("/");
+    } catch (error) {
+      console.error(toErrorMessage(error, "Could not sign out."));
+    }
+  })();
 });
 
 const refreshLibrary = async (syncBeforeLoad = false, importSteamCollections = false): Promise<void> => {
