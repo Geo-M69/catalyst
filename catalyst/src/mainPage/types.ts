@@ -14,7 +14,7 @@ export interface GameResponse {
   playtimeMinutes: number;
   artworkUrl?: string;
   lastSyncedAt: string;
-  installed?: boolean;
+  installed: boolean;
   favorite?: boolean;
   lastPlayedAt?: string;
   platforms?: string[];

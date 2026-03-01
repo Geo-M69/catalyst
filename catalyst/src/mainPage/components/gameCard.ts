@@ -116,6 +116,15 @@ export const createGameCard = (game: GameResponse): HTMLElement => {
   title.className = "game-card-title";
   title.textContent = game.name;
 
+  const statusRow = document.createElement("div");
+  statusRow.className = "game-card-status-row";
+  if (game.installed) {
+    const installedBadge = document.createElement("span");
+    installedBadge.className = "game-card-badge";
+    installedBadge.textContent = "Installed";
+    statusRow.append(installedBadge);
+  }
+
   const provider = document.createElement("p");
   provider.className = "game-card-meta";
   provider.textContent = `${game.provider.toUpperCase()} (${formatKind(game.kind)})`;
@@ -128,7 +137,11 @@ export const createGameCard = (game: GameResponse): HTMLElement => {
   synced.className = "game-card-meta subtle";
   synced.textContent = formatLastSynced(game.lastSyncedAt);
 
-  body.append(title, provider, playtime, synced);
+  if (statusRow.childElementCount > 0) {
+    body.append(title, statusRow, provider, playtime, synced);
+  } else {
+    body.append(title, provider, playtime, synced);
+  }
   card.append(media, body);
 
   return card;

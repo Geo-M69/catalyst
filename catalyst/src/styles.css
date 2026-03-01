@@ -630,6 +630,26 @@ button:disabled {
   overflow: hidden;
 }
 
+.game-card-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.game-card-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.18rem 0.48rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.96);
+  background: rgba(72, 171, 116, 0.86);
+  border: 1px solid rgba(120, 220, 158, 0.6);
+}
+
 .game-card-meta {
   margin: 0;
   font-size: 0.82rem;

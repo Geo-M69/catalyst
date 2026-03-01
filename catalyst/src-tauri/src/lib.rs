@@ -33,15 +33,25 @@ struct AppState {
     db_path: PathBuf,
     session_token_path: PathBuf,
     steam_api_key: Option<String>,
+    steam_local_install_detection: bool,
+    steam_root_override: Option<String>,
     current_session_token: Mutex<Option<String>>,
 }
 
 impl AppState {
-    fn new(db_path: PathBuf, session_token_path: PathBuf, steam_api_key: Option<String>) -> Self {
+    fn new(
+        db_path: PathBuf,
+        session_token_path: PathBuf,
+        steam_api_key: Option<String>,
+        steam_local_install_detection: bool,
+        steam_root_override: Option<String>,
+    ) -> Self {
         Self {
             db_path,
             session_token_path,
             steam_api_key,
+            steam_local_install_detection,
+            steam_root_override,
             current_session_token: Mutex::new(None),
         }
     }
@@ -66,6 +76,7 @@ struct LibraryGameInput {
     name: String,
     kind: String,
     playtime_minutes: i64,
+    installed: bool,
     artwork_url: Option<String>,
     last_synced_at: String,
 }
@@ -107,6 +118,7 @@ struct GameResponse {
     name: String,
     kind: String,
     playtime_minutes: i64,
+    installed: bool,
     artwork_url: Option<String>,
     last_synced_at: String,
 }
@@ -244,10 +256,18 @@ fn get_session(state: State<'_, AppState>) -> Result<Option<PublicUser>, String>
 async fn start_steam_auth(state: State<'_, AppState>) -> Result<SteamAuthResponse, String> {
     let db_path = state.db_path.clone();
     let steam_api_key = state.steam_api_key.clone();
+    let steam_local_install_detection = state.steam_local_install_detection;
+    let steam_root_override = state.steam_root_override.clone();
     let current_session_token = get_state_session_token(state.inner())?;
 
     let outcome = tauri::async_runtime::spawn_blocking(move || {
-        complete_steam_auth_flow(&db_path, steam_api_key, current_session_token)
+        complete_steam_auth_flow(
+            &db_path,
+            steam_api_key,
+            steam_local_install_detection,
+            steam_root_override,
+            current_session_token,
+        )
     })
     .await
     .map_err(|error| format!("Steam auth task failed: {error}"))??;
@@ -294,8 +314,14 @@ fn sync_steam_library(state: State<'_, AppState>) -> Result<SteamSyncResponse, S
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
     let client = build_http_client()?;
-    let synced_games =
-        sync_steam_games_for_user(&connection, &user, state.steam_api_key.as_deref(), &client)?;
+    let synced_games = sync_steam_games_for_user(
+        &connection,
+        &user,
+        state.steam_api_key.as_deref(),
+        state.steam_local_install_detection,
+        state.steam_root_override.as_deref(),
+        &client,
+    )?;
 
     Ok(SteamSyncResponse {
         user_id: user.id,
@@ -307,6 +333,8 @@ fn sync_steam_library(state: State<'_, AppState>) -> Result<SteamSyncResponse, S
 fn complete_steam_auth_flow(
     db_path: &Path,
     steam_api_key: Option<String>,
+    steam_local_install_detection: bool,
+    steam_root_override: Option<String>,
     current_session_token: Option<String>,
 ) -> Result<SteamAuthOutcome, String> {
     let connection = open_connection(db_path)?;
@@ -352,8 +380,14 @@ fn complete_steam_auth_flow(
         .ok_or_else(|| String::from("Steam callback returned an invalid claimed ID"))?;
 
     let user = resolve_user_for_steam_auth(&connection, current_user.as_ref(), &steam_id)?;
-    let synced_games =
-        sync_steam_games_for_user(&connection, &user, steam_api_key.as_deref(), &client)?;
+    let synced_games = sync_steam_games_for_user(
+        &connection,
+        &user,
+        steam_api_key.as_deref(),
+        steam_local_install_detection,
+        steam_root_override.as_deref(),
+        &client,
+    )?;
     let session_token = create_session(&connection, &user.id)?;
 
     Ok(SteamAuthOutcome {
@@ -535,6 +569,8 @@ fn sync_steam_games_for_user(
     connection: &Connection,
     user: &UserRow,
     steam_api_key: Option<&str>,
+    steam_local_install_detection: bool,
+    steam_root_override: Option<&str>,
     client: &Client,
 ) -> Result<usize, String> {
     let steam_id = user
@@ -542,10 +578,25 @@ fn sync_steam_games_for_user(
         .as_deref()
         .ok_or_else(|| String::from("User is not linked to Steam"))?;
 
+    let locally_installed_app_ids = if steam_local_install_detection {
+        match detect_locally_installed_steam_app_ids(steam_root_override) {
+            Ok(app_ids) => Some(app_ids),
+            Err(error) => {
+                eprintln!("Local Steam install detection failed: {error}");
+                None
+            }
+        }
+    } else {
+        Some(HashSet::new())
+    };
+
     let Some(api_key) = steam_api_key
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
+        if let Some(app_ids) = locally_installed_app_ids.as_ref() {
+            refresh_provider_installed_flags(connection, &user.id, "steam", app_ids)?;
+        }
         return Ok(0);
     };
 
@@ -578,17 +629,311 @@ fn sync_steam_games_for_user(
         .response
         .and_then(|response| response.games)
         .unwrap_or_default();
+    let existing_installed_flags = if locally_installed_app_ids.is_none() {
+        load_provider_installed_flags(connection, &user.id, "steam")?
+    } else {
+        HashMap::new()
+    };
     let resolved_kinds = resolve_steam_game_kinds(connection, client, &steam_owned_games)?;
     let games = steam_owned_games
         .into_iter()
         .map(|game| {
             let resolved_kind = resolved_kinds.get(&game.appid).map(String::as_str);
-            map_steam_game(game, resolved_kind)
+            let installed = locally_installed_app_ids
+                .as_ref()
+                .map(|app_ids| app_ids.contains(&game.appid))
+                .unwrap_or_else(|| {
+                    existing_installed_flags
+                        .get(&game.appid)
+                        .copied()
+                        .unwrap_or(false)
+                });
+            map_steam_game(game, resolved_kind, installed)
         })
         .collect::<Vec<_>>();
 
     replace_provider_games(connection, &user.id, "steam", &games)?;
     Ok(games.len())
+}
+
+fn load_provider_installed_flags(
+    connection: &Connection,
+    user_id: &str,
+    provider: &str,
+) -> Result<HashMap<u64, bool>, String> {
+    let mut statement = connection
+        .prepare("SELECT external_id, installed FROM games WHERE user_id = ?1 AND provider = ?2")
+        .map_err(|error| format!("Failed to prepare installed flag query: {error}"))?;
+
+    let rows = statement
+        .query_map(params![user_id, provider], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .map_err(|error| format!("Failed to query installed flags: {error}"))?;
+
+    let mut installed_flags = HashMap::new();
+    for row in rows {
+        let (external_id, installed_raw) =
+            row.map_err(|error| format!("Failed to decode installed flag row: {error}"))?;
+        let Some(app_id) = external_id.parse::<u64>().ok() else {
+            continue;
+        };
+        installed_flags.insert(app_id, installed_raw > 0);
+    }
+
+    Ok(installed_flags)
+}
+
+fn refresh_provider_installed_flags(
+    connection: &Connection,
+    user_id: &str,
+    provider: &str,
+    installed_app_ids: &HashSet<u64>,
+) -> Result<(), String> {
+    let mut statement = connection
+        .prepare("SELECT external_id FROM games WHERE user_id = ?1 AND provider = ?2")
+        .map_err(|error| format!("Failed to prepare provider game ID query: {error}"))?;
+
+    let rows = statement
+        .query_map(params![user_id, provider], |row| row.get::<_, String>(0))
+        .map_err(|error| format!("Failed to query provider game IDs: {error}"))?;
+
+    let external_ids = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Failed to decode provider game IDs: {error}"))?;
+
+    let mut update = connection
+        .prepare(
+            "UPDATE games SET installed = ?1 WHERE user_id = ?2 AND provider = ?3 AND external_id = ?4",
+        )
+        .map_err(|error| format!("Failed to prepare installed flag update: {error}"))?;
+
+    for external_id in external_ids {
+        let is_installed = external_id
+            .parse::<u64>()
+            .ok()
+            .map(|app_id| installed_app_ids.contains(&app_id))
+            .unwrap_or(false);
+
+        update
+            .execute(params![
+                if is_installed { 1 } else { 0 },
+                user_id,
+                provider,
+                external_id
+            ])
+            .map_err(|error| format!("Failed to update installed flag: {error}"))?;
+    }
+
+    Ok(())
+}
+
+fn detect_locally_installed_steam_app_ids(
+    steam_root_override: Option<&str>,
+) -> Result<HashSet<u64>, String> {
+    let Some(steam_root) = resolve_steam_root_path(steam_root_override) else {
+        return Ok(HashSet::new());
+    };
+
+    let steamapps_directories = resolve_steamapps_directories(&steam_root)?;
+    let mut installed_app_ids = HashSet::new();
+    for steamapps_directory in steamapps_directories {
+        collect_installed_app_ids_from_steamapps_dir(&steamapps_directory, &mut installed_app_ids)?;
+    }
+
+    Ok(installed_app_ids)
+}
+
+fn resolve_steam_root_path(steam_root_override: Option<&str>) -> Option<PathBuf> {
+    if let Some(override_path) = steam_root_override
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Some(PathBuf::from(override_path));
+    }
+
+    steam_root_candidates()
+        .into_iter()
+        .find(|candidate| candidate.join("steamapps").is_dir())
+}
+
+fn steam_root_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if cfg!(target_os = "windows") {
+        if let Ok(path) = std::env::var("PROGRAMFILES(X86)") {
+            candidates.push(PathBuf::from(path).join("Steam"));
+        }
+        if let Ok(path) = std::env::var("PROGRAMFILES") {
+            candidates.push(PathBuf::from(path).join("Steam"));
+        }
+        candidates.push(PathBuf::from(r"C:\Program Files (x86)\Steam"));
+        candidates.push(PathBuf::from(r"C:\Program Files\Steam"));
+    } else if cfg!(target_os = "macos") {
+        if let Ok(home) = std::env::var("HOME") {
+            let home_path = PathBuf::from(home);
+            candidates.push(home_path.join("Library/Application Support/Steam"));
+        }
+    } else {
+        if let Ok(home) = std::env::var("HOME") {
+            let home_path = PathBuf::from(home);
+            candidates.push(home_path.join(".steam/root"));
+            candidates.push(home_path.join(".steam/steam"));
+            candidates.push(home_path.join(".local/share/Steam"));
+            candidates.push(home_path.join(".var/app/com.valvesoftware.Steam/.local/share/Steam"));
+        }
+    }
+
+    candidates
+}
+
+fn resolve_steamapps_directories(steam_root: &Path) -> Result<Vec<PathBuf>, String> {
+    let root_steamapps_directory = steam_root.join("steamapps");
+    let mut steamapps_directories = Vec::new();
+    let mut seen_directories = HashSet::new();
+
+    if seen_directories.insert(root_steamapps_directory.clone()) {
+        steamapps_directories.push(root_steamapps_directory.clone());
+    }
+
+    let library_folders_path = root_steamapps_directory.join("libraryfolders.vdf");
+    let library_folders_content = match fs::read_to_string(&library_folders_path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(steamapps_directories);
+        }
+        Err(error) => {
+            return Err(format!(
+                "Failed to read Steam library folder file at {}: {error}",
+                library_folders_path.display()
+            ));
+        }
+    };
+    let library_paths = parse_steam_libraryfolder_paths(&library_folders_content)?;
+
+    for library_path in library_paths {
+        let steamapps_directory = library_path.join("steamapps");
+        if seen_directories.insert(steamapps_directory.clone()) {
+            steamapps_directories.push(steamapps_directory);
+        }
+    }
+
+    Ok(steamapps_directories)
+}
+
+fn parse_steam_libraryfolder_paths(contents: &str) -> Result<Vec<PathBuf>, String> {
+    let path_pattern = Regex::new(r#"^\s*"path"\s*"([^"]+)""#)
+        .map_err(|error| format!("Failed to compile Steam path pattern: {error}"))?;
+    let legacy_pattern = Regex::new(r#"^\s*"[0-9]+"\s*"([^"]+)""#)
+        .map_err(|error| format!("Failed to compile legacy Steam path pattern: {error}"))?;
+
+    let mut paths = Vec::new();
+    let mut seen_paths = HashSet::new();
+
+    for line in contents.lines() {
+        let Some(captures) = path_pattern.captures(line) else {
+            continue;
+        };
+        let Some(matched_path) = captures.get(1).map(|value| value.as_str()) else {
+            continue;
+        };
+        let decoded_path = decode_steam_vdf_value(matched_path);
+        let trimmed_path = decoded_path.trim();
+        if trimmed_path.is_empty() {
+            continue;
+        }
+        let path = PathBuf::from(trimmed_path);
+        if seen_paths.insert(path.clone()) {
+            paths.push(path);
+        }
+    }
+
+    if !paths.is_empty() {
+        return Ok(paths);
+    }
+
+    for line in contents.lines() {
+        let Some(captures) = legacy_pattern.captures(line) else {
+            continue;
+        };
+        let Some(matched_path) = captures.get(1).map(|value| value.as_str()) else {
+            continue;
+        };
+        let decoded_path = decode_steam_vdf_value(matched_path);
+        let trimmed_path = decoded_path.trim();
+        if trimmed_path.is_empty() {
+            continue;
+        }
+        let path = PathBuf::from(trimmed_path);
+        if seen_paths.insert(path.clone()) {
+            paths.push(path);
+        }
+    }
+
+    Ok(paths)
+}
+
+fn decode_steam_vdf_value(value: &str) -> String {
+    let mut decoded = String::with_capacity(value.len());
+    let mut characters = value.chars();
+
+    while let Some(character) = characters.next() {
+        if character != '\\' {
+            decoded.push(character);
+            continue;
+        }
+
+        let Some(escaped) = characters.next() else {
+            break;
+        };
+
+        match escaped {
+            '\\' => decoded.push('\\'),
+            '"' => decoded.push('"'),
+            't' => decoded.push('\t'),
+            'n' => decoded.push('\n'),
+            'r' => decoded.push('\r'),
+            other => decoded.push(other),
+        }
+    }
+
+    decoded
+}
+
+fn collect_installed_app_ids_from_steamapps_dir(
+    steamapps_directory: &Path,
+    installed_app_ids: &mut HashSet<u64>,
+) -> Result<(), String> {
+    let directory_entries = match fs::read_dir(steamapps_directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(format!(
+                "Failed to read Steam library directory {}: {error}",
+                steamapps_directory.display()
+            ));
+        }
+    };
+
+    for directory_entry in directory_entries {
+        let entry = directory_entry
+            .map_err(|error| format!("Failed to read Steam library entry: {error}"))?;
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        let Some(app_id) = parse_steam_manifest_app_id(&file_name) else {
+            continue;
+        };
+        installed_app_ids.insert(app_id);
+    }
+
+    Ok(())
+}
+
+fn parse_steam_manifest_app_id(file_name: &str) -> Option<u64> {
+    let app_id = file_name
+        .strip_prefix("appmanifest_")?
+        .strip_suffix(".acf")?;
+    app_id.parse::<u64>().ok()
 }
 
 fn resolve_steam_game_kinds(
@@ -762,7 +1107,11 @@ fn steam_kind_from_app_type(app_type: &str) -> &'static str {
     }
 }
 
-fn map_steam_game(game: SteamOwnedGame, resolved_kind: Option<&str>) -> LibraryGameInput {
+fn map_steam_game(
+    game: SteamOwnedGame,
+    resolved_kind: Option<&str>,
+    installed: bool,
+) -> LibraryGameInput {
     let external_id = game.appid.to_string();
     let normalized_name = game
         .name
@@ -807,6 +1156,7 @@ fn map_steam_game(game: SteamOwnedGame, resolved_kind: Option<&str>) -> LibraryG
         name,
         kind,
         playtime_minutes: game.playtime_forever.unwrap_or(0),
+        installed,
         artwork_url,
         last_synced_at: Utc::now().to_rfc3339(),
     }
@@ -852,7 +1202,7 @@ fn replace_provider_games(
 
     let mut insert = connection
         .prepare(
-            "INSERT INTO games (user_id, provider, external_id, name, kind, playtime_minutes, artwork_url, last_synced_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO games (user_id, provider, external_id, name, kind, playtime_minutes, installed, artwork_url, last_synced_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         )
         .map_err(|error| format!("Failed to prepare game insert statement: {error}"))?;
 
@@ -865,6 +1215,7 @@ fn replace_provider_games(
                 game.name,
                 game.kind,
                 game.playtime_minutes,
+                if game.installed { 1 } else { 0 },
                 game.artwork_url,
                 game.last_synced_at
             ])
@@ -877,7 +1228,7 @@ fn replace_provider_games(
 fn list_games_by_user(connection: &Connection, user_id: &str) -> Result<Vec<GameResponse>, String> {
     let mut statement = connection
         .prepare(
-            "SELECT provider, external_id, name, kind, playtime_minutes, artwork_url, last_synced_at FROM games WHERE user_id = ?1 ORDER BY name COLLATE NOCASE ASC",
+            "SELECT provider, external_id, name, kind, playtime_minutes, installed, artwork_url, last_synced_at FROM games WHERE user_id = ?1 ORDER BY name COLLATE NOCASE ASC",
         )
         .map_err(|error| format!("Failed to prepare library query: {error}"))?;
 
@@ -885,6 +1236,7 @@ fn list_games_by_user(connection: &Connection, user_id: &str) -> Result<Vec<Game
         .query_map(params![user_id], |row| {
             let provider: String = row.get(0)?;
             let external_id: String = row.get(1)?;
+            let installed_raw: i64 = row.get(5)?;
             Ok(GameResponse {
                 id: format!("{provider}:{external_id}"),
                 provider,
@@ -892,8 +1244,9 @@ fn list_games_by_user(connection: &Connection, user_id: &str) -> Result<Vec<Game
                 name: row.get(2)?,
                 kind: row.get(3)?,
                 playtime_minutes: row.get(4)?,
-                artwork_url: row.get(5)?,
-                last_synced_at: row.get(6)?,
+                installed: installed_raw > 0,
+                artwork_url: row.get(6)?,
+                last_synced_at: row.get(7)?,
             })
         })
         .map_err(|error| format!("Failed to query library rows: {error}"))?;
@@ -1299,6 +1652,7 @@ fn initialize_database(db_path: &Path) -> Result<(), String> {
               name TEXT NOT NULL,
               kind TEXT NOT NULL DEFAULT 'unknown',
               playtime_minutes INTEGER NOT NULL,
+              installed INTEGER NOT NULL DEFAULT 0,
               artwork_url TEXT,
               last_synced_at TEXT NOT NULL,
               PRIMARY KEY (user_id, provider, external_id),
@@ -1324,21 +1678,30 @@ fn initialize_database(db_path: &Path) -> Result<(), String> {
 }
 
 fn migrate_games_table(connection: &Connection) -> Result<(), String> {
-    if games_table_has_kind_column(connection)? {
-        return Ok(());
+    if !games_table_has_column(connection, "kind")? {
+        connection
+            .execute(
+                "ALTER TABLE games ADD COLUMN kind TEXT NOT NULL DEFAULT 'unknown'",
+                [],
+            )
+            .map_err(|error| format!("Failed to migrate games table with kind column: {error}"))?;
     }
 
-    connection
-        .execute(
-            "ALTER TABLE games ADD COLUMN kind TEXT NOT NULL DEFAULT 'unknown'",
-            [],
-        )
-        .map_err(|error| format!("Failed to migrate games table with kind column: {error}"))?;
+    if !games_table_has_column(connection, "installed")? {
+        connection
+            .execute(
+                "ALTER TABLE games ADD COLUMN installed INTEGER NOT NULL DEFAULT 0",
+                [],
+            )
+            .map_err(|error| {
+                format!("Failed to migrate games table with installed column: {error}")
+            })?;
+    }
 
     Ok(())
 }
 
-fn games_table_has_kind_column(connection: &Connection) -> Result<bool, String> {
+fn games_table_has_column(connection: &Connection, expected_column: &str) -> Result<bool, String> {
     let mut statement = connection
         .prepare("PRAGMA table_info(games)")
         .map_err(|error| format!("Failed to inspect games table schema: {error}"))?;
@@ -1350,12 +1713,24 @@ fn games_table_has_kind_column(connection: &Connection) -> Result<bool, String> 
     for row in rows {
         let column_name =
             row.map_err(|error| format!("Failed to decode games table schema row: {error}"))?;
-        if column_name == "kind" {
+        if column_name == expected_column {
             return Ok(true);
         }
     }
 
     Ok(false)
+}
+
+fn env_flag(name: &str, default_value: bool) -> bool {
+    let Ok(raw_value) = std::env::var(name) else {
+        return default_value;
+    };
+
+    match raw_value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => true,
+        "0" | "false" | "no" | "off" => false,
+        _ => default_value,
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1374,8 +1749,19 @@ pub fn run() {
                 .ok()
                 .map(|value| value.trim().to_owned())
                 .filter(|value| !value.is_empty());
+            let steam_local_install_detection = env_flag("STEAM_LOCAL_INSTALL_DETECTION", true);
+            let steam_root_override = std::env::var("STEAM_ROOT_OVERRIDE")
+                .ok()
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty());
 
-            let state = AppState::new(db_path, session_token_path, steam_api_key);
+            let state = AppState::new(
+                db_path,
+                session_token_path,
+                steam_api_key,
+                steam_local_install_detection,
+                steam_root_override,
+            );
             restore_persisted_session(&state)?;
             app.manage(state);
             Ok(())

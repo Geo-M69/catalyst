@@ -64,6 +64,27 @@ export STEAM_API_KEY="your_key_here"
 npm run tauri dev
 ```
 
+## Steam Local Install Detection (Optional)
+
+- `STEAM_LOCAL_INSTALL_DETECTION` controls local install detection (`true` by default).
+- `STEAM_ROOT_OVERRIDE` can force a specific Steam root path (for non-standard installs).
+
+### Bash (Linux/macOS)
+
+```bash
+export STEAM_LOCAL_INSTALL_DETECTION=true
+export STEAM_ROOT_OVERRIDE="/path/to/Steam"
+npm run tauri dev
+```
+
+### PowerShell (Windows)
+
+```powershell
+$env:STEAM_LOCAL_INSTALL_DETECTION="true"
+$env:STEAM_ROOT_OVERRIDE="C:\Program Files (x86)\Steam"
+npm run tauri dev
+```
+
 ## Production Build
 
 ```bash

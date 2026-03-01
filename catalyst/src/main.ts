@@ -74,27 +74,22 @@ const toErrorMessage = (error: unknown, fallbackMessage: string): string => {
   return fallbackMessage;
 };
 
-const refreshSession = async (): Promise<void> => {
+const refreshSession = async (): Promise<boolean> => {
   try {
     const user = await invoke<PublicUser | null>("get_session");
 
     if (!user) {
       setStatusMessage("Not logged in. Click below to sign in with Steam.");
       steamButtonElement.textContent = "Login with Steam";
-      return;
+      return false;
     }
 
-    if (user.steamLinked) {
-      setStatusMessage(`Logged in with Steam (${user.steamId ?? "unknown"}).`);
-      steamButtonElement.textContent = "Reconnect Steam";
-      return;
-    }
-
-    setStatusMessage("Account session exists but Steam is not linked yet.");
-    steamButtonElement.textContent = "Connect Steam";
+    window.location.replace("/src/mainPage/mainPage.html");
+    return true;
   } catch (error) {
     setStatusMessage(toErrorMessage(error, "Could not read current app session."), true);
     steamButtonElement.textContent = "Login with Steam";
+    return false;
   }
 };
 
@@ -120,5 +115,13 @@ steamButtonElement.addEventListener("click", () => {
   void startSteamLogin();
 });
 
-revealAuthPanel();
-void refreshSession();
+const initialize = async (): Promise<void> => {
+  const redirected = await refreshSession();
+  if (redirected) {
+    return;
+  }
+
+  revealAuthPanel();
+};
+
+void initialize();

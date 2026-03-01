@@ -378,7 +378,7 @@ const initialize = async (): Promise<void> => {
     return;
   }
 
-  await refreshLibrary();
+  await refreshLibrary(true);
 };
 
 void initialize();
