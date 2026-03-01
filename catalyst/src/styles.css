@@ -284,3 +284,57 @@ button:disabled {
     flex-direction: column;
   }
 }
+
+.centered {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 1rem;
+  padding-left: 2%;
+}
+
+.centered > div:nth-child(1) {
+  flex: 0 0 25%;
+}
+
+.centered > div:nth-child(2) {
+  flex: 0 0 50%;
+  max-height: 95vh;
+  overflow-y: auto;
+}
+
+.centered > div:nth-child(3) {
+  flex: 0 0 25%;
+}
+
+.filters {
+  left: 10%;
+}
+
+.games {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: darkgray transparent;
+  column-gap: 10px;
+}
+
+.options {
+  width: 25%;
+}
+
+.game-tile-image {
+  height: 275px;
+  width: 215px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 5px;
+  image {
+    max-width: 100%;
+    max-height: 100%;
+  }
+}
