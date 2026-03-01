@@ -1,9 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { createFilterPanel } from "./components/filterPanel";
+import { createGameContextMenu } from "./components/gameContextMenu";
 import { renderGameGrid } from "./components/gameGrid";
+import { createGamePropertiesPanel } from "./components/gamePropertiesPanel";
 import { renderOptionsPanel } from "./components/optionsPanel";
 import { applyLibraryFilters } from "./filtering";
-import type { GameResponse, LibraryResponse, PublicUser } from "./types";
+import type { CollectionResponse, GameResponse, LibraryResponse, PublicUser } from "./types";
 
 export {};
 
@@ -42,6 +44,7 @@ if (
 }
 
 let allGames: GameResponse[] = [];
+let gameById = new Map<string, GameResponse>();
 let isLoadingLibrary = false;
 let steamLinked = false;
 const GRID_CARD_WIDTH_CSS_VAR = "--game-grid-card-min-width";
@@ -54,6 +57,7 @@ const APP_NAME = "Catalyst";
 
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
 let optionHighlightTimeoutId: number | null = null;
+let closeGameContextMenu: (() => void) | null = null;
 
 const closeSessionAccountMenu = (): void => {
   sessionAccountMenuElement.hidden = true;
@@ -83,9 +87,9 @@ const setSessionStatus = (steamConnected: boolean, isError = false): void => {
   closeSessionAccountMenu();
 };
 
-const setLibrarySummary = (message: string, isError = false): void => {
-  librarySummaryElement.textContent = message;
-  librarySummaryElement.classList.toggle("status-error", isError);
+const setLibrarySummaryCounts = (filteredCount: number, totalCount: number): void => {
+  librarySummaryElement.textContent = `${filteredCount} of ${totalCount} games shown.`;
+  librarySummaryElement.classList.remove("status-error");
 };
 
 const focusOptionsPanel = (titleToHighlight: string | null): void => {
@@ -202,7 +206,37 @@ const registerGridZoomShortcut = (): void => {
   }, { passive: false });
 };
 
+const setAllGames = (games: GameResponse[]): void => {
+  allGames = games;
+  gameById = new Map(games.map((game) => [game.id, game]));
+};
+
+const resolveGameFromCard = (card: HTMLElement): GameResponse | null => {
+  const gameId = card.dataset.gameId;
+  if (!gameId) {
+    return null;
+  }
+
+  return gameById.get(gameId) ?? null;
+};
+
+const updateGameInState = (
+  gameId: string,
+  update: (game: GameResponse) => GameResponse
+): GameResponse | null => {
+  const gameIndex = allGames.findIndex((game) => game.id === gameId);
+  if (gameIndex < 0) {
+    return null;
+  }
+
+  const updatedGame = update(allGames[gameIndex]);
+  allGames[gameIndex] = updatedGame;
+  gameById.set(updatedGame.id, updatedGame);
+  return updatedGame;
+};
+
 const renderFilteredLibrary = (): void => {
+  closeGameContextMenu?.();
   const filters = filterPanel.getFilters();
   const filteredGames = applyLibraryFilters(allGames, filters);
   const emptyMessage = allGames.length === 0
@@ -214,12 +248,82 @@ const renderFilteredLibrary = (): void => {
     games: filteredGames,
     emptyMessage,
   });
-  setLibrarySummary(`${filteredGames.length} of ${allGames.length} games shown.`);
+  setLibrarySummaryCounts(filteredGames.length, allGames.length);
 };
 
 const filterPanel = createFilterPanel(filterPanelElement, () => {
   renderFilteredLibrary();
 });
+
+const gamePropertiesPanel = createGamePropertiesPanel();
+
+const listCollectionsForGame = async (game: GameResponse): Promise<CollectionResponse[]> => {
+  return invoke<CollectionResponse[]>("list_collections", {
+    provider: game.provider,
+    externalId: game.externalId,
+  });
+};
+
+const openGameProperties = async (game: GameResponse): Promise<void> => {
+  const collections = await listCollectionsForGame(game);
+  gamePropertiesPanel.open({
+    game,
+    collections: collections
+      .filter((collection) => collection.containsGame)
+      .map((collection) => collection.name),
+  });
+};
+
+const gameContextMenu = createGameContextMenu({
+  actions: {
+    addGameToCollection: async (game, collectionId) => {
+      await invoke("add_game_to_collection", {
+        collectionId,
+        provider: game.provider,
+        externalId: game.externalId,
+      });
+    },
+    createCollectionAndAdd: async (game, name) => {
+      const createdCollection = await invoke<CollectionResponse>("create_collection", { name });
+      await invoke("add_game_to_collection", {
+        collectionId: createdCollection.id,
+        provider: game.provider,
+        externalId: game.externalId,
+      });
+    },
+    installGame: async (game) => {
+      await invoke("install_game", {
+        provider: game.provider,
+        externalId: game.externalId,
+      });
+      updateGameInState(game.id, (existingGame) => ({ ...existingGame, installed: true }));
+      renderFilteredLibrary();
+    },
+    listCollections: listCollectionsForGame,
+    openProperties: openGameProperties,
+    playGame: async (game) => {
+      await invoke("play_game", {
+        provider: game.provider,
+        externalId: game.externalId,
+      });
+    },
+    setFavorite: async (game, favorite) => {
+      await invoke("set_game_favorite", {
+        favorite,
+        provider: game.provider,
+        externalId: game.externalId,
+      });
+      updateGameInState(game.id, (existingGame) => ({ ...existingGame, favorite }));
+      renderFilteredLibrary();
+    },
+  },
+  container: libraryGridElement,
+  onError: (message) => {
+    console.error(message);
+  },
+  resolveGameFromCard,
+});
+closeGameContextMenu = gameContextMenu.closeMenu;
 
 sessionAccountButton.addEventListener("click", () => {
   if (sessionAccountMenuElement.hidden) {
@@ -315,14 +419,13 @@ sessionAccountSettingsButton.addEventListener("click", () => {
   focusOptionsPanel(null);
 });
 
-const refreshLibrary = async (syncBeforeLoad = false): Promise<void> => {
+const refreshLibrary = async (syncBeforeLoad = false, importSteamCollections = false): Promise<void> => {
   if (isLoadingLibrary) {
     return;
   }
 
   try {
     setLibraryLoadingState(true);
-    setLibrarySummary("Loading library...");
 
     if (syncBeforeLoad && steamLinked) {
       try {
@@ -330,19 +433,28 @@ const refreshLibrary = async (syncBeforeLoad = false): Promise<void> => {
       } catch (error) {
         console.error(toErrorMessage(error, "Steam sync failed. Loading cached library."));
       }
+
+      if (importSteamCollections) {
+        try {
+          await invoke("import_steam_collections");
+        } catch (error) {
+          console.error(toErrorMessage(error, "Steam collection import failed."));
+        }
+      }
     }
 
     const library = await invoke<LibraryResponse>("get_library");
-    allGames = library.games;
+    setAllGames(library.games);
     renderFilteredLibrary();
   } catch (error) {
-    allGames = [];
+    setAllGames([]);
     renderGameGrid({
       container: libraryGridElement,
       games: [],
       emptyMessage: "Could not load your library.",
     });
-    setLibrarySummary(toErrorMessage(error, "Could not load library."), true);
+    setLibrarySummaryCounts(0, 0);
+    console.error(toErrorMessage(error, "Could not load library."));
   } finally {
     setLibraryLoadingState(false);
   }
@@ -366,12 +478,13 @@ const refreshSession = async (): Promise<boolean> => {
 };
 
 refreshLibraryButton.addEventListener("click", () => {
-  void refreshLibrary(true);
+  void refreshLibrary(true, true);
 });
 
 const initialize = async (): Promise<void> => {
   renderOptionsPanel(optionsListElement);
   registerGridZoomShortcut();
+  setLibrarySummaryCounts(0, 0);
 
   const hasSession = await refreshSession();
   if (!hasSession) {

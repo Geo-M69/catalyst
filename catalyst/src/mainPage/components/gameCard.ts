@@ -80,6 +80,11 @@ const getArtworkCandidates = (game: GameResponse): string[] => {
 export const createGameCard = (game: GameResponse): HTMLElement => {
   const card = document.createElement("article");
   card.className = "game-card";
+  card.tabIndex = 0;
+  card.dataset.gameId = game.id;
+  card.dataset.gameProvider = game.provider;
+  card.dataset.gameExternalId = game.externalId;
+  card.setAttribute("aria-label", `${game.name} (${game.provider})`);
 
   const media = document.createElement("div");
   media.className = "game-card-media";
@@ -118,6 +123,13 @@ export const createGameCard = (game: GameResponse): HTMLElement => {
 
   const statusRow = document.createElement("div");
   statusRow.className = "game-card-status-row";
+  if (game.favorite) {
+    const favoriteBadge = document.createElement("span");
+    favoriteBadge.className = "game-card-badge game-card-badge-favorite";
+    favoriteBadge.textContent = "Favorite";
+    statusRow.append(favoriteBadge);
+  }
+
   if (game.installed) {
     const installedBadge = document.createElement("span");
     installedBadge.className = "game-card-badge";

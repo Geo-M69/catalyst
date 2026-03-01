@@ -15,10 +15,17 @@ export interface GameResponse {
   artworkUrl?: string;
   lastSyncedAt: string;
   installed: boolean;
-  favorite?: boolean;
+  favorite: boolean;
   lastPlayedAt?: string;
   platforms?: string[];
   genres?: string[];
+}
+
+export interface CollectionResponse {
+  id: string;
+  name: string;
+  gameCount: number;
+  containsGame: boolean;
 }
 
 export interface LibraryResponse {
