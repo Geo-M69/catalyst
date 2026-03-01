@@ -117,6 +117,27 @@ const toErrorMessage = (error: unknown, fallbackMessage: string): string => {
 const renderLibrary = (games: GameResponse[]): void => {
   // first make a copy of the list
   const copy = [...games];
+
+  const alphabeticalSort: HTMLInputElement | null = document.getElementById("alphabetical-checkbox") as HTMLInputElement;
+  if (alphabeticalSort.checked) {
+    copy.sort((a:GameResponse,b:GameResponse) => a.name.localeCompare(b.name));
+  }
+
+  const revAlphabeticalSort: HTMLInputElement | null = document.getElementById("reverse-alphabetical-checkbox") as HTMLInputElement;
+  if (revAlphabeticalSort.checked) {
+    copy.sort((a:GameResponse,b:GameResponse) => b.name.localeCompare(a.name));
+  }
+
+  const timeSort: HTMLInputElement | null = document.getElementById("playtime-checkbox") as HTMLInputElement;
+  if (timeSort.checked) {
+    copy.sort((a:GameResponse,b:GameResponse) => a.playtimeMinutes - b.playtimeMinutes);
+  }
+
+  const revTimeSort: HTMLInputElement | null = document.getElementById("reverse-playtime-checkbox") as HTMLInputElement;
+  if (revTimeSort.checked) {
+    copy.sort((a:GameResponse,b:GameResponse) => b.playtimeMinutes - a.playtimeMinutes);
+  }
+
   console.log("renderLibrary games:", games);
   libraryListElement.replaceChildren();
 
@@ -131,11 +152,12 @@ const renderLibrary = (games: GameResponse[]): void => {
     const item = document.createElement("div");
     const hours = (game.playtimeMinutes / 60).toFixed(1);
     const img = document.createElement("img");
-    if (game.artworkUrl) {
+    if (game.artworkUrl !== null && game.artworkUrl !== undefined) {
       img.src = game.artworkUrl;
       img.alt = game.name;
     }
     else {
+      img.src = "catalyst/src/mainpage/placeholder.png";
       img.alt = game.name;
     }
     img.className = "game-tile-image";
