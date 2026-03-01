@@ -46,22 +46,27 @@ interface CustomSelectController<T extends string> extends BaseCustomSelectContr
 const FILTER_TEMPLATE = `
   <form id="library-filter-form" class="filter-form filter-form-panel" autocomplete="off">
     <section class="filter-section filter-quick-section" data-filter-keys="search,platform,genre,sortBy">
-      <div class="filter-section-header">
-        <p class="filter-section-kicker">Quick Filters</p>
+      <div class="filter-active-stack">
+        <div id="filter-active-chip-list" class="filter-active-chip-list" role="list"></div>
       </div>
 
       <div class="filter-section-content">
         <div class="filter-field">
-          <label class="field-label filter-field-label" for="filter-search">Search</label>
-          <input id="filter-search" class="text-input filter-input filter-input-search" type="search" placeholder="Search games..." />
+          <input
+            id="filter-search"
+            class="text-input filter-input filter-input-search"
+            type="search"
+            placeholder="Search games..."
+            aria-label="Search"
+          />
         </div>
 
         <div id="platform-field" class="filter-field filter-select-field">
-          <label class="field-label filter-field-label" for="platform-filter">Platform</label>
           <button
             id="platform-filter"
             class="text-input filter-input filter-select-trigger"
             type="button"
+            aria-label="Platform"
             aria-haspopup="listbox"
             aria-expanded="false"
             aria-controls="platform-menu"
@@ -78,11 +83,11 @@ const FILTER_TEMPLATE = `
         </div>
 
         <div id="genre-field" class="filter-field filter-select-field">
-          <label class="field-label filter-field-label" for="genre-filter">Genre</label>
           <button
             id="genre-filter"
             class="text-input filter-input filter-select-trigger"
             type="button"
+            aria-label="Genre"
             aria-haspopup="listbox"
             aria-expanded="false"
             aria-controls="genre-menu"
@@ -101,11 +106,11 @@ const FILTER_TEMPLATE = `
         </div>
 
         <div id="sort-by-field" class="filter-field filter-select-field">
-          <label class="field-label filter-field-label" for="sort-by-filter">Sort</label>
           <button
             id="sort-by-filter"
             class="text-input filter-input filter-select-trigger"
             type="button"
+            aria-label="Sort"
             aria-haspopup="listbox"
             aria-expanded="false"
             aria-controls="sort-by-menu"
@@ -123,178 +128,180 @@ const FILTER_TEMPLATE = `
       </div>
     </section>
 
-    <section class="filter-section filter-active-section">
-      <div class="filter-section-header">
-        <p class="filter-section-kicker">Active Filters</p>
-        <span id="filter-active-count" class="filter-active-count">0</span>
-      </div>
-      <div id="filter-active-chip-list" class="filter-active-chip-list" role="list"></div>
-      <p id="filter-active-empty" class="filter-active-empty">No filters applied.</p>
-    </section>
+    <div class="filter-advanced-dropdown">
+      <button
+        id="filter-advanced-toggle"
+        class="filter-advanced-toggle"
+        type="button"
+        aria-expanded="false"
+        aria-controls="filter-advanced-content"
+      >
+        <span class="filter-section-kicker">Advanced</span>
+        <span class="filter-advanced-toggle-caret" aria-hidden="true"></span>
+      </button>
 
-    <div class="filter-advanced-header">
-      <p class="filter-section-kicker">Advanced</p>
+      <div id="filter-advanced-content" class="filter-advanced-content" hidden>
+        <section class="filter-section filter-section-collapsible is-open" data-filter-keys="collection,filterBy">
+          <button
+            type="button"
+            class="filter-section-toggle"
+            data-filter-section-toggle
+            data-target="ownership-section-content"
+            aria-expanded="true"
+            aria-controls="ownership-section-content"
+          >
+            <span class="filter-section-toggle-copy">
+              <span class="filter-section-toggle-title">Ownership</span>
+              <span class="filter-section-toggle-caption">Collection and status</span>
+            </span>
+            <span class="filter-section-toggle-active-count" hidden>0 active</span>
+            <span class="filter-section-toggle-caret" aria-hidden="true"></span>
+          </button>
+          <div id="ownership-section-content" class="filter-section-content">
+            <div id="collection-field" class="filter-field filter-select-field">
+              <button
+                id="collection-filter"
+                class="text-input filter-input filter-select-trigger"
+                type="button"
+                aria-label="Collection"
+                aria-haspopup="listbox"
+                aria-expanded="false"
+                aria-controls="collection-menu"
+              >
+                <span class="filter-select-trigger-text">All</span>
+                <span class="filter-select-trigger-caret" aria-hidden="true"></span>
+              </button>
+              <div id="collection-menu" class="filter-select-menu" role="listbox" hidden>
+                <button type="button" class="filter-select-option" role="option" data-value="">All</button>
+              </div>
+            </div>
+
+            <div id="filter-by-field" class="filter-field filter-select-field">
+              <button
+                id="filter-by-select"
+                class="text-input filter-input filter-select-trigger"
+                type="button"
+                aria-label="Status"
+                aria-haspopup="listbox"
+                aria-expanded="false"
+                aria-controls="filter-by-menu"
+              >
+                <span class="filter-select-trigger-text">All</span>
+                <span class="filter-select-trigger-caret" aria-hidden="true"></span>
+              </button>
+              <div id="filter-by-menu" class="filter-select-menu" role="listbox" hidden>
+                <button type="button" class="filter-select-option" role="option" data-value="all">All</button>
+                <button type="button" class="filter-select-option" role="option" data-value="installed">Installed</button>
+                <button type="button" class="filter-select-option" role="option" data-value="not-installed">Not Installed</button>
+                <button type="button" class="filter-select-option" role="option" data-value="favorites">Favorites</button>
+                <button type="button" class="filter-select-option" role="option" data-value="recently-played">Recently Played</button>
+                <button type="button" class="filter-select-option" role="option" data-value="never-played">Never Played</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="filter-section filter-section-collapsible" data-filter-keys="steamTag,source">
+          <button
+            type="button"
+            class="filter-section-toggle"
+            data-filter-section-toggle
+            data-target="store-section-content"
+            aria-expanded="false"
+            aria-controls="store-section-content"
+          >
+            <span class="filter-section-toggle-copy">
+              <span class="filter-section-toggle-title">Store</span>
+              <span class="filter-section-toggle-caption">Tags and provider</span>
+            </span>
+            <span class="filter-section-toggle-active-count" hidden>0 active</span>
+            <span class="filter-section-toggle-caret" aria-hidden="true"></span>
+          </button>
+          <div id="store-section-content" class="filter-section-content" hidden>
+            <div id="steam-tag-field" class="filter-field filter-select-field">
+              <button
+                id="steam-tag-filter"
+                class="text-input filter-input filter-select-trigger"
+                type="button"
+                aria-label="Steam store tag"
+                aria-haspopup="listbox"
+                aria-expanded="false"
+                aria-controls="steam-tag-menu"
+              >
+                <span class="filter-select-trigger-text">All</span>
+                <span class="filter-select-trigger-caret" aria-hidden="true"></span>
+              </button>
+              <div id="steam-tag-menu" class="filter-select-menu" role="listbox" hidden>
+                <button type="button" class="filter-select-option" role="option" data-value="">All</button>
+              </div>
+            </div>
+
+            <div id="source-field" class="filter-field filter-select-field">
+              <button
+                id="source-filter"
+                class="text-input filter-input filter-select-trigger"
+                type="button"
+                aria-label="Source"
+                aria-haspopup="listbox"
+                aria-expanded="false"
+                aria-controls="source-menu"
+              >
+                <span class="filter-select-trigger-text">All</span>
+                <span class="filter-select-trigger-caret" aria-hidden="true"></span>
+              </button>
+              <div id="source-menu" class="filter-select-menu" role="listbox" hidden>
+                <button type="button" class="filter-select-option" role="option" data-value="all">All</button>
+                <button type="button" class="filter-select-option" role="option" data-value="steam">Steam</button>
+                <button type="button" class="filter-select-option" role="option" data-value="epic-games">Epic Games</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="filter-section filter-section-collapsible" data-filter-keys="kind">
+          <button
+            type="button"
+            class="filter-section-toggle"
+            data-filter-section-toggle
+            data-target="metadata-section-content"
+            aria-expanded="false"
+            aria-controls="metadata-section-content"
+          >
+            <span class="filter-section-toggle-copy">
+              <span class="filter-section-toggle-title">Metadata</span>
+              <span class="filter-section-toggle-caption">Content type</span>
+            </span>
+            <span class="filter-section-toggle-active-count" hidden>0 active</span>
+            <span class="filter-section-toggle-caret" aria-hidden="true"></span>
+          </button>
+          <div id="metadata-section-content" class="filter-section-content" hidden>
+            <div id="kind-field" class="filter-field filter-select-field">
+              <button
+                id="kind-filter"
+                class="text-input filter-input filter-select-trigger"
+                type="button"
+                aria-label="Type"
+                aria-haspopup="listbox"
+                aria-expanded="false"
+                aria-controls="kind-menu"
+              >
+                <span class="filter-select-trigger-text">All</span>
+                <span class="filter-select-trigger-caret" aria-hidden="true"></span>
+              </button>
+              <div id="kind-menu" class="filter-select-menu" role="listbox" hidden>
+                <button type="button" class="filter-select-option" role="option" data-value="all">All</button>
+                <button type="button" class="filter-select-option" role="option" data-value="game">Games</button>
+                <button type="button" class="filter-select-option" role="option" data-value="demo">Demos</button>
+                <button type="button" class="filter-select-option" role="option" data-value="dlc">DLCs</button>
+                <button type="button" class="filter-select-option" role="option" data-value="unknown">Unknown</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <button id="clear-filters-button" class="secondary-button filter-clear-button" type="button" hidden>Clear all</button>
+      </div>
     </div>
-
-    <section class="filter-section filter-section-collapsible is-open" data-filter-keys="collection,filterBy">
-      <button
-        type="button"
-        class="filter-section-toggle"
-        data-filter-section-toggle
-        data-target="ownership-section-content"
-        aria-expanded="true"
-        aria-controls="ownership-section-content"
-      >
-        <span class="filter-section-toggle-copy">
-          <span class="filter-section-toggle-title">Ownership</span>
-          <span class="filter-section-toggle-caption">Collection and status</span>
-        </span>
-        <span class="filter-section-toggle-active-count" hidden>0 active</span>
-        <span class="filter-section-toggle-caret" aria-hidden="true"></span>
-      </button>
-      <div id="ownership-section-content" class="filter-section-content">
-        <div id="collection-field" class="filter-field filter-select-field">
-          <label class="field-label filter-field-label" for="collection-filter">Collection</label>
-          <button
-            id="collection-filter"
-            class="text-input filter-input filter-select-trigger"
-            type="button"
-            aria-haspopup="listbox"
-            aria-expanded="false"
-            aria-controls="collection-menu"
-          >
-            <span class="filter-select-trigger-text">All</span>
-            <span class="filter-select-trigger-caret" aria-hidden="true"></span>
-          </button>
-          <div id="collection-menu" class="filter-select-menu" role="listbox" hidden>
-            <button type="button" class="filter-select-option" role="option" data-value="">All</button>
-          </div>
-        </div>
-
-        <div id="filter-by-field" class="filter-field filter-select-field">
-          <label class="field-label filter-field-label" for="filter-by-select">Status</label>
-          <button
-            id="filter-by-select"
-            class="text-input filter-input filter-select-trigger"
-            type="button"
-            aria-haspopup="listbox"
-            aria-expanded="false"
-            aria-controls="filter-by-menu"
-          >
-            <span class="filter-select-trigger-text">All</span>
-            <span class="filter-select-trigger-caret" aria-hidden="true"></span>
-          </button>
-          <div id="filter-by-menu" class="filter-select-menu" role="listbox" hidden>
-            <button type="button" class="filter-select-option" role="option" data-value="all">All</button>
-            <button type="button" class="filter-select-option" role="option" data-value="installed">Installed</button>
-            <button type="button" class="filter-select-option" role="option" data-value="not-installed">Not Installed</button>
-            <button type="button" class="filter-select-option" role="option" data-value="favorites">Favorites</button>
-            <button type="button" class="filter-select-option" role="option" data-value="recently-played">Recently Played</button>
-            <button type="button" class="filter-select-option" role="option" data-value="never-played">Never Played</button>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section class="filter-section filter-section-collapsible" data-filter-keys="steamTag,source">
-      <button
-        type="button"
-        class="filter-section-toggle"
-        data-filter-section-toggle
-        data-target="store-section-content"
-        aria-expanded="false"
-        aria-controls="store-section-content"
-      >
-        <span class="filter-section-toggle-copy">
-          <span class="filter-section-toggle-title">Store</span>
-          <span class="filter-section-toggle-caption">Tags and provider</span>
-        </span>
-        <span class="filter-section-toggle-active-count" hidden>0 active</span>
-        <span class="filter-section-toggle-caret" aria-hidden="true"></span>
-      </button>
-      <div id="store-section-content" class="filter-section-content" hidden>
-        <div id="steam-tag-field" class="filter-field filter-select-field">
-          <label class="field-label filter-field-label" for="steam-tag-filter">Steam Store Tag</label>
-          <button
-            id="steam-tag-filter"
-            class="text-input filter-input filter-select-trigger"
-            type="button"
-            aria-haspopup="listbox"
-            aria-expanded="false"
-            aria-controls="steam-tag-menu"
-          >
-            <span class="filter-select-trigger-text">All</span>
-            <span class="filter-select-trigger-caret" aria-hidden="true"></span>
-          </button>
-          <div id="steam-tag-menu" class="filter-select-menu" role="listbox" hidden>
-            <button type="button" class="filter-select-option" role="option" data-value="">All</button>
-          </div>
-        </div>
-
-        <div id="source-field" class="filter-field filter-select-field">
-          <label class="field-label filter-field-label" for="source-filter">Source</label>
-          <button
-            id="source-filter"
-            class="text-input filter-input filter-select-trigger"
-            type="button"
-            aria-haspopup="listbox"
-            aria-expanded="false"
-            aria-controls="source-menu"
-          >
-            <span class="filter-select-trigger-text">All</span>
-            <span class="filter-select-trigger-caret" aria-hidden="true"></span>
-          </button>
-          <div id="source-menu" class="filter-select-menu" role="listbox" hidden>
-            <button type="button" class="filter-select-option" role="option" data-value="all">All</button>
-            <button type="button" class="filter-select-option" role="option" data-value="steam">Steam</button>
-            <button type="button" class="filter-select-option" role="option" data-value="epic-games">Epic Games</button>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section class="filter-section filter-section-collapsible" data-filter-keys="kind">
-      <button
-        type="button"
-        class="filter-section-toggle"
-        data-filter-section-toggle
-        data-target="metadata-section-content"
-        aria-expanded="false"
-        aria-controls="metadata-section-content"
-      >
-        <span class="filter-section-toggle-copy">
-          <span class="filter-section-toggle-title">Metadata</span>
-          <span class="filter-section-toggle-caption">Content type</span>
-        </span>
-        <span class="filter-section-toggle-active-count" hidden>0 active</span>
-        <span class="filter-section-toggle-caret" aria-hidden="true"></span>
-      </button>
-      <div id="metadata-section-content" class="filter-section-content" hidden>
-        <div id="kind-field" class="filter-field filter-select-field">
-          <label class="field-label filter-field-label" for="kind-filter">Type</label>
-          <button
-            id="kind-filter"
-            class="text-input filter-input filter-select-trigger"
-            type="button"
-            aria-haspopup="listbox"
-            aria-expanded="false"
-            aria-controls="kind-menu"
-          >
-            <span class="filter-select-trigger-text">All</span>
-            <span class="filter-select-trigger-caret" aria-hidden="true"></span>
-          </button>
-          <div id="kind-menu" class="filter-select-menu" role="listbox" hidden>
-            <button type="button" class="filter-select-option" role="option" data-value="all">All</button>
-            <button type="button" class="filter-select-option" role="option" data-value="game">Games</button>
-            <button type="button" class="filter-select-option" role="option" data-value="demo">Demos</button>
-            <button type="button" class="filter-select-option" role="option" data-value="dlc">DLCs</button>
-            <button type="button" class="filter-select-option" role="option" data-value="unknown">Unknown</button>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <button id="clear-filters-button" class="secondary-button filter-clear-button" type="button" hidden>Clear all</button>
   </form>
 `;
 
@@ -535,9 +542,10 @@ export const createFilterPanel = (
   const platformField = container.querySelector("#platform-field");
   const genreField = container.querySelector("#genre-field");
   const sortByField = container.querySelector("#sort-by-field");
+  const advancedToggle = container.querySelector("#filter-advanced-toggle");
+  const advancedContent = container.querySelector("#filter-advanced-content");
+  const activeStack = container.querySelector(".filter-active-stack");
   const activeChipList = container.querySelector("#filter-active-chip-list");
-  const activeEmptyState = container.querySelector("#filter-active-empty");
-  const activeCount = container.querySelector("#filter-active-count");
   const sectionToggles = Array.from(container.querySelectorAll("[data-filter-section-toggle]"))
     .filter((toggleButton): toggleButton is HTMLButtonElement => toggleButton instanceof HTMLButtonElement);
   const filterSections = Array.from(container.querySelectorAll(".filter-section[data-filter-keys]"))
@@ -554,9 +562,10 @@ export const createFilterPanel = (
     || !(platformField instanceof HTMLElement)
     || !(genreField instanceof HTMLElement)
     || !(sortByField instanceof HTMLElement)
+    || !(advancedToggle instanceof HTMLButtonElement)
+    || !(advancedContent instanceof HTMLElement)
+    || !(activeStack instanceof HTMLElement)
     || !(activeChipList instanceof HTMLElement)
-    || !(activeEmptyState instanceof HTMLElement)
-    || !(activeCount instanceof HTMLElement)
     || !(steamTagField instanceof HTMLElement)
     || !(collectionField instanceof HTMLElement)
     || !(filterByField instanceof HTMLElement)
@@ -766,9 +775,8 @@ export const createFilterPanel = (
     }
 
     const hasActiveFilters = chips.length > 0;
+    activeStack.hidden = !hasActiveFilters;
     activeChipList.hidden = !hasActiveFilters;
-    activeEmptyState.hidden = hasActiveFilters;
-    activeCount.textContent = `${chips.length}`;
     return chips.length;
   };
 
@@ -783,6 +791,19 @@ export const createFilterPanel = (
     onChange();
   };
   handleSelectChange = notifyFilterChange;
+
+  const setAdvancedExpandedState = (expanded: boolean): void => {
+    advancedToggle.setAttribute("aria-expanded", `${expanded}`);
+    advancedContent.hidden = !expanded;
+  };
+
+  setAdvancedExpandedState(advancedToggle.getAttribute("aria-expanded") === "true");
+
+  advancedToggle.addEventListener("click", () => {
+    closeAllSelectMenus();
+    const isExpanded = advancedToggle.getAttribute("aria-expanded") === "true";
+    setAdvancedExpandedState(!isExpanded);
+  });
 
   for (const sectionToggle of sectionToggles) {
     const sectionContentId = sectionToggle.dataset.target;

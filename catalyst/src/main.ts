@@ -16,6 +16,7 @@ interface SteamAuthResponse {
 
 const SPLASH_DURATION_MS = 3000;
 const TITLE_FADE_OUT_MS = 450;
+const MAIN_PAGE_PATH = "/main.html";
 
 const welcomeTitleElement = document.getElementById("welcome-title");
 const authPanelElement = document.getElementById("auth-panel");
@@ -34,6 +35,9 @@ if (
 const setStatusMessage = (message: string, isError = false): void => {
   statusMessageElement.textContent = message;
   statusMessageElement.classList.toggle("status-error", isError);
+  if (isError) {
+    statusMessageElement.classList.remove("sr-only");
+  }
 };
 
 const setPendingState = (isPending: boolean): void => {
@@ -84,7 +88,7 @@ const refreshSession = async (): Promise<boolean> => {
       return false;
     }
 
-    window.location.replace("/src/mainPage/mainPage.html");
+    window.location.replace(MAIN_PAGE_PATH);
     return true;
   } catch (error) {
     setStatusMessage(toErrorMessage(error, "Could not read current app session."), true);
@@ -104,7 +108,7 @@ const startSteamLogin = async (): Promise<void> => {
       "",
       `${window.location.pathname}?status=success&steamId=${encodeURIComponent(steamId)}&syncedGames=${result.syncedGames}`
     );
-    window.location.replace("/src/mainPage/mainPage.html");
+    window.location.replace(MAIN_PAGE_PATH);
   } catch (error) {
     setStatusMessage(toErrorMessage(error, "Could not start Steam login"), true);
     setPendingState(false);

@@ -1462,7 +1462,7 @@ sessionAccountSignOutButton.addEventListener("click", () => {
   void (async () => {
     try {
       await invoke("logout");
-      window.location.replace("/");
+      window.location.replace("/index.html");
     } catch (error) {
       console.error(toErrorMessage(error, "Could not sign out."));
     }
@@ -1525,7 +1525,7 @@ const refreshSession = async (): Promise<boolean> => {
   try {
     const session = await invoke<PublicUser | null>("get_session");
     if (!session) {
-      window.location.replace("/");
+      window.location.replace("/index.html");
       return false;
     }
 
