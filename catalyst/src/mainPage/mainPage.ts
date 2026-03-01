@@ -116,7 +116,14 @@ const toErrorMessage = (error: unknown, fallbackMessage: string): string => {
 
 const renderLibrary = (games: GameResponse[]): void => {
   // first make a copy of the list
-  const copy = [...games];
+  let copy = [...games];
+
+  const searchbar: HTMLInputElement = document.getElementById("search-input") as HTMLInputElement;
+  console.log(searchbar.value.toString());
+  if (searchbar.value.toString() !== "") {
+    console.log("Filtering");
+    copy = copy.filter((game: GameResponse) => game.name.toLowerCase().includes(searchbar.value.toLowerCase()));
+  }
 
   const alphabeticalSort: HTMLInputElement | null = document.getElementById("alphabetical-checkbox") as HTMLInputElement;
   if (alphabeticalSort.checked) {
