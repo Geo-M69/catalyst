@@ -147,6 +147,7 @@ struct SteamOwnedGame {
     name: Option<String>,
     playtime_forever: Option<i64>,
     img_logo_url: Option<String>,
+    img_icon_url: Option<String>,
 }
 
 #[tauri::command]
@@ -587,11 +588,27 @@ fn map_steam_game(game: SteamOwnedGame) -> LibraryGameInput {
         .map(|raw_name| raw_name.trim().to_owned())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| format!("Steam App {external_id}"));
-    let artwork_url = game.img_logo_url.map(|logo_hash| {
-        format!(
-            "https://media.steampowered.com/steamcommunity/public/images/apps/{external_id}/{logo_hash}.jpg"
-        )
-    });
+    let artwork_url = game
+        .img_logo_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|logo_hash| {
+            format!(
+                "https://media.steampowered.com/steamcommunity/public/images/apps/{external_id}/{logo_hash}.jpg"
+            )
+        })
+        .or_else(|| {
+            game.img_icon_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|icon_hash| {
+                    format!(
+                        "https://media.steampowered.com/steamcommunity/public/images/apps/{external_id}/{icon_hash}.jpg"
+                    )
+                })
+        });
 
     LibraryGameInput {
         external_id,

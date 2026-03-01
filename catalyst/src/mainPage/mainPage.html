@@ -8,114 +8,37 @@
     <script type="module" src="/src/mainPage/mainPage.ts" defer></script>
   </head>
 
-  <body>
-    <div class="centered">
-      <!-- Filters Section -->
-      <div class="filters">
-        <input type="text" id="search-input" style="width: 100%; height: 30px" placeholder="Search games...">
-        <div>Filter By:</div>
-        <input type="checkbox" id="installed-checkbox">
-        <label for="installed-checkbox">Installed</label>
-        <br>
-        <input type="checkbox" id="not-installed-checkbox">
-        <label for="not-installed-checkbox">Not Installed</label>
-        <br>
-        <input type="checkbox" id="favorites-checkbox">
-        <label for="favorites-checkbox">Favorites</label>
-        <br>
-        <input type="checkbox" id="recently-played-checkbox">
-        <label for="recently-played-checkbox">Recently Played</label>
-        <br>
-        <input type="checkbox" id="never-played-checkbox">
-        <label for="never-played-checkbox">Never Played</label>
-        <br>
-        <br>
-        <div>Platform:</div>
-        <input type="checkbox" id="windows-checkbox">
-        <label for="windows-checkbox">Windows</label>
-        <br>
-        <input type="checkbox" id="mac-checkbox">
-        <label for="mac-checkbox">MacOS</label>
-        <br>
-        <input type="checkbox" id="linux-checkbox">
-        <label for="linux-checkbox">Linux</label>
-        <br>
-        <br>
-        <div>Source:</div>
-        <input type="checkbox" id="steam-checkbox">
-        <label for="steam-checkbox">Steam</label>
-        <br>
-        <input type="checkbox" id="epic-checkbox">
-        <label for="epic-checkbox">Epic Games</label>
-        <br>
-        <br>
-        <div>Genre:</div>
-        <input type="checkbox" id="action-checkbox">
-        <label for="action-checkbox">Action</label>
-        <br>
-        <input type="checkbox" id="rpg-checkbox">
-        <label for="rpg-checkbox">RPG</label>
-        <br>
-        <input type="checkbox" id="strategy-checkbox">
-        <label for="strategy-checkbox">Strategy</label>
-        <br>
-        <input type="checkbox" id="simulation-checkbox">
-        <label for="simulation-checkbox">Simulation</label>
-        <br>
-        <input type="checkbox" id="fps-checkbox">
-        <label for="fps-checkbox">FPS</label>
-        <br>
-        <br>
-        <div>Sort By:</div>
-        <input type="checkbox" id="alphabetical-checkbox">
-        <label for="alphabetical-checkbox">Alphabetical</label>
-        <br>
-        <input type="checkbox" id="reverse-alphabetical-checkbox">
-        <label for="reverse-alphabetical-checkbox">Alphabetical (reverse)</label>
-        <br>
-        <input type="checkbox" id="playtime-checkbox">
-        <label for="playtime-checkbox">Least Played</label>
-        <br>
-        <input type="checkbox" id="reverse-playtime-checkbox">
-        <label for="reverse-playtime-checkbox">Most Played</label>
-      </div>
+  <body class="library-page">
+    <main class="launcher-library" aria-label="Game launcher library view">
+      <section class="library-column panel-left" aria-label="Library filters">
+        <header class="panel-heading-stack">
+          <h2 class="panel-title">Library Filters</h2>
+          <p id="session-status" class="status-message">Checking session...</p>
+        </header>
 
-      <!-- Games Library Section -->
-      <div class="games">
-        <p id="library-summary" class="status-message">Loading library...</p>
-        <div id="library-list" class="library-list"></div>
-      </div>
-
-      <!-- Options Section -->
-      <div class="options">
-        <div class="centered">Options</div>
-        <div>General:</div>
-        <input type="checkbox" id="dark-mode-checkbox" checked>
-        <label for="dark-mode-checkbox">Dark Mode</label>
-        <br>
-        <br>
-        <div>Connected Accounts:</div>
-        <span>Steam: <button id="is-steam-connected">Connected</button></span>
-        <br>
-        <span>Epic Games: <button id="is-epic-connected">Connected</button></span>
-        <br>
-        <br>
-        <!-- Auth Card Section -->
-      <section class="auth-card">
-        <p id="main-status" class="status-message">Loading session...</p>
-        <p id="steam-status" class="status-message">Checking Steam status...</p>
-
-        <div class="button-row">
-          <button id="steam-link-button" class="login-button" type="button">Connect Steam</button>
-          <button id="steam-sync-button" class="secondary-button" type="button">Sync Steam</button>
-        </div>
-
-        <div class="button-row">
-          <button id="refresh-library-button" class="secondary-button" type="button">Refresh Library</button>
-          <button id="logout-button" class="danger-button" type="button">Logout</button>
-        </div>
+        <div id="filter-panel"></div>
       </section>
-      </div>
-    </div>
+
+      <section class="library-column panel-middle" aria-label="Library games grid">
+        <header class="panel-heading">
+          <div class="panel-heading-stack">
+            <h1 class="panel-title">My Library</h1>
+            <p id="library-summary" class="status-message">Loading library...</p>
+          </div>
+          <button id="refresh-library-button" class="secondary-button refresh-button" type="button">Refresh</button>
+        </header>
+
+        <div id="library-grid" class="library-grid-scroll" aria-live="polite"></div>
+      </section>
+
+      <aside class="library-column panel-right" aria-label="Launcher options">
+        <header class="panel-heading-stack">
+          <h2 class="panel-title">Options</h2>
+          <p class="status-message">Placeholder settings list for future launcher options.</p>
+        </header>
+
+        <ul id="options-list" class="options-list" aria-label="Options placeholder list"></ul>
+      </aside>
+    </main>
   </body>
 </html>

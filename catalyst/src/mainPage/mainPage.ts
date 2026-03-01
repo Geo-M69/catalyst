@@ -1,105 +1,49 @@
 import { invoke } from "@tauri-apps/api/core";
+import { createFilterPanel } from "./components/filterPanel";
+import { renderGameGrid } from "./components/gameGrid";
+import { renderOptionsPanel } from "./components/optionsPanel";
+import { applyLibraryFilters } from "./filtering";
+import type { GameResponse, LibraryResponse, PublicUser } from "./types";
 
 export {};
 
-interface PublicUser {
-  id: string;
-  email: string;
-  steamLinked: boolean;
-  steamId?: string;
-}
-
-interface SteamStatusResponse {
-  userId: string;
-  provider: string;
-  linked: boolean;
-  steamId?: string;
-}
-
-interface SteamSyncResponse {
-  userId: string;
-  provider: string;
-  syncedGames: number;
-}
-
-interface GameResponse {
-  id: string;
-  provider: string;
-  externalId: string;
-  name: string;
-  playtimeMinutes: number;
-  artworkUrl?: string;
-  lastSyncedAt: string;
-}
-
-interface LibraryResponse {
-  userId: string;
-  total: number;
-  games: GameResponse[];
-}
-
-const statusElement = document.getElementById("main-status");
-const steamStatusElement = document.getElementById("steam-status");
+const sessionStatusElement = document.getElementById("session-status");
 const librarySummaryElement = document.getElementById("library-summary");
-const libraryListElement = document.getElementById("library-list");
-const steamLinkButton = document.getElementById("steam-link-button");
-const steamSyncButton = document.getElementById("steam-sync-button");
 const refreshLibraryButton = document.getElementById("refresh-library-button");
-const logoutButton = document.getElementById("logout-button");
+const filterPanelElement = document.getElementById("filter-panel");
+const libraryGridElement = document.getElementById("library-grid");
+const optionsListElement = document.getElementById("options-list");
 
-// verify expected DOM elements are present; log which ones are missing
-// to make debugging easier when initialization fails.
 if (
-  !(statusElement instanceof HTMLElement) ||
-  !(steamStatusElement instanceof HTMLElement) ||
-  !(librarySummaryElement instanceof HTMLElement) ||
-  !(libraryListElement instanceof HTMLElement) ||
-  !(steamLinkButton instanceof HTMLButtonElement) ||
-  !(steamSyncButton instanceof HTMLButtonElement) ||
-  !(refreshLibraryButton instanceof HTMLButtonElement) ||
-  !(logoutButton instanceof HTMLButtonElement)
+  !(sessionStatusElement instanceof HTMLElement)
+  || !(librarySummaryElement instanceof HTMLElement)
+  || !(refreshLibraryButton instanceof HTMLButtonElement)
+  || !(filterPanelElement instanceof HTMLElement)
+  || !(libraryGridElement instanceof HTMLElement)
+  || !(optionsListElement instanceof HTMLElement)
 ) {
-  console.error("DOM element lookup failure:", {
-    statusElement,
-    steamStatusElement,
-    librarySummaryElement,
-    libraryListElement,
-    steamLinkButton,
-    steamSyncButton,
-    refreshLibraryButton,
-    logoutButton,
-  });
   throw new Error("Main page is missing required DOM elements");
 }
 
-let isPending = false;
-let isSteamLinked = false;
+let allGames: GameResponse[] = [];
+let isLoadingLibrary = false;
+const GRID_CARD_WIDTH_CSS_VAR = "--game-grid-card-min-width";
+const GRID_CARD_WIDTH_DEFAULT_PX = 180;
+const GRID_CARD_WIDTH_MIN_PX = 140;
+const GRID_CARD_WIDTH_MAX_PX = 320;
+const GRID_CARD_WIDTH_STEP_PX = 14;
+const GRID_CARD_WIDTH_STORAGE_KEY = "catalyst.library.gridCardMinWidthPx";
 
-const setStatus = (message: string, isError = false): void => {
-  statusElement.textContent = message;
-  statusElement.classList.toggle("status-error", isError);
-};
+const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
 
-const setSteamStatus = (message: string, isError = false): void => {
-  steamStatusElement.textContent = message;
-  steamStatusElement.classList.toggle("status-error", isError);
+const setSessionStatus = (message: string, isError = false): void => {
+  sessionStatusElement.textContent = message;
+  sessionStatusElement.classList.toggle("status-error", isError);
 };
 
 const setLibrarySummary = (message: string, isError = false): void => {
   librarySummaryElement.textContent = message;
   librarySummaryElement.classList.toggle("status-error", isError);
-};
-
-const applyControlState = (): void => {
-  steamLinkButton.disabled = isPending;
-  steamSyncButton.disabled = isPending || !isSteamLinked;
-  refreshLibraryButton.disabled = isPending;
-  logoutButton.disabled = isPending;
-};
-
-const setPendingState = (pending: boolean): void => {
-  isPending = pending;
-  applyControlState();
 };
 
 const toErrorMessage = (error: unknown, fallbackMessage: string): string => {
@@ -114,180 +58,147 @@ const toErrorMessage = (error: unknown, fallbackMessage: string): string => {
   return fallbackMessage;
 };
 
-const renderLibrary = (games: GameResponse[]): void => {
-  // first make a copy of the list
-  let copy = [...games];
+const setLibraryLoadingState = (isLoading: boolean): void => {
+  isLoadingLibrary = isLoading;
+  refreshLibraryButton.disabled = isLoading;
+};
 
-  const searchbar: HTMLInputElement = document.getElementById("search-input") as HTMLInputElement;
-  console.log(searchbar.value.toString());
-  if (searchbar.value.toString() !== "") {
-    console.log("Filtering");
-    copy = copy.filter((game: GameResponse) => game.name.toLowerCase().includes(searchbar.value.toLowerCase()));
+const readGridCardWidthPx = (): number => {
+  const inlineValue = Number.parseFloat(libraryGridElement.style.getPropertyValue(GRID_CARD_WIDTH_CSS_VAR));
+  if (Number.isFinite(inlineValue) && inlineValue > 0) {
+    return inlineValue;
   }
 
-  const alphabeticalSort: HTMLInputElement | null = document.getElementById("alphabetical-checkbox") as HTMLInputElement;
-  if (alphabeticalSort.checked) {
-    copy.sort((a:GameResponse,b:GameResponse) => a.name.localeCompare(b.name));
+  const computedValue = Number.parseFloat(getComputedStyle(libraryGridElement).getPropertyValue(GRID_CARD_WIDTH_CSS_VAR));
+  if (Number.isFinite(computedValue) && computedValue > 0) {
+    return computedValue;
   }
 
-  const revAlphabeticalSort: HTMLInputElement | null = document.getElementById("reverse-alphabetical-checkbox") as HTMLInputElement;
-  if (revAlphabeticalSort.checked) {
-    copy.sort((a:GameResponse,b:GameResponse) => b.name.localeCompare(a.name));
-  }
+  return GRID_CARD_WIDTH_DEFAULT_PX;
+};
 
-  const timeSort: HTMLInputElement | null = document.getElementById("playtime-checkbox") as HTMLInputElement;
-  if (timeSort.checked) {
-    copy.sort((a:GameResponse,b:GameResponse) => a.playtimeMinutes - b.playtimeMinutes);
-  }
-
-  const revTimeSort: HTMLInputElement | null = document.getElementById("reverse-playtime-checkbox") as HTMLInputElement;
-  if (revTimeSort.checked) {
-    copy.sort((a:GameResponse,b:GameResponse) => b.playtimeMinutes - a.playtimeMinutes);
-  }
-
-  console.log("renderLibrary games:", games);
-  libraryListElement.replaceChildren();
-
-  if (copy.length === 0) {
-    const emptyItem = document.createElement("li");
-    emptyItem.textContent = "No games synced yet.";
-    libraryListElement.append(emptyItem);
-    return;
-  }
-
-  for (const game of copy) {
-    const item = document.createElement("div");
-    const hours = (game.playtimeMinutes / 60).toFixed(1);
-    const img = document.createElement("img");
-    if (game.artworkUrl !== null && game.artworkUrl !== undefined) {
-      img.src = game.artworkUrl;
-      img.alt = game.name;
+const readStoredGridCardWidthPx = (): number | null => {
+  try {
+    const storedValue = localStorage.getItem(GRID_CARD_WIDTH_STORAGE_KEY);
+    if (!storedValue) {
+      return null;
     }
-    else {
-      img.src = "catalyst/src/mainpage/placeholder.png";
-      img.alt = game.name;
+
+    const parsed = Number.parseFloat(storedValue);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return null;
     }
-    img.className = "game-tile-image";
-    item.append(img);
-    const itemText = document.createElement("div");
-    itemText.textContent = `${game.name} (${game.provider.toUpperCase()}) - ${hours}h`;
-    item.append(itemText);
-    libraryListElement.append(item);
+
+    return clamp(Math.round(parsed), GRID_CARD_WIDTH_MIN_PX, GRID_CARD_WIDTH_MAX_PX);
+  } catch {
+    return null;
   }
 };
 
-const refreshLibrary = async (): Promise<void> => {
+const persistGridCardWidthPx = (value: number): void => {
   try {
-    const library = await invoke<LibraryResponse>("get_library");
-    renderLibrary(library.games);
-    setLibrarySummary(`${library.total} games in your library.`);
-  } catch (error) {
-    setLibrarySummary(toErrorMessage(error, "Could not load library."), true);
+    localStorage.setItem(GRID_CARD_WIDTH_STORAGE_KEY, `${value}`);
+  } catch {
+    // Ignore storage failures in restricted environments.
   }
 };
 
-const refreshSteamStatus = async (): Promise<void> => {
-  try {
-    const status = await invoke<SteamStatusResponse>("get_steam_status");
+const setGridCardWidthPx = (value: number, persistValue = true): void => {
+  const clampedValue = clamp(Math.round(value), GRID_CARD_WIDTH_MIN_PX, GRID_CARD_WIDTH_MAX_PX);
+  libraryGridElement.style.setProperty(GRID_CARD_WIDTH_CSS_VAR, `${clampedValue}px`);
+  if (persistValue) {
+    persistGridCardWidthPx(clampedValue);
+  }
+};
 
-    isSteamLinked = status.linked;
-    applyControlState();
-    steamLinkButton.textContent = status.linked ? "Reconnect Steam" : "Connect Steam";
-    if (status.linked) {
-      setSteamStatus(`Steam linked (${status.steamId ?? "unknown"}).`);
+const registerGridZoomShortcut = (): void => {
+  const initialWidth = readStoredGridCardWidthPx() ?? readGridCardWidthPx();
+  setGridCardWidthPx(initialWidth, false);
+
+  libraryGridElement.addEventListener("wheel", (event) => {
+    if (!event.ctrlKey || event.deltaY === 0) {
       return;
     }
 
-    setSteamStatus("Steam is not linked to this account.");
+    event.preventDefault();
+    const delta = event.deltaY < 0 ? GRID_CARD_WIDTH_STEP_PX : -GRID_CARD_WIDTH_STEP_PX;
+    setGridCardWidthPx(readGridCardWidthPx() + delta);
+  }, { passive: false });
+};
+
+const renderFilteredLibrary = (): void => {
+  const filters = filterPanel.getFilters();
+  const filteredGames = applyLibraryFilters(allGames, filters);
+  const emptyMessage = allGames.length === 0
+    ? "No games synced yet."
+    : "No games match your current filters.";
+
+  renderGameGrid({
+    container: libraryGridElement,
+    games: filteredGames,
+    emptyMessage,
+  });
+  setLibrarySummary(`${filteredGames.length} of ${allGames.length} games shown.`);
+};
+
+const filterPanel = createFilterPanel(filterPanelElement, () => {
+  renderFilteredLibrary();
+});
+
+const refreshLibrary = async (): Promise<void> => {
+  if (isLoadingLibrary) {
+    return;
+  }
+
+  try {
+    setLibraryLoadingState(true);
+    setLibrarySummary("Loading library...");
+
+    const library = await invoke<LibraryResponse>("get_library");
+    allGames = library.games;
+    renderFilteredLibrary();
   } catch (error) {
-    isSteamLinked = false;
-    applyControlState();
-    setSteamStatus(toErrorMessage(error, "Could not load Steam status."), true);
+    allGames = [];
+    renderGameGrid({
+      container: libraryGridElement,
+      games: [],
+      emptyMessage: "Could not load your library.",
+    });
+    setLibrarySummary(toErrorMessage(error, "Could not load library."), true);
+  } finally {
+    setLibraryLoadingState(false);
   }
 };
 
 const refreshSession = async (): Promise<boolean> => {
   try {
-    const user = await invoke<PublicUser | null>("get_session");
-    if (!user) {
+    const session = await invoke<PublicUser | null>("get_session");
+    if (!session) {
       window.location.replace("/");
       return false;
     }
 
-    setStatus(`Signed in as ${user.email}.`);
+    setSessionStatus(`Signed in as ${session.email}.`);
     return true;
   } catch (error) {
-    setStatus(toErrorMessage(error, "Could not load session data."), true);
+    setSessionStatus(toErrorMessage(error, "Could not load session data."), true);
     return false;
   }
 };
-
-const connectSteam = async (): Promise<void> => {
-  try {
-    setPendingState(true);
-    setStatus(
-      "Opening Steam login in your browser. If Windows Firewall prompts for Catalyst, allow local/private access."
-    );
-    const result = await invoke<{ user: PublicUser; syncedGames: number }>("start_steam_auth");
-    const { user, syncedGames } = result;
-    setStatus(`Steam connected for ${user.email}. Synced ${syncedGames} games.`);
-    await refreshSteamStatus();
-    await refreshLibrary();
-  } catch (error) {
-    setStatus(toErrorMessage(error, "Could not connect Steam."), true);
-  } finally {
-    setPendingState(false);
-  }
-};
-
-const syncSteam = async (): Promise<void> => {
-  try {
-    setPendingState(true);
-    const result = await invoke<SteamSyncResponse>("sync_steam_library");
-    setStatus(`Synced ${result.syncedGames} Steam games.`);
-    await refreshLibrary();
-  } catch (error) {
-    setStatus(toErrorMessage(error, "Could not sync Steam library."), true);
-  } finally {
-    setPendingState(false);
-  }
-};
-
-const logout = async (): Promise<void> => {
-  try {
-    setPendingState(true);
-    await invoke("logout");
-    window.location.replace("/");
-  } catch (error) {
-    setStatus(toErrorMessage(error, "Could not log out."), true);
-    setPendingState(false);
-  }
-};
-
-steamLinkButton.addEventListener("click", () => {
-  void connectSteam();
-});
-
-steamSyncButton.addEventListener("click", () => {
-  void syncSteam();
-});
 
 refreshLibraryButton.addEventListener("click", () => {
   void refreshLibrary();
 });
 
-logoutButton.addEventListener("click", () => {
-  void logout();
-});
-
 const initialize = async (): Promise<void> => {
-  applyControlState();
+  renderOptionsPanel(optionsListElement);
+  registerGridZoomShortcut();
+
   const hasSession = await refreshSession();
   if (!hasSession) {
     return;
   }
 
-  await refreshSteamStatus();
   await refreshLibrary();
 };
 
