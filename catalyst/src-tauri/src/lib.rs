@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     io::{Read, Write},
-    net::{TcpListener, TcpStream},
+    net::{TcpListener, TcpStream, ToSocketAddrs},
     path::{Path, PathBuf},
     process::Command,
     sync::Mutex,
@@ -38,6 +38,27 @@ const STEAM_APP_BETAS_CACHE_TTL_HOURS: i64 = 24 * 7;
 const STEAM_APP_STORE_TAGS_CACHE_TTL_HOURS: i64 = 24 * 7;
 const SESSION_TTL_DAYS: i64 = 30;
 const STEAM_ID64_ACCOUNT_ID_BASE: u64 = 76_561_197_960_265_728;
+const STEAM_CALLBACK_FALLBACK_HOST: &str = "127.0.0.1";
+const STEAM_BUILTIN_COMPATIBILITY_TOOLS: [(&str, &str); 7] = [
+    ("proton_experimental", "Proton Experimental"),
+    ("proton_hotfix", "Proton Hotfix"),
+    ("proton_9", "Proton 9.0-4"),
+    ("proton_8", "Proton 8.0-5"),
+    ("proton_7", "Proton 7.0-6"),
+    ("sniper", "Steam Linux Runtime 3.0 (sniper)"),
+    ("soldier", "Steam Linux Runtime 2.0 (soldier)"),
+];
+const STEAM_APP_STATE_UPDATE_REQUIRED: u64 = 0x2;
+const STEAM_APP_STATE_FULLY_INSTALLED: u64 = 0x4;
+const STEAM_APP_STATE_UPDATE_RUNNING: u64 = 0x100;
+const STEAM_APP_STATE_UPDATE_PAUSED: u64 = 0x200;
+const STEAM_APP_STATE_UPDATE_STARTED: u64 = 0x400;
+const STEAM_APP_STATE_VALIDATING: u64 = 0x20_000;
+const STEAM_APP_STATE_ADDING_FILES: u64 = 0x40_000;
+const STEAM_APP_STATE_PREALLOCATING: u64 = 0x80_000;
+const STEAM_APP_STATE_DOWNLOADING: u64 = 0x100_000;
+const STEAM_APP_STATE_STAGING: u64 = 0x200_000;
+const STEAM_APP_STATE_COMMITTING: u64 = 0x400_000;
 
 struct AppState {
     db_path: PathBuf,
@@ -203,6 +224,39 @@ struct GameInstallationDetailsResponse {
 struct GameInstallLocationResponse {
     path: String,
     free_space_bytes: Option<u64>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SteamDownloadProgressResponse {
+    game_id: String,
+    provider: String,
+    external_id: String,
+    name: String,
+    state: String,
+    bytes_downloaded: Option<u64>,
+    bytes_total: Option<u64>,
+    progress_percent: Option<f64>,
+}
+
+#[derive(Clone)]
+struct OwnedSteamGameMetadata {
+    game_id: String,
+    external_id: String,
+    name: String,
+}
+
+struct SteamManifestDownloadProgressSnapshot {
+    state_flags: Option<u64>,
+    bytes_downloaded: Option<u64>,
+    bytes_total: Option<u64>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct GameCompatibilityToolResponse {
+    id: String,
+    label: String,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -578,6 +632,52 @@ fn list_game_languages(
 }
 
 #[tauri::command]
+fn list_game_compatibility_tools(
+    provider: String,
+    external_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<GameCompatibilityToolResponse>, String> {
+    let connection = open_connection(&state.db_path)?;
+    cleanup_expired_sessions(&connection)?;
+    let user = get_authenticated_user(state.inner(), &connection)?;
+    let (normalized_provider, normalized_external_id) =
+        normalize_game_identity_input(&provider, &external_id)?;
+    ensure_owned_game_exists(
+        &connection,
+        &user.id,
+        &normalized_provider,
+        &normalized_external_id,
+    )?;
+
+    if normalized_provider != "steam" {
+        return Ok(Vec::new());
+    }
+
+    let app_id = match normalized_external_id.parse::<u64>() {
+        Ok(parsed) => parsed,
+        Err(_) => return Ok(Vec::new()),
+    };
+    let include_linux_runtime_tools = match build_http_client()
+        .and_then(|client| fetch_steam_app_linux_platform_support_from_store(&client, app_id))
+    {
+        Ok(Some(supported)) => supported,
+        Ok(None) => false,
+        Err(error) => {
+            eprintln!(
+                "Could not resolve Linux platform support for app {} while building compatibility tool list: {}",
+                app_id, error
+            );
+            false
+        }
+    };
+
+    resolve_steam_compatibility_tools(
+        state.steam_root_override.as_deref(),
+        include_linux_runtime_tools,
+    )
+}
+
+#[tauri::command]
 fn get_game_privacy_settings(
     provider: String,
     external_id: String,
@@ -801,14 +901,10 @@ fn get_game_installation_details(
             manifest_path.display()
         )
     })?;
-    let install_path = parse_steam_manifest_install_directory(&manifest_contents)
-        .ok()
-        .and_then(|install_dir_name| {
-            manifest_path
-                .parent()
-                .map(|steamapps_dir| steamapps_dir.join("common").join(install_dir_name))
-        })
-        .map(|path| path.display().to_string());
+    let install_path = manifest_path
+        .parent()
+        .and_then(Path::parent)
+        .map(|steam_library_path| steam_library_path.display().to_string());
     let size_on_disk_bytes = parse_steam_manifest_size_on_disk_bytes(&manifest_contents);
 
     Ok(GameInstallationDetailsResponse {
@@ -914,6 +1010,40 @@ fn list_game_install_locations(
     }
 
     Ok(locations)
+}
+
+#[tauri::command]
+fn list_steam_downloads(state: State<'_, AppState>) -> Result<Vec<SteamDownloadProgressResponse>, String> {
+    let connection = open_connection(&state.db_path)?;
+    cleanup_expired_sessions(&connection)?;
+    let user = get_authenticated_user(state.inner(), &connection)?;
+    let owned_games_by_app_id = load_owned_steam_games_by_app_id(&connection, &user.id)?;
+    if owned_games_by_app_id.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let Some(steam_root) = resolve_steam_root_path(state.steam_root_override.as_deref()) else {
+        return Ok(Vec::new());
+    };
+    let steamapps_directories = resolve_steamapps_directories(&steam_root)?;
+    let mut downloads = Vec::new();
+    let mut seen_external_ids = HashSet::new();
+
+    for steamapps_directory in steamapps_directories {
+        collect_steam_download_progress_from_steamapps_dir(
+            &steamapps_directory,
+            &owned_games_by_app_id,
+            &mut seen_external_ids,
+            &mut downloads,
+        )?;
+    }
+
+    downloads.sort_by(|left, right| {
+        left.name
+            .to_ascii_lowercase()
+            .cmp(&right.name.to_ascii_lowercase())
+    });
+    Ok(downloads)
 }
 
 #[tauri::command]
@@ -1147,6 +1277,36 @@ fn create_collection(name: String, state: State<'_, AppState>) -> Result<Collect
 }
 
 #[tauri::command]
+fn rename_collection(
+    collection_id: String,
+    name: String,
+    state: State<'_, AppState>,
+) -> Result<CollectionResponse, String> {
+    let trimmed_collection_id = collection_id.trim();
+    if trimmed_collection_id.is_empty() {
+        return Err(String::from("Collection ID is required"));
+    }
+
+    let connection = open_connection(&state.db_path)?;
+    cleanup_expired_sessions(&connection)?;
+    let user = get_authenticated_user(state.inner(), &connection)?;
+    rename_user_collection(&connection, &user.id, trimmed_collection_id, &name)
+}
+
+#[tauri::command]
+fn delete_collection(collection_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    let trimmed_collection_id = collection_id.trim();
+    if trimmed_collection_id.is_empty() {
+        return Err(String::from("Collection ID is required"));
+    }
+
+    let connection = open_connection(&state.db_path)?;
+    cleanup_expired_sessions(&connection)?;
+    let user = get_authenticated_user(state.inner(), &connection)?;
+    delete_user_collection(&connection, &user.id, trimmed_collection_id)
+}
+
+#[tauri::command]
 fn add_game_to_collection(
     provider: String,
     external_id: String,
@@ -1232,8 +1392,7 @@ fn install_game(
         create_desktop_shortcut,
         create_application_shortcut,
     );
-    open_provider_game_uri(&provider, &external_id, "install", None)?;
-    mark_game_as_installed(&connection, &user.id, &provider, &external_id)
+    open_provider_game_uri(&provider, &external_id, "install", None)
 }
 
 #[tauri::command]
@@ -1378,18 +1537,24 @@ fn complete_steam_auth_flow(
         .local_addr()
         .map_err(|error| format!("Failed to read callback listener address: {error}"))?
         .port();
+    let callback_public_host = resolve_steam_callback_public_host();
 
     let state_token = Uuid::new_v4().to_string();
     let callback_url = format!(
-        "http://{STEAM_CALLBACK_PUBLIC_HOST}:{port}/auth/steam/callback?state={state_token}"
+        "http://{callback_public_host}:{port}/auth/steam/callback?state={state_token}"
     );
-    let realm = format!("http://{STEAM_CALLBACK_PUBLIC_HOST}:{port}");
+    let realm = format!("http://{callback_public_host}:{port}");
     let authorization_url = build_steam_authorization_url(&callback_url, &realm)?;
 
     webbrowser::open(&authorization_url)
         .map_err(|error| format!("Failed to open Steam login in browser: {error}"))?;
 
-    let callback_params = wait_for_steam_callback(listener, &state_token, STEAM_CALLBACK_TIMEOUT)?;
+    let callback_params = wait_for_steam_callback(
+        listener,
+        &state_token,
+        STEAM_CALLBACK_TIMEOUT,
+        &callback_public_host,
+    )?;
     let verified = verify_steam_openid_response(&client, &callback_params)?;
     if !verified {
         return Err(String::from("Steam login verification failed"));
@@ -1450,10 +1615,28 @@ fn resolve_user_for_steam_auth(
     create_steam_user(connection, steam_id)
 }
 
+fn resolve_steam_callback_public_host() -> String {
+    let preferred_host = STEAM_CALLBACK_PUBLIC_HOST.trim();
+    if preferred_host.is_empty() {
+        return String::from(STEAM_CALLBACK_FALLBACK_HOST);
+    }
+
+    let can_resolve_preferred_host = (preferred_host, 0).to_socket_addrs().is_ok();
+    if can_resolve_preferred_host {
+        return preferred_host.to_owned();
+    }
+
+    eprintln!(
+        "Steam callback host '{preferred_host}' could not be resolved. Falling back to {STEAM_CALLBACK_FALLBACK_HOST}."
+    );
+    String::from(STEAM_CALLBACK_FALLBACK_HOST)
+}
+
 fn wait_for_steam_callback(
     listener: TcpListener,
     expected_state: &str,
     timeout: Duration,
+    callback_public_host: &str,
 ) -> Result<HashMap<String, String>, String> {
     listener
         .set_nonblocking(true)
@@ -1463,7 +1646,7 @@ fn wait_for_steam_callback(
     loop {
         if Instant::now() >= deadline {
             return Err(String::from(
-                "Timed out waiting for Steam callback. Complete Steam sign-in in your browser, ensure 'catalyst' resolves to 127.0.0.1, and if Windows Firewall prompts for Catalyst, allow local/private access.",
+                "Timed out waiting for Steam callback. Complete Steam sign-in in your browser and if Windows Firewall prompts for Catalyst, allow local/private access.",
             ));
         }
 
@@ -1471,7 +1654,7 @@ fn wait_for_steam_callback(
             Ok((mut stream, _)) => {
                 let request_target = read_http_request_target(&mut stream)?;
                 let callback_url =
-                    Url::parse(&format!("http://{STEAM_CALLBACK_PUBLIC_HOST}{request_target}"))
+                    Url::parse(&format!("http://{callback_public_host}{request_target}"))
                     .map_err(|error| format!("Failed to parse callback URL: {error}"))?;
                 let callback_params = callback_url
                     .query_pairs()
@@ -2104,6 +2287,204 @@ fn parse_steam_manifest_size_on_disk_bytes(manifest_contents: &str) -> Option<u6
     None
 }
 
+fn parse_steam_manifest_string_field(manifest_contents: &str, field_name: &str) -> Option<String> {
+    let normalized_field_name = field_name.trim();
+    if normalized_field_name.is_empty() {
+        return None;
+    }
+
+    let line_pattern = Regex::new(r#"^\s*"([^"]+)"\s*"([^"]*)""#).ok()?;
+    for line in manifest_contents.lines() {
+        let Some(captures) = line_pattern.captures(line) else {
+            continue;
+        };
+
+        let Some(raw_key) = captures.get(1).map(|value| value.as_str()) else {
+            continue;
+        };
+        if !raw_key.eq_ignore_ascii_case(normalized_field_name) {
+            continue;
+        }
+
+        let Some(raw_value) = captures.get(2).map(|value| value.as_str()) else {
+            continue;
+        };
+        let decoded_value = decode_steam_vdf_value(raw_value);
+        let trimmed_value = decoded_value.trim();
+        if trimmed_value.is_empty() {
+            return None;
+        }
+
+        return Some(trimmed_value.to_owned());
+    }
+
+    None
+}
+
+fn parse_steam_manifest_u64_field(manifest_contents: &str, field_name: &str) -> Option<u64> {
+    parse_steam_manifest_string_field(manifest_contents, field_name)?.parse::<u64>().ok()
+}
+
+fn parse_steam_manifest_download_progress(
+    manifest_contents: &str,
+) -> SteamManifestDownloadProgressSnapshot {
+    let bytes_total = parse_steam_manifest_u64_field(manifest_contents, "BytesToDownload")
+        .or_else(|| parse_steam_manifest_u64_field(manifest_contents, "TotalDownloaded"));
+    let bytes_downloaded = parse_steam_manifest_u64_field(manifest_contents, "BytesDownloaded")
+        .or_else(|| parse_steam_manifest_u64_field(manifest_contents, "BytesDownloadedOnCurrentRun"));
+
+    SteamManifestDownloadProgressSnapshot {
+        state_flags: parse_steam_manifest_u64_field(manifest_contents, "StateFlags"),
+        bytes_downloaded,
+        bytes_total,
+    }
+}
+
+fn infer_steam_download_state(
+    state_flags: u64,
+    has_progress: bool,
+    has_active_download_directory: bool,
+) -> Option<&'static str> {
+    if state_flags & STEAM_APP_STATE_UPDATE_PAUSED != 0 {
+        return Some("Paused");
+    }
+
+    if state_flags & STEAM_APP_STATE_PREALLOCATING != 0 {
+        return Some("Preallocating");
+    }
+
+    if state_flags & STEAM_APP_STATE_DOWNLOADING != 0 {
+        return Some("Downloading");
+    }
+
+    if state_flags & STEAM_APP_STATE_UPDATE_RUNNING != 0
+        || state_flags & STEAM_APP_STATE_UPDATE_STARTED != 0
+    {
+        if has_progress || has_active_download_directory {
+            return Some("Downloading");
+        }
+        return Some("Updating");
+    }
+
+    if state_flags & STEAM_APP_STATE_STAGING != 0 {
+        return Some("Staging");
+    }
+
+    if state_flags & STEAM_APP_STATE_COMMITTING != 0 || state_flags & STEAM_APP_STATE_ADDING_FILES != 0 {
+        return Some("Installing");
+    }
+
+    if state_flags & STEAM_APP_STATE_VALIDATING != 0 {
+        return Some("Verifying");
+    }
+
+    if has_progress || has_active_download_directory {
+        return Some("Queued");
+    }
+
+    if state_flags & STEAM_APP_STATE_UPDATE_REQUIRED != 0
+        && state_flags & STEAM_APP_STATE_FULLY_INSTALLED == 0
+    {
+        return Some("Queued");
+    }
+
+    None
+}
+
+fn collect_steam_download_progress_from_steamapps_dir(
+    steamapps_directory: &Path,
+    owned_games_by_app_id: &HashMap<u64, OwnedSteamGameMetadata>,
+    seen_external_ids: &mut HashSet<String>,
+    output: &mut Vec<SteamDownloadProgressResponse>,
+) -> Result<(), String> {
+    let directory_entries = match fs::read_dir(steamapps_directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(format!(
+                "Failed to read Steam library directory {}: {error}",
+                steamapps_directory.display()
+            ));
+        }
+    };
+
+    for directory_entry in directory_entries {
+        let entry = directory_entry
+            .map_err(|error| format!("Failed to read Steam library entry: {error}"))?;
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        let Some(app_id) = parse_steam_manifest_app_id(&file_name) else {
+            continue;
+        };
+
+        let Some(game) = owned_games_by_app_id.get(&app_id) else {
+            continue;
+        };
+
+        let manifest_contents = match fs::read_to_string(entry.path()) {
+            Ok(contents) => contents,
+            Err(error) => {
+                eprintln!(
+                    "Could not read Steam app manifest {}: {}",
+                    entry.path().display(),
+                    error
+                );
+                continue;
+            }
+        };
+
+        let progress_snapshot = parse_steam_manifest_download_progress(&manifest_contents);
+        let bytes_total = progress_snapshot.bytes_total.filter(|value| *value > 0);
+        let bytes_downloaded = match (progress_snapshot.bytes_downloaded, bytes_total) {
+            (Some(downloaded), _) => Some(downloaded),
+            (None, Some(_)) => Some(0),
+            (None, None) => None,
+        };
+        let has_progress = match (bytes_downloaded, bytes_total) {
+            (Some(downloaded), Some(total)) => downloaded < total,
+            _ => false,
+        };
+        let app_id_path_segment = app_id.to_string();
+        let has_active_download_directory = steamapps_directory
+            .join("downloading")
+            .join(&app_id_path_segment)
+            .is_dir()
+            || steamapps_directory
+                .join("temp")
+                .join(&app_id_path_segment)
+                .is_dir();
+        let state_flags = progress_snapshot.state_flags.unwrap_or(0);
+        let Some(state_label) =
+            infer_steam_download_state(state_flags, has_progress, has_active_download_directory)
+        else {
+            continue;
+        };
+        if !seen_external_ids.insert(game.external_id.clone()) {
+            continue;
+        }
+
+        let progress_percent = match (bytes_downloaded, bytes_total) {
+            (Some(downloaded), Some(total)) if total > 0 => Some(
+                ((downloaded.min(total)) as f64 / total as f64 * 100.0).clamp(0.0, 100.0),
+            ),
+            _ => None,
+        };
+
+        output.push(SteamDownloadProgressResponse {
+            game_id: game.game_id.clone(),
+            provider: String::from("steam"),
+            external_id: game.external_id.clone(),
+            name: game.name.clone(),
+            state: String::from(state_label),
+            bytes_downloaded,
+            bytes_total,
+            progress_percent,
+        });
+    }
+
+    Ok(())
+}
+
 fn detect_available_disk_space_bytes(path: &Path) -> Option<u64> {
     if cfg!(target_os = "windows") {
         return None;
@@ -2576,6 +2957,50 @@ fn fetch_steam_install_size_estimate_from_store(
     }
 
     Ok(max_size_bytes)
+}
+
+fn fetch_steam_app_linux_platform_support_from_store(
+    client: &Client,
+    app_id: u64,
+) -> Result<Option<bool>, String> {
+    let mut request_url = Url::parse(STEAM_APP_DETAILS_ENDPOINT)
+        .map_err(|error| format!("Failed to parse Steam app details endpoint: {error}"))?;
+    request_url
+        .query_pairs_mut()
+        .append_pair("appids", &app_id.to_string())
+        .append_pair("l", "english")
+        .append_pair("cc", "us");
+
+    let response = client
+        .get(request_url)
+        .send()
+        .map_err(|error| format!("Steam app details request failed: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Steam app details request failed with status {}",
+            response.status()
+        ));
+    }
+
+    let payload = response
+        .json::<serde_json::Value>()
+        .map_err(|error| format!("Failed to decode Steam app details response: {error}"))?;
+
+    let app_id_key = app_id.to_string();
+    let Some(entry) = payload.get(&app_id_key) else {
+        return Ok(None);
+    };
+    let Some(true) = entry.get("success").and_then(serde_json::Value::as_bool) else {
+        return Ok(None);
+    };
+    let Some(data) = entry.get("data").and_then(serde_json::Value::as_object) else {
+        return Ok(None);
+    };
+    let Some(platforms) = data.get("platforms").and_then(serde_json::Value::as_object) else {
+        return Ok(None);
+    };
+
+    Ok(platforms.get("linux").and_then(serde_json::Value::as_bool))
 }
 
 fn parse_steam_install_size_from_requirements_value(value: &serde_json::Value) -> Option<u64> {
@@ -3812,6 +4237,78 @@ fn create_user_collection(
     }
 }
 
+fn rename_user_collection(
+    connection: &Connection,
+    user_id: &str,
+    collection_id: &str,
+    name: &str,
+) -> Result<CollectionResponse, String> {
+    ensure_owned_collection_exists(connection, user_id, collection_id)?;
+    let normalized_name = normalize_collection_name(name)?;
+    let now = Utc::now().to_rfc3339();
+    let update_result = connection.execute(
+        "
+        UPDATE collections
+        SET name = ?1, updated_at = ?2
+        WHERE id = ?3 AND user_id = ?4
+        ",
+        params![normalized_name, now, collection_id, user_id],
+    );
+    match update_result {
+        Ok(updated_rows) => {
+            if updated_rows == 0 {
+                return Err(String::from("Collection not found for current user"));
+            }
+        }
+        Err(error)
+            if error
+                .to_string()
+                .contains("UNIQUE constraint failed: collections.user_id, collections.name") =>
+        {
+            return Err(String::from("Collection name already exists"));
+        }
+        Err(error) => return Err(format!("Failed to rename collection: {error}")),
+    }
+
+    let game_count_raw = connection
+        .query_row(
+            "
+            SELECT COUNT(*)
+            FROM collection_games
+            WHERE user_id = ?1 AND collection_id = ?2
+            ",
+            params![user_id, collection_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|error| format!("Failed to query renamed collection size: {error}"))?;
+
+    Ok(CollectionResponse {
+        id: collection_id.to_owned(),
+        name: normalized_name,
+        game_count: usize::try_from(game_count_raw).unwrap_or_default(),
+        contains_game: false,
+    })
+}
+
+fn delete_user_collection(
+    connection: &Connection,
+    user_id: &str,
+    collection_id: &str,
+) -> Result<(), String> {
+    ensure_owned_collection_exists(connection, user_id, collection_id)?;
+    let deleted_rows = connection
+        .execute(
+            "DELETE FROM collections WHERE id = ?1 AND user_id = ?2",
+            params![collection_id, user_id],
+        )
+        .map_err(|error| format!("Failed to delete collection: {error}"))?;
+    if deleted_rows == 0 {
+        return Err(String::from("Collection not found for current user"));
+    }
+
+    Ok(())
+}
+
 fn ensure_owned_collection_exists(
     connection: &Connection,
     user_id: &str,
@@ -3980,6 +4477,41 @@ fn load_provider_game_external_ids(
 
     rows.collect::<Result<HashSet<_>, _>>()
         .map_err(|error| format!("Failed to decode provider game list: {error}"))
+}
+
+fn load_owned_steam_games_by_app_id(
+    connection: &Connection,
+    user_id: &str,
+) -> Result<HashMap<u64, OwnedSteamGameMetadata>, String> {
+    let mut statement = connection
+        .prepare(
+            "
+            SELECT id, external_id, name
+            FROM games
+            WHERE user_id = ?1 AND provider = 'steam'
+            ",
+        )
+        .map_err(|error| format!("Failed to prepare owned Steam game query: {error}"))?;
+    let rows = statement
+        .query_map(params![user_id], |row| {
+            Ok(OwnedSteamGameMetadata {
+                game_id: row.get::<_, String>(0)?,
+                external_id: row.get::<_, String>(1)?,
+                name: row.get::<_, String>(2)?,
+            })
+        })
+        .map_err(|error| format!("Failed to query owned Steam games: {error}"))?;
+
+    let mut games_by_app_id = HashMap::new();
+    for row in rows {
+        let game = row.map_err(|error| format!("Failed to decode owned Steam game row: {error}"))?;
+        let Some(app_id) = game.external_id.parse::<u64>().ok() else {
+            continue;
+        };
+        games_by_app_id.insert(app_id, game);
+    }
+
+    Ok(games_by_app_id)
 }
 
 #[derive(Debug, Clone)]
@@ -4454,6 +4986,122 @@ fn encode_steam_launch_options(launch_options: &str) -> String {
     url::form_urlencoded::byte_serialize(launch_options.as_bytes()).collect::<String>()
 }
 
+fn try_spawn_command(command: &str, args: &[&str]) -> Result<(), String> {
+    Command::new(command)
+        .args(args)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| {
+            let rendered_args = if args.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", args.join(" "))
+            };
+            format!("{command}{rendered_args}: {error}")
+        })
+}
+
+fn launch_steam_uri(uri: &str, action: &str) -> Result<(), String> {
+    let install_action = action.eq_ignore_ascii_case("install");
+
+    if cfg!(target_os = "windows") {
+        let mut errors = Vec::new();
+
+        if install_action {
+            match try_spawn_command("cmd", &["/C", "start", "", "/MIN", "steam", "-silent", uri]) {
+                Ok(()) => return Ok(()),
+                Err(error) => errors.push(error),
+            }
+            let _ = try_spawn_command("cmd", &["/C", "start", "", "/MIN", "steam", "-silent"]);
+            match try_spawn_command("cmd", &["/C", "start", "", "/MIN", uri]) {
+                Ok(()) => return Ok(()),
+                Err(error) => errors.push(error),
+            }
+        } else {
+            match try_spawn_command("cmd", &["/C", "start", "", uri]) {
+                Ok(()) => return Ok(()),
+                Err(error) => errors.push(error),
+            }
+        }
+
+        return Err(format!(
+            "Failed to launch Steam URI '{uri}' on Windows. Attempts: {}",
+            errors.join("; ")
+        ));
+    }
+
+    if cfg!(target_os = "macos") {
+        let mut errors = Vec::new();
+
+        if install_action {
+            let _ = try_spawn_command("open", &["-g", "-j", "-a", "Steam"]);
+            match try_spawn_command("open", &["-g", uri]) {
+                Ok(()) => return Ok(()),
+                Err(error) => errors.push(error),
+            }
+        }
+
+        match try_spawn_command("open", &[uri]) {
+            Ok(()) => return Ok(()),
+            Err(error) => errors.push(error),
+        }
+
+        return Err(format!(
+            "Failed to launch Steam URI '{uri}' on macOS. Attempts: {}",
+            errors.join("; ")
+        ));
+    }
+
+    if cfg!(target_os = "linux") {
+        let mut errors = Vec::new();
+
+        if install_action {
+            match try_spawn_command("steam", &["-silent", uri]) {
+                Ok(()) => return Ok(()),
+                Err(error) => errors.push(error),
+            }
+
+            match try_spawn_command("steam-runtime", &["-silent", uri]) {
+                Ok(()) => return Ok(()),
+                Err(error) => errors.push(error),
+            }
+
+            match try_spawn_command("flatpak", &["run", "com.valvesoftware.Steam", "-silent", uri]) {
+                Ok(()) => return Ok(()),
+                Err(error) => errors.push(error),
+            }
+
+            let _ = try_spawn_command("steam", &["-silent"]);
+            let _ = try_spawn_command("steam-runtime", &["-silent"]);
+            let _ = try_spawn_command("flatpak", &["run", "com.valvesoftware.Steam", "-silent"]);
+        }
+
+        match try_spawn_command("steam", &[uri]) {
+            Ok(()) => return Ok(()),
+            Err(error) => errors.push(error),
+        }
+
+        match try_spawn_command("steam-runtime", &[uri]) {
+            Ok(()) => return Ok(()),
+            Err(error) => errors.push(error),
+        }
+
+        match try_spawn_command("flatpak", &["run", "com.valvesoftware.Steam", uri]) {
+            Ok(()) => return Ok(()),
+            Err(error) => errors.push(error),
+        }
+
+        return Err(format!(
+            "Could not open Steam URI '{uri}'. Make sure Steam is installed and available in PATH. Attempts: {}",
+            errors.join("; ")
+        ));
+    }
+
+    webbrowser::open(uri)
+        .map(|_| ())
+        .map_err(|error| format!("Failed to open Steam URI '{uri}': {error}"))
+}
+
 fn open_provider_game_uri(
     provider: &str,
     external_id: &str,
@@ -4479,32 +5127,12 @@ fn open_provider_game_uri(
                 _ => return Err(String::from("Unsupported Steam action")),
             };
 
-            webbrowser::open(&uri).map_err(|error| format!("Failed to open Steam URI: {error}"))?;
-            Ok(())
+            launch_steam_uri(&uri, action)
         }
         _ => Err(format!(
             "Provider '{provider}' is not supported for action '{action}'"
         )),
     }
-}
-
-fn mark_game_as_installed(
-    connection: &Connection,
-    user_id: &str,
-    provider: &str,
-    external_id: &str,
-) -> Result<(), String> {
-    let updated_rows = connection
-        .execute(
-            "UPDATE games SET installed = 1 WHERE user_id = ?1 AND provider = ?2 AND external_id = ?3",
-            params![user_id, provider, external_id],
-        )
-        .map_err(|error| format!("Failed to update install state: {error}"))?;
-    if updated_rows == 0 {
-        return Err(String::from("Game not found for current user"));
-    }
-
-    Ok(())
 }
 
 fn default_game_properties_settings_payload() -> GamePropertiesSettingsPayload {
@@ -4684,17 +5312,244 @@ fn save_game_properties_settings(
 }
 
 fn map_compatibility_tool_label_to_steam_name(label: &str) -> String {
-    let normalized = label.trim().to_ascii_lowercase();
-    match normalized.as_str() {
-        "proton experimental" => String::from("proton_experimental"),
-        "proton hotfix" => String::from("proton_hotfix"),
-        "proton 9.0-4" => String::from("proton_9"),
-        "proton 8.0-5" => String::from("proton_8"),
-        "proton 7.0-6" => String::from("proton_7"),
-        "steam linux runtime 3.0 (sniper)" => String::from("sniper"),
-        "steam linux runtime 2.0 (soldier)" => String::from("soldier"),
-        _ => label.trim().to_owned(),
+    let trimmed_label = label.trim();
+    if trimmed_label.is_empty() {
+        return String::new();
     }
+
+    let normalized = trimmed_label.to_ascii_lowercase();
+    for (tool_id, display_label) in STEAM_BUILTIN_COMPATIBILITY_TOOLS {
+        if normalized == tool_id.to_ascii_lowercase()
+            || normalized == display_label.to_ascii_lowercase()
+        {
+            return tool_id.to_owned();
+        }
+    }
+
+    trimmed_label.to_owned()
+}
+
+fn default_steam_compatibility_tools() -> Vec<GameCompatibilityToolResponse> {
+    STEAM_BUILTIN_COMPATIBILITY_TOOLS
+        .iter()
+        .map(|(id, label)| GameCompatibilityToolResponse {
+            id: (*id).to_owned(),
+            label: (*label).to_owned(),
+        })
+        .collect::<Vec<_>>()
+}
+
+fn is_linux_runtime_compatibility_tool(tool: &GameCompatibilityToolResponse) -> bool {
+    let normalized_id = tool.id.trim().to_ascii_lowercase();
+    if normalized_id == "sniper" || normalized_id == "soldier" {
+        return true;
+    }
+
+    let normalized_label = tool.label.trim().to_ascii_lowercase();
+    normalized_label.starts_with("steam linux runtime")
+}
+
+fn add_compatibility_tool_option(
+    tools: &mut Vec<GameCompatibilityToolResponse>,
+    seen_ids: &mut HashSet<String>,
+    id: &str,
+    label: &str,
+) {
+    let normalized_id = id.trim();
+    if normalized_id.is_empty() {
+        return;
+    }
+
+    let normalized_label = if label.trim().is_empty() {
+        normalized_id
+    } else {
+        label.trim()
+    };
+    let dedupe_key = normalized_id.to_ascii_lowercase();
+    if seen_ids.insert(dedupe_key) {
+        tools.push(GameCompatibilityToolResponse {
+            id: normalized_id.to_owned(),
+            label: normalized_label.to_owned(),
+        });
+    }
+}
+
+fn compatibility_tool_from_common_directory_name(
+    directory_name: &str,
+) -> Option<GameCompatibilityToolResponse> {
+    let trimmed_name = directory_name.trim();
+    if trimmed_name.is_empty() {
+        return None;
+    }
+
+    let normalized_name = trimmed_name.to_ascii_lowercase();
+    if !normalized_name.starts_with("proton")
+        && !normalized_name.starts_with("steam linux runtime")
+    {
+        return None;
+    }
+
+    Some(GameCompatibilityToolResponse {
+        id: map_compatibility_tool_label_to_steam_name(trimmed_name),
+        label: trimmed_name.to_owned(),
+    })
+}
+
+fn parse_steam_custom_compatibility_tools_from_vdf(
+    contents: &str,
+) -> Result<Vec<GameCompatibilityToolResponse>, String> {
+    let root_value = parse_vdf_document(contents)?;
+    let compat_tools_value = vdf_find_object_value(&root_value, "compatibilitytools")
+        .and_then(|compatibility_tools| vdf_find_object_value(compatibility_tools, "compat_tools"))
+        .or_else(|| vdf_find_object_value(&root_value, "compat_tools"));
+    let Some(VdfValue::Object(tool_entries)) = compat_tools_value else {
+        return Ok(Vec::new());
+    };
+
+    let mut parsed_tools = Vec::new();
+    let mut seen_ids = HashSet::new();
+    for (tool_key, tool_value) in tool_entries {
+        let tool_id = tool_key.trim();
+        if tool_id.is_empty() {
+            continue;
+        }
+
+        let display_label = vdf_find_object_value(tool_value, "display_name")
+            .and_then(|display_name_value| match display_name_value {
+                VdfValue::Text(display_name_text) => {
+                    let trimmed_display_name = display_name_text.trim();
+                    if trimmed_display_name.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed_display_name.to_owned())
+                    }
+                }
+                VdfValue::Object(_) => None,
+            })
+            .unwrap_or_else(|| tool_id.to_owned());
+
+        add_compatibility_tool_option(
+            &mut parsed_tools,
+            &mut seen_ids,
+            tool_id,
+            &display_label,
+        );
+    }
+
+    Ok(parsed_tools)
+}
+
+fn resolve_steam_compatibility_tools(
+    steam_root_override: Option<&str>,
+    include_linux_runtime_tools: bool,
+) -> Result<Vec<GameCompatibilityToolResponse>, String> {
+    let mut tools = Vec::new();
+    let mut seen_ids = HashSet::new();
+    for builtin_tool in default_steam_compatibility_tools() {
+        if !include_linux_runtime_tools && is_linux_runtime_compatibility_tool(&builtin_tool) {
+            continue;
+        }
+        add_compatibility_tool_option(
+            &mut tools,
+            &mut seen_ids,
+            &builtin_tool.id,
+            &builtin_tool.label,
+        );
+    }
+
+    let Some(steam_root) = resolve_steam_root_path(steam_root_override) else {
+        return Ok(tools);
+    };
+
+    let common_path = steam_root.join("steamapps").join("common");
+    if let Ok(common_entries) = fs::read_dir(&common_path) {
+        for common_entry in common_entries.flatten() {
+            let Ok(file_type) = common_entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_dir() {
+                continue;
+            }
+
+            let directory_name = common_entry.file_name().to_string_lossy().trim().to_owned();
+            let Some(parsed_tool) = compatibility_tool_from_common_directory_name(&directory_name)
+            else {
+                continue;
+            };
+            if !include_linux_runtime_tools && is_linux_runtime_compatibility_tool(&parsed_tool) {
+                continue;
+            }
+            add_compatibility_tool_option(
+                &mut tools,
+                &mut seen_ids,
+                &parsed_tool.id,
+                &parsed_tool.label,
+            );
+        }
+    }
+
+    let custom_tools_path = steam_root.join("compatibilitytools.d");
+    if let Ok(custom_tool_entries) = fs::read_dir(&custom_tools_path) {
+        for custom_tool_entry in custom_tool_entries.flatten() {
+            let Ok(file_type) = custom_tool_entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_dir() {
+                continue;
+            }
+
+            let entry_path = custom_tool_entry.path();
+            let compatibility_tool_vdf_path = entry_path.join("compatibilitytool.vdf");
+            let mut discovered_any_tool_from_vdf = false;
+            if compatibility_tool_vdf_path.is_file() {
+                if let Ok(contents) = fs::read_to_string(&compatibility_tool_vdf_path) {
+                    if let Ok(parsed_tools) =
+                        parse_steam_custom_compatibility_tools_from_vdf(&contents)
+                    {
+                        for parsed_tool in parsed_tools {
+                            if !include_linux_runtime_tools
+                                && is_linux_runtime_compatibility_tool(&parsed_tool)
+                            {
+                                continue;
+                            }
+                            add_compatibility_tool_option(
+                                &mut tools,
+                                &mut seen_ids,
+                                &parsed_tool.id,
+                                &parsed_tool.label,
+                            );
+                            discovered_any_tool_from_vdf = true;
+                        }
+                    }
+                }
+            }
+
+            if discovered_any_tool_from_vdf {
+                continue;
+            }
+
+            let fallback_name = custom_tool_entry.file_name().to_string_lossy().trim().to_owned();
+            if fallback_name.is_empty() {
+                continue;
+            }
+            let fallback_tool = GameCompatibilityToolResponse {
+                id: fallback_name.clone(),
+                label: fallback_name.clone(),
+            };
+            if !include_linux_runtime_tools && is_linux_runtime_compatibility_tool(&fallback_tool) {
+                continue;
+            }
+
+            add_compatibility_tool_option(
+                &mut tools,
+                &mut seen_ids,
+                &fallback_name,
+                &fallback_name,
+            );
+        }
+    }
+
+    Ok(tools)
 }
 
 fn log_steam_settings_debug(state: &AppState, message: &str) {
@@ -5554,6 +6409,7 @@ pub fn run() {
             set_game_favorite,
             list_collections,
             list_game_languages,
+            list_game_compatibility_tools,
             get_game_privacy_settings,
             set_game_privacy_settings,
             clear_game_overlay_data,
@@ -5562,9 +6418,12 @@ pub fn run() {
             get_game_installation_details,
             get_game_install_size_estimate,
             list_game_install_locations,
+            list_steam_downloads,
             list_game_versions_betas,
             validate_game_beta_access_code,
             create_collection,
+            rename_collection,
+            delete_collection,
             add_game_to_collection,
             play_game,
             install_game,

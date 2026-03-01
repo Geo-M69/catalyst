@@ -31,7 +31,7 @@ interface CustomSelectOption<T extends string> {
 
 interface CustomSelectController<T extends string> extends BaseCustomSelectController {
   getValue: () => T;
-  setValue: (value: T, notifyChange?: boolean) => void;
+  setValue: (value: T, notifyChange?: boolean) => boolean;
   setOptions: (options: CustomSelectOption<T>[], preferredValue?: T, notifyChange?: boolean) => void;
 }
 
@@ -253,10 +253,10 @@ const createCustomSelect = <T extends string>(
     selectedOption.focus();
   };
 
-  const setValue = (value: T, notifyChange = true): void => {
+  const setValue = (value: T, notifyChange = true): boolean => {
     const selectedOption = optionButtons.find((optionButton) => optionButton.dataset.value === value);
     if (!selectedOption) {
-      return;
+      return false;
     }
 
     currentValue = value;
@@ -271,6 +271,8 @@ const createCustomSelect = <T extends string>(
     if (notifyChange) {
       onChange();
     }
+
+    return true;
   };
 
   const bindOptionButton = (optionButton: HTMLButtonElement): void => {
@@ -285,7 +287,7 @@ const createCustomSelect = <T extends string>(
         return;
       }
 
-      setValue(optionValue as T);
+      void setValue(optionValue as T);
       closeMenu();
       trigger.focus();
     });
@@ -319,7 +321,7 @@ const createCustomSelect = <T extends string>(
     const hasCandidateValue = optionButtons.some((optionButton) => optionButton.dataset.value === candidateValue);
     const nextValue = hasCandidateValue ? candidateValue : options[0].value;
     const shouldNotify = notifyChange && nextValue !== currentValue;
-    setValue(nextValue, shouldNotify);
+    void setValue(nextValue, shouldNotify);
   };
 
   trigger.addEventListener("click", () => {
@@ -430,8 +432,10 @@ const createCustomSelect = <T extends string>(
 
 export interface FilterPanelController {
   getFilters: () => LibraryFilters;
+  setFilterBy: (filterBy: FilterByOption, notifyChange?: boolean) => boolean;
   setSteamTagSuggestions: (tags: string[]) => void;
   setCollectionSuggestions: (collections: string[]) => void;
+  setCollectionFilter: (collection: string, notifyChange?: boolean) => boolean;
 }
 
 export const createFilterPanel = (
@@ -466,15 +470,15 @@ export const createFilterPanel = (
     throw new Error("Filter panel is missing required DOM elements");
   }
 
-  const notifyChange = (): void => {
-    onChange();
-  };
-
   const selectControllers: BaseCustomSelectController[] = [];
   const closeAllSelectMenus = (): void => {
     for (const selectController of selectControllers) {
       selectController.closeMenu();
     }
+  };
+
+  const notifyChange = (): void => {
+    onChange();
   };
 
   const steamTagSelect = createCustomSelect<string>(steamTagField, notifyChange, closeAllSelectMenus);
@@ -530,6 +534,9 @@ export const createFilterPanel = (
 
   return {
     getFilters: buildFiltersFromForm,
+    setFilterBy: (filterBy: FilterByOption, notifyChange = true) => {
+      return filterBySelect.setValue(filterBy, notifyChange);
+    },
     setSteamTagSuggestions: (tags: string[]) => {
       const options: CustomSelectOption<string>[] = [
         { value: "", label: "All" },
@@ -543,6 +550,11 @@ export const createFilterPanel = (
         ...collections.map((collection) => ({ value: collection, label: collection })),
       ];
       collectionSelect.setOptions(options, collectionSelect.getValue(), false);
+    },
+    setCollectionFilter: (collection: string, notifyChange = true) => {
+      const normalizedCollection = collection.trim();
+      const nextValue = normalizedCollection.length > 0 ? normalizedCollection : DEFAULT_FILTERS.collection;
+      return collectionSelect.setValue(nextValue, notifyChange);
     },
   };
 };

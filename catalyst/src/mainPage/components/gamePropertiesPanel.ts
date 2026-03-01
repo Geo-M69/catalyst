@@ -4,6 +4,7 @@ export interface GamePropertiesInput {
   game: GameResponse;
   collections: string[];
   availableLanguages?: string[];
+  availableCompatibilityTools?: GameCompatibilityToolOption[];
   availableVersionOptions?: GameVersionBetaOption[];
   availableVersionOptionsWarning?: string;
   persistedSettings?: GamePropertiesPersistedSettings;
@@ -31,6 +32,11 @@ export interface GameVersionBetaOption {
   buildId?: string;
   requiresAccessCode?: boolean;
   isDefault?: boolean;
+}
+
+export interface GameCompatibilityToolOption {
+  id: string;
+  label: string;
 }
 
 export interface GameBetaAccessCodeValidationResult {
@@ -153,14 +159,14 @@ const GAME_PROPERTIES_TABS: readonly GamePropertiesTab[] = [
   { id: "privacy", label: "Privacy" },
 ];
 const DEFAULT_LANGUAGE_OPTIONS = ["English", "French", "German", "Spanish", "Japanese"];
-const STEAM_PLAY_COMPATIBILITY_TOOL_OPTIONS = [
-  "Proton Experimental",
-  "Proton Hotfix",
-  "Proton 9.0-4",
-  "Proton 8.0-5",
-  "Proton 7.0-6",
-  "Steam Linux Runtime 3.0 (sniper)",
-  "Steam Linux Runtime 2.0 (soldier)",
+const DEFAULT_COMPATIBILITY_TOOL_OPTIONS: readonly GameCompatibilityToolOption[] = [
+  { id: "proton_experimental", label: "Proton Experimental" },
+  { id: "proton_hotfix", label: "Proton Hotfix" },
+  { id: "proton_9", label: "Proton 9.0-4" },
+  { id: "proton_8", label: "Proton 8.0-5" },
+  { id: "proton_7", label: "Proton 7.0-6" },
+  { id: "sniper", label: "Steam Linux Runtime 3.0 (sniper)" },
+  { id: "soldier", label: "Steam Linux Runtime 2.0 (soldier)" },
 ];
 const DEFAULT_GENERAL_SETTINGS: GameGeneralSettings = {
   language: "English",
@@ -169,7 +175,7 @@ const DEFAULT_GENERAL_SETTINGS: GameGeneralSettings = {
 };
 const DEFAULT_COMPATIBILITY_SETTINGS: GameCompatibilitySettings = {
   forceSteamPlayCompatibilityTool: false,
-  steamPlayCompatibilityTool: STEAM_PLAY_COMPATIBILITY_TOOL_OPTIONS[0],
+  steamPlayCompatibilityTool: DEFAULT_COMPATIBILITY_TOOL_OPTIONS[0].id,
 };
 const AUTOMATIC_UPDATES_OPTIONS: readonly DropdownOption[] = [
   {
@@ -283,6 +289,12 @@ const cloneGameVersionsBetasSettings = (settings: GameVersionsBetasSettings): Ga
 };
 
 const cloneGameVersionOptions = (options: readonly GameVersionBetaOption[]): GameVersionBetaOption[] => {
+  return options.map((option) => ({ ...option }));
+};
+
+const cloneCompatibilityToolOptions = (
+  options: readonly GameCompatibilityToolOption[]
+): GameCompatibilityToolOption[] => {
   return options.map((option) => ({ ...option }));
 };
 
@@ -430,6 +442,34 @@ const normalizeLanguageOptions = (languageOptions: string[]): string[] => {
   return normalized;
 };
 
+const normalizeCompatibilityToolOptions = (
+  compatibilityToolOptions: readonly GameCompatibilityToolOption[]
+): GameCompatibilityToolOption[] => {
+  const uniqueToolIds = new Set<string>();
+  const normalized: GameCompatibilityToolOption[] = [];
+
+  for (const option of compatibilityToolOptions) {
+    const normalizedId = option.id.trim();
+    if (normalizedId.length === 0) {
+      continue;
+    }
+
+    const dedupeKey = normalizedId.toLowerCase();
+    if (uniqueToolIds.has(dedupeKey)) {
+      continue;
+    }
+
+    uniqueToolIds.add(dedupeKey);
+    const normalizedLabel = option.label.trim();
+    normalized.push({
+      id: normalizedId,
+      label: normalizedLabel.length > 0 ? normalizedLabel : normalizedId,
+    });
+  }
+
+  return normalized;
+};
+
 const normalizeGameVersionBetaOptions = (options: readonly GameVersionBetaOption[]): GameVersionBetaOption[] => {
   const normalized: GameVersionBetaOption[] = [];
   const seen = new Set<string>();
@@ -480,13 +520,52 @@ const resolveLanguageOptions = (
   return resolved;
 };
 
-const resolveCompatibilityToolOptions = (selectedTool: string): string[] => {
-  const resolved = normalizeLanguageOptions(STEAM_PLAY_COMPATIBILITY_TOOL_OPTIONS);
-  if (!resolved.some((tool) => tool.toLowerCase() === selectedTool.toLowerCase())) {
-    resolved.push(selectedTool);
+const resolveCompatibilityToolOptions = (
+  availableTools: readonly GameCompatibilityToolOption[],
+  selectedTool: string
+): GameCompatibilityToolOption[] => {
+  const resolved = normalizeCompatibilityToolOptions(availableTools);
+  if (resolved.length === 0) {
+    resolved.push(...cloneCompatibilityToolOptions(DEFAULT_COMPATIBILITY_TOOL_OPTIONS));
+  }
+
+  const normalizedSelectedTool = selectedTool.trim();
+  if (normalizedSelectedTool.length === 0) {
+    return resolved;
+  }
+
+  const hasSelectedTool = resolved.some((tool) =>
+    tool.id.toLowerCase() === normalizedSelectedTool.toLowerCase()
+      || tool.label.toLowerCase() === normalizedSelectedTool.toLowerCase()
+  );
+  if (!hasSelectedTool) {
+    resolved.push({
+      id: normalizedSelectedTool,
+      label: normalizedSelectedTool,
+    });
   }
 
   return resolved;
+};
+
+const resolveCompatibilityToolSelection = (
+  selectedTool: string,
+  options: readonly GameCompatibilityToolOption[]
+): string => {
+  const normalizedSelectedTool = selectedTool.trim().toLowerCase();
+  if (normalizedSelectedTool.length > 0) {
+    const selectedById = options.find((option) => option.id.toLowerCase() === normalizedSelectedTool);
+    if (selectedById) {
+      return selectedById.id;
+    }
+
+    const selectedByLabel = options.find((option) => option.label.toLowerCase() === normalizedSelectedTool);
+    if (selectedByLabel) {
+      return selectedByLabel.id;
+    }
+  }
+
+  return options[0]?.id ?? DEFAULT_COMPATIBILITY_SETTINGS.steamPlayCompatibilityTool;
 };
 
 const resolveGameVersionBetaOptions = (
@@ -614,6 +693,7 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
   let currentGameId: string | null = null;
   let currentGame: GameResponse | null = null;
   let currentAvailableLanguages: string[] = [...DEFAULT_LANGUAGE_OPTIONS];
+  let currentAvailableCompatibilityTools = cloneCompatibilityToolOptions(DEFAULT_COMPATIBILITY_TOOL_OPTIONS);
   let currentAvailableVersionOptions = cloneGameVersionOptions(DEFAULT_GAME_VERSION_BETA_OPTIONS);
   let currentAvailableVersionOptionsWarning = "";
   let currentInstallationDetails: GameInstallationDetails | null = null;
@@ -1387,6 +1467,7 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
     toolSelectField.append(toolTrigger, toolMenu);
 
     const compatibilityToolValues = resolveCompatibilityToolOptions(
+      currentAvailableCompatibilityTools,
       currentCompatibilitySettings.steamPlayCompatibilityTool
     );
     const compatibilityOptionButtons: HTMLButtonElement[] = [];
@@ -1395,8 +1476,8 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
       optionButton.type = "button";
       optionButton.className = "game-properties-language-option";
       optionButton.setAttribute("role", "option");
-      optionButton.dataset.value = tool;
-      optionButton.textContent = tool;
+      optionButton.dataset.value = tool.id;
+      optionButton.textContent = tool.label;
       toolMenu.append(optionButton);
       compatibilityOptionButtons.push(optionButton);
     }
@@ -1423,13 +1504,13 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
       selectedOption?.focus();
     };
 
-    const setCompatibilityTool = (tool: string, notifyChange = true): void => {
-      const selectedOption = compatibilityOptionButtons.find((optionButton) => optionButton.dataset.value === tool);
+    const setCompatibilityTool = (toolId: string, notifyChange = true): void => {
+      const selectedOption = compatibilityOptionButtons.find((optionButton) => optionButton.dataset.value === toolId);
       if (!selectedOption) {
         return;
       }
 
-      toolTriggerText.textContent = selectedOption.textContent?.trim() ?? tool;
+      toolTriggerText.textContent = selectedOption.textContent?.trim() ?? toolId;
       for (const optionButton of compatibilityOptionButtons) {
         const isSelected = optionButton === selectedOption;
         optionButton.classList.toggle("is-selected", isSelected);
@@ -1442,12 +1523,16 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
 
       currentCompatibilitySettings = {
         ...currentCompatibilitySettings,
-        steamPlayCompatibilityTool: tool,
+        steamPlayCompatibilityTool: toolId,
       };
       persistCurrentSettings();
     };
 
-    setCompatibilityTool(currentCompatibilitySettings.steamPlayCompatibilityTool, false);
+    const initialCompatibilityToolId = resolveCompatibilityToolSelection(
+      currentCompatibilitySettings.steamPlayCompatibilityTool,
+      compatibilityToolValues
+    );
+    setCompatibilityTool(initialCompatibilityToolId, false);
 
     for (const optionButton of compatibilityOptionButtons) {
       optionButton.addEventListener("click", () => {
@@ -2667,6 +2752,7 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
     currentGame = null;
     currentGameId = null;
     currentAvailableLanguages = [...DEFAULT_LANGUAGE_OPTIONS];
+    currentAvailableCompatibilityTools = cloneCompatibilityToolOptions(DEFAULT_COMPATIBILITY_TOOL_OPTIONS);
     currentAvailableVersionOptions = cloneGameVersionOptions(DEFAULT_GAME_VERSION_BETA_OPTIONS);
     currentAvailableVersionOptionsWarning = "";
     currentInstallationDetails = null;
@@ -2719,6 +2805,7 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
     currentGame = input.game;
     currentGameId = input.game.id;
     currentAvailableLanguages = normalizeLanguageOptions(input.availableLanguages ?? []);
+    currentAvailableCompatibilityTools = normalizeCompatibilityToolOptions(input.availableCompatibilityTools ?? []);
     currentSaveSettings = input.saveSettings ?? null;
     currentInstallationDetails = input.installationDetails
       ? {

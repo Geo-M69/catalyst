@@ -44,10 +44,68 @@
       <section class="library-column panel-middle" aria-label="Library games grid">
         <header class="panel-heading">
           <div class="panel-heading-stack">
-            <h1 class="panel-title">My Library</h1>
+            <div id="library-view-picker" class="library-view-picker">
+              <button
+                id="library-view-picker-button"
+                class="library-view-picker-button"
+                type="button"
+                aria-haspopup="listbox"
+                aria-expanded="false"
+                aria-controls="library-view-picker-menu"
+              >
+                <span id="library-view-picker-label" class="library-view-picker-label">Game Library</span>
+                <span class="library-view-picker-caret" aria-hidden="true"></span>
+              </button>
+              <div id="library-view-picker-menu" class="library-view-picker-menu" role="listbox" hidden>
+                <button
+                  type="button"
+                  class="library-view-picker-option is-selected"
+                  role="option"
+                  aria-selected="true"
+                  data-library-view="games"
+                >
+                  Game Library
+                </button>
+                <button
+                  type="button"
+                  class="library-view-picker-option"
+                  role="option"
+                  aria-selected="false"
+                  data-library-view="collections"
+                >
+                  Collections
+                </button>
+              </div>
+            </div>
             <p id="library-summary" class="status-message">Loading library...</p>
           </div>
-          <button id="refresh-library-button" class="secondary-button refresh-button" type="button">Refresh</button>
+          <div class="library-heading-actions">
+            <div id="download-activity" class="download-activity">
+              <button
+                id="download-activity-button"
+                class="secondary-button download-activity-button"
+                type="button"
+                aria-label="Downloads"
+                aria-haspopup="dialog"
+                aria-controls="download-activity-popover"
+                aria-expanded="false"
+              >
+                <span class="download-activity-icon" aria-hidden="true"></span>
+                <span id="download-activity-count" class="download-activity-count" hidden>0</span>
+              </button>
+              <section
+                id="download-activity-popover"
+                class="download-activity-popover"
+                role="dialog"
+                aria-label="Download activity"
+                hidden
+              >
+                <p class="download-activity-title">Downloads</p>
+                <div id="download-activity-list" class="download-activity-list"></div>
+              </section>
+            </div>
+            <button id="refresh-library-button" class="secondary-button refresh-button" type="button">Refresh</button>
+          </div>
         </header>
 
         <div id="library-grid" class="library-grid-scroll" aria-live="polite"></div>

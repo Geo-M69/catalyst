@@ -1,7 +1,23 @@
 export interface CollectionNameDialogController {
   close: () => void;
-  open: () => Promise<string | null>;
+  open: (options?: CollectionNameDialogOpenOptions) => Promise<string | null>;
 }
+
+interface CollectionNameDialogOpenOptions {
+  confirmLabel?: string;
+  description?: string;
+  initialValue?: string;
+  placeholder?: string;
+  title?: string;
+}
+
+const DEFAULT_OPEN_OPTIONS: Required<CollectionNameDialogOpenOptions> = {
+  confirmLabel: "Create",
+  description: "Name your new collection.",
+  initialValue: "",
+  placeholder: "Collection name",
+  title: "Create Collection",
+};
 
 export const createCollectionNameDialog = (): CollectionNameDialogController => {
   const backdrop = document.createElement("div");
@@ -17,11 +33,11 @@ export const createCollectionNameDialog = (): CollectionNameDialogController => 
   const title = document.createElement("h3");
   title.id = "collection-dialog-title";
   title.className = "collection-dialog-title";
-  title.textContent = "Create Collection";
+  title.textContent = DEFAULT_OPEN_OPTIONS.title;
 
   const description = document.createElement("p");
   description.className = "collection-dialog-description";
-  description.textContent = "Name your new collection.";
+  description.textContent = DEFAULT_OPEN_OPTIONS.description;
 
   const form = document.createElement("form");
   form.className = "collection-dialog-form";
@@ -30,7 +46,7 @@ export const createCollectionNameDialog = (): CollectionNameDialogController => 
   input.className = "collection-dialog-input text-input";
   input.type = "text";
   input.maxLength = 80;
-  input.placeholder = "Collection name";
+  input.placeholder = DEFAULT_OPEN_OPTIONS.placeholder;
   input.autocomplete = "off";
 
   const errorText = document.createElement("p");
@@ -48,7 +64,7 @@ export const createCollectionNameDialog = (): CollectionNameDialogController => 
   const createButton = document.createElement("button");
   createButton.type = "submit";
   createButton.className = "collection-dialog-create secondary-button";
-  createButton.textContent = "Create";
+  createButton.textContent = DEFAULT_OPEN_OPTIONS.confirmLabel;
 
   actions.append(cancelButton, createButton);
   form.append(input, errorText, actions);
@@ -118,14 +134,23 @@ export const createCollectionNameDialog = (): CollectionNameDialogController => 
 
   return {
     close,
-    open: () => {
+    open: (options = {}) => {
       if (resolver) {
         finish(null);
       }
 
+      const resolvedOptions = {
+        ...DEFAULT_OPEN_OPTIONS,
+        ...options,
+      };
       backdrop.hidden = false;
-      input.value = "";
+      title.textContent = resolvedOptions.title;
+      description.textContent = resolvedOptions.description;
+      createButton.textContent = resolvedOptions.confirmLabel;
+      input.placeholder = resolvedOptions.placeholder;
+      input.value = resolvedOptions.initialValue;
       setError(null);
+      input.setSelectionRange(0, input.value.length);
       input.focus();
 
       return new Promise((resolve) => {
