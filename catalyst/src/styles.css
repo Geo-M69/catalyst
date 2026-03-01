@@ -355,6 +355,10 @@ button:disabled {
   gap: 0.5rem;
 }
 
+.panel-left-heading {
+  gap: 0.65rem;
+}
+
 .panel-left .panel-title {
   font-family: var(--font-inter);
   font-size: clamp(1.35rem, 1.7vw, 1.55rem);
@@ -363,15 +367,164 @@ button:disabled {
   letter-spacing: 0.01em;
 }
 
-.panel-left #session-status {
-  font-size: 0.84rem;
-  line-height: 1.45;
-  color: rgba(255, 255, 255, 0.68);
-  padding: 0.55rem 0.7rem;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  background: rgba(255, 255, 255, 0.02);
+.session-account {
+  position: relative;
+}
+
+.session-account-button {
+  width: 100%;
+  min-height: 2.85rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.01)),
+    rgba(14, 15, 18, 0.88);
+  color: rgba(255, 255, 255, 0.9);
+  padding: 0.6rem 0.72rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  text-align: left;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+}
+
+@media (hover: hover) {
+  .session-account-button:hover {
+    border-color: rgba(255, 255, 255, 0.14);
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)),
+      rgba(16, 17, 20, 0.9);
+  }
+}
+
+.session-account-button:focus-visible {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.24);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 0 0 2px rgba(255, 255, 255, 0.08);
+}
+
+.session-account-button.is-error {
+  border-color: rgba(255, 134, 134, 0.42);
+  color: rgba(255, 184, 184, 0.98);
+}
+
+.session-account-label {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.85rem;
+  font-weight: 520;
+  line-height: 1.35;
+  color: inherit;
   overflow-wrap: anywhere;
+}
+
+.session-account-caret {
+  width: 0.64rem;
+  height: 0.42rem;
+  margin-top: 0.3rem;
+  background: linear-gradient(180deg, #b2b2b2, #8f8f8f);
+  clip-path: polygon(50% 100%, 0 0, 100% 0);
+  opacity: 0.82;
+  transition: transform 140ms ease, opacity 140ms ease;
+}
+
+.session-account.is-open .session-account-caret {
+  transform: rotate(180deg);
+  opacity: 0.98;
+}
+
+.session-account-menu {
+  position: absolute;
+  top: calc(100% + 0.32rem);
+  left: 0;
+  right: 0;
+  z-index: 35;
+  display: grid;
+  gap: 0.16rem;
+  padding: 0.3rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(16, 17, 20, 0.98);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 14px 26px rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(6px);
+}
+
+.session-account-menu[hidden] {
+  display: none;
+}
+
+.session-account-item {
+  width: 100%;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.88);
+  padding: 0.52rem 0.64rem;
+  text-align: left;
+  font-size: 0.88rem;
+  font-weight: 520;
+  line-height: 1.3;
+  box-shadow: none;
+}
+
+.session-account-item:disabled {
+  opacity: 0.88;
+  cursor: default;
+}
+
+.session-provider-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: rgba(255, 255, 255, 0.07);
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.session-provider-indicator {
+  width: 0.54rem;
+  height: 0.54rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.26);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14);
+}
+
+.session-provider-label {
+  font-size: 0.88rem;
+  font-weight: 520;
+}
+
+.session-provider-status.is-connected {
+  color: rgba(255, 255, 255, 0.94);
+}
+
+.session-provider-status.is-connected .session-provider-indicator {
+  background: #33c46f;
+  box-shadow:
+    0 0 0 1px rgba(51, 196, 111, 0.35),
+    0 0 0 4px rgba(51, 196, 111, 0.14);
+}
+
+.session-provider-status.is-disconnected .session-provider-indicator {
+  background: rgba(255, 255, 255, 0.26);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14);
+}
+
+@media (hover: hover) {
+  .session-account-item:not(:disabled):hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.96);
+  }
+}
+
+.session-account-item:not(:disabled):focus-visible {
+  outline: none;
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.98);
 }
 
 .panel-left #filter-panel {
@@ -708,6 +861,12 @@ button:disabled {
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.03);
   padding: 0.75rem;
+}
+
+.option-item-highlight {
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06);
 }
 
 .option-title {

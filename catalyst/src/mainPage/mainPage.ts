@@ -7,20 +7,36 @@ import type { GameResponse, LibraryResponse, PublicUser } from "./types";
 
 export {};
 
-const sessionStatusElement = document.getElementById("session-status");
+const sessionAccountElement = document.getElementById("session-account");
+const sessionAccountButton = document.getElementById("session-account-button");
+const sessionAccountLabelElement = document.getElementById("session-account-label");
+const sessionAccountMenuElement = document.getElementById("session-account-menu");
+const sessionAccountSteamButton = document.getElementById("session-account-steam");
+const sessionAccountSteamIndicator = document.getElementById("session-account-steam-indicator");
+const sessionAccountLinkedButton = document.getElementById("session-account-linked");
+const sessionAccountSettingsButton = document.getElementById("session-account-settings");
 const librarySummaryElement = document.getElementById("library-summary");
 const refreshLibraryButton = document.getElementById("refresh-library-button");
 const filterPanelElement = document.getElementById("filter-panel");
 const libraryGridElement = document.getElementById("library-grid");
 const optionsListElement = document.getElementById("options-list");
+const panelRightElement = document.querySelector(".panel-right");
 
 if (
-  !(sessionStatusElement instanceof HTMLElement)
+  !(sessionAccountElement instanceof HTMLElement)
+  || !(sessionAccountButton instanceof HTMLButtonElement)
+  || !(sessionAccountLabelElement instanceof HTMLElement)
+  || !(sessionAccountMenuElement instanceof HTMLElement)
+  || !(sessionAccountSteamButton instanceof HTMLButtonElement)
+  || !(sessionAccountSteamIndicator instanceof HTMLElement)
+  || !(sessionAccountLinkedButton instanceof HTMLButtonElement)
+  || !(sessionAccountSettingsButton instanceof HTMLButtonElement)
   || !(librarySummaryElement instanceof HTMLElement)
   || !(refreshLibraryButton instanceof HTMLButtonElement)
   || !(filterPanelElement instanceof HTMLElement)
   || !(libraryGridElement instanceof HTMLElement)
   || !(optionsListElement instanceof HTMLElement)
+  || !(panelRightElement instanceof HTMLElement)
 ) {
   throw new Error("Main page is missing required DOM elements");
 }
@@ -33,17 +49,75 @@ const GRID_CARD_WIDTH_MIN_PX = 140;
 const GRID_CARD_WIDTH_MAX_PX = 320;
 const GRID_CARD_WIDTH_STEP_PX = 14;
 const GRID_CARD_WIDTH_STORAGE_KEY = "catalyst.library.gridCardMinWidthPx";
+const APP_NAME = "Catalyst";
 
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
+let optionHighlightTimeoutId: number | null = null;
 
-const setSessionStatus = (message: string, isError = false): void => {
-  sessionStatusElement.textContent = message;
-  sessionStatusElement.classList.toggle("status-error", isError);
+const closeSessionAccountMenu = (): void => {
+  sessionAccountMenuElement.hidden = true;
+  sessionAccountElement.classList.remove("is-open");
+  sessionAccountButton.setAttribute("aria-expanded", "false");
+};
+
+const openSessionAccountMenu = (): void => {
+  sessionAccountMenuElement.hidden = false;
+  sessionAccountElement.classList.add("is-open");
+  sessionAccountButton.setAttribute("aria-expanded", "true");
+};
+
+const getSessionMenuActionItems = (): HTMLButtonElement[] => {
+  return [sessionAccountLinkedButton, sessionAccountSettingsButton].filter((button) => !button.disabled);
+};
+
+const setSessionStatus = (steamConnected: boolean, isError = false): void => {
+  sessionAccountLabelElement.textContent = APP_NAME;
+  sessionAccountSteamButton.classList.toggle("is-connected", steamConnected && !isError);
+  sessionAccountSteamButton.classList.toggle("is-disconnected", !steamConnected || isError);
+  sessionAccountSteamIndicator.setAttribute("aria-label", steamConnected && !isError ? "Steam connected" : "Steam disconnected");
+  sessionAccountButton.classList.toggle("is-error", isError);
+  sessionAccountLinkedButton.disabled = isError;
+  sessionAccountSettingsButton.disabled = isError;
+  closeSessionAccountMenu();
 };
 
 const setLibrarySummary = (message: string, isError = false): void => {
   librarySummaryElement.textContent = message;
   librarySummaryElement.classList.toggle("status-error", isError);
+};
+
+const focusOptionsPanel = (titleToHighlight: string | null): void => {
+  panelRightElement.scrollIntoView({ behavior: "smooth", block: "start" });
+
+  const optionItems = Array.from(optionsListElement.querySelectorAll(".option-item"));
+  const highlightedItem = optionItems.find((optionItem) => {
+    if (!(optionItem instanceof HTMLElement)) {
+      return false;
+    }
+
+    if (titleToHighlight === null) {
+      return true;
+    }
+
+    const titleElement = optionItem.querySelector(".option-title");
+    return titleElement?.textContent?.trim() === titleToHighlight;
+  });
+
+  if (!(highlightedItem instanceof HTMLElement)) {
+    return;
+  }
+
+  highlightedItem.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  highlightedItem.classList.add("option-item-highlight");
+
+  if (optionHighlightTimeoutId !== null) {
+    window.clearTimeout(optionHighlightTimeoutId);
+  }
+
+  optionHighlightTimeoutId = window.setTimeout(() => {
+    highlightedItem.classList.remove("option-item-highlight");
+    optionHighlightTimeoutId = null;
+  }, 1400);
 };
 
 const toErrorMessage = (error: unknown, fallbackMessage: string): string => {
@@ -145,6 +219,100 @@ const filterPanel = createFilterPanel(filterPanelElement, () => {
   renderFilteredLibrary();
 });
 
+sessionAccountButton.addEventListener("click", () => {
+  if (sessionAccountMenuElement.hidden) {
+    openSessionAccountMenu();
+    return;
+  }
+
+  closeSessionAccountMenu();
+});
+
+sessionAccountButton.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    closeSessionAccountMenu();
+    return;
+  }
+
+  if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    openSessionAccountMenu();
+    const firstActionItem = getSessionMenuActionItems()[0];
+    firstActionItem?.focus();
+  }
+});
+
+sessionAccountMenuElement.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeSessionAccountMenu();
+    sessionAccountButton.focus();
+    return;
+  }
+
+  if (event.key === "Tab") {
+    closeSessionAccountMenu();
+    return;
+  }
+
+  const actionItems = getSessionMenuActionItems();
+  if (actionItems.length === 0) {
+    return;
+  }
+
+  const activeElement = document.activeElement;
+  if (!(activeElement instanceof HTMLButtonElement)) {
+    return;
+  }
+
+  const focusedIndex = actionItems.indexOf(activeElement);
+  if (focusedIndex < 0) {
+    return;
+  }
+
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    const nextIndex = (focusedIndex + 1) % actionItems.length;
+    actionItems[nextIndex].focus();
+    return;
+  }
+
+  if (event.key === "ArrowUp") {
+    event.preventDefault();
+    const previousIndex = (focusedIndex - 1 + actionItems.length) % actionItems.length;
+    actionItems[previousIndex].focus();
+    return;
+  }
+
+  if (event.key === "Home") {
+    event.preventDefault();
+    actionItems[0].focus();
+    return;
+  }
+
+  if (event.key === "End") {
+    event.preventDefault();
+    actionItems[actionItems.length - 1].focus();
+  }
+});
+
+document.addEventListener("pointerdown", (event) => {
+  const target = event.target;
+  if (target instanceof Node && !sessionAccountElement.contains(target)) {
+    closeSessionAccountMenu();
+  }
+});
+
+sessionAccountLinkedButton.addEventListener("click", () => {
+  closeSessionAccountMenu();
+  focusOptionsPanel("Connected Accounts");
+});
+
+sessionAccountSettingsButton.addEventListener("click", () => {
+  closeSessionAccountMenu();
+  focusOptionsPanel(null);
+});
+
 const refreshLibrary = async (): Promise<void> => {
   if (isLoadingLibrary) {
     return;
@@ -178,10 +346,11 @@ const refreshSession = async (): Promise<boolean> => {
       return false;
     }
 
-    setSessionStatus(`Signed in as ${session.email}.`);
+    setSessionStatus(session.steamLinked);
     return true;
   } catch (error) {
-    setSessionStatus(toErrorMessage(error, "Could not load session data."), true);
+    console.error(toErrorMessage(error, "Could not load session data."));
+    setSessionStatus(false, true);
     return false;
   }
 };
