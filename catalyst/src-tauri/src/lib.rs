@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     io::{Read, Write},
     net::{TcpListener, TcpStream},
@@ -23,7 +23,10 @@ use uuid::Uuid;
 const STEAM_OPENID_ENDPOINT: &str = "https://steamcommunity.com/openid/login";
 const STEAM_WEB_API_ENDPOINT: &str =
     "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/";
+const STEAM_APP_DETAILS_ENDPOINT: &str = "https://store.steampowered.com/api/appdetails";
 const STEAM_CALLBACK_TIMEOUT: Duration = Duration::from_secs(180);
+const STEAM_APP_DETAILS_BATCH_SIZE: usize = 75;
+const STEAM_APP_METADATA_CACHE_TTL_HOURS: i64 = 24 * 7;
 const SESSION_TTL_DAYS: i64 = 30;
 
 struct AppState {
@@ -61,6 +64,7 @@ struct AuthUserRow {
 struct LibraryGameInput {
     external_id: String,
     name: String,
+    kind: String,
     playtime_minutes: i64,
     artwork_url: Option<String>,
     last_synced_at: String,
@@ -101,6 +105,7 @@ struct GameResponse {
     provider: String,
     external_id: String,
     name: String,
+    kind: String,
     playtime_minutes: i64,
     artwork_url: Option<String>,
     last_synced_at: String,
@@ -569,25 +574,212 @@ fn sync_steam_games_for_user(
         .json::<SteamOwnedGamesApiResponse>()
         .map_err(|error| format!("Failed to decode Steam owned games response: {error}"))?;
 
-    let games = payload
+    let steam_owned_games = payload
         .response
         .and_then(|response| response.games)
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let resolved_kinds = resolve_steam_game_kinds(connection, client, &steam_owned_games)?;
+    let games = steam_owned_games
         .into_iter()
-        .map(map_steam_game)
+        .map(|game| {
+            let resolved_kind = resolved_kinds.get(&game.appid).map(String::as_str);
+            map_steam_game(game, resolved_kind)
+        })
         .collect::<Vec<_>>();
 
     replace_provider_games(connection, &user.id, "steam", &games)?;
     Ok(games.len())
 }
 
-fn map_steam_game(game: SteamOwnedGame) -> LibraryGameInput {
+fn resolve_steam_game_kinds(
+    connection: &Connection,
+    client: &Client,
+    games: &[SteamOwnedGame],
+) -> Result<HashMap<u64, String>, String> {
+    let stale_before = Utc::now() - ChronoDuration::hours(STEAM_APP_METADATA_CACHE_TTL_HOURS);
+    let mut kinds_by_app_id = HashMap::new();
+    let mut uncached_app_ids = Vec::new();
+    let mut seen_app_ids = HashSet::new();
+
+    for game in games {
+        if !seen_app_ids.insert(game.appid) {
+            continue;
+        }
+
+        if let Some(cached_type) = find_cached_steam_app_type(connection, game.appid, stale_before)?
+        {
+            kinds_by_app_id.insert(
+                game.appid,
+                steam_kind_from_app_type(&cached_type).to_owned(),
+            );
+        } else {
+            uncached_app_ids.push(game.appid);
+        }
+    }
+
+    for app_id_batch in uncached_app_ids.chunks(STEAM_APP_DETAILS_BATCH_SIZE) {
+        let fetched_types = match fetch_steam_app_types_batch(client, app_id_batch) {
+            Ok(types) => types,
+            Err(_) => continue,
+        };
+
+        for (app_id, app_type) in fetched_types {
+            cache_steam_app_type(connection, app_id, &app_type)?;
+            kinds_by_app_id.insert(app_id, steam_kind_from_app_type(&app_type).to_owned());
+        }
+    }
+
+    Ok(kinds_by_app_id)
+}
+
+fn find_cached_steam_app_type(
+    connection: &Connection,
+    app_id: u64,
+    stale_before: chrono::DateTime<Utc>,
+) -> Result<Option<String>, String> {
+    let cached = connection
+        .query_row(
+            "SELECT app_type, fetched_at FROM steam_app_metadata WHERE app_id = ?1",
+            params![app_id.to_string()],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|error| format!("Failed to query cached Steam app metadata: {error}"))?;
+
+    let Some((app_type, fetched_at)) = cached else {
+        return Ok(None);
+    };
+
+    let is_fresh = chrono::DateTime::parse_from_rfc3339(&fetched_at)
+        .map(|timestamp| timestamp.with_timezone(&Utc) >= stale_before)
+        .unwrap_or(false);
+    if !is_fresh {
+        return Ok(None);
+    }
+
+    let normalized_type = normalize_steam_app_type(&app_type);
+    if normalized_type.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(normalized_type))
+}
+
+fn cache_steam_app_type(
+    connection: &Connection,
+    app_id: u64,
+    app_type: &str,
+) -> Result<(), String> {
+    let normalized_type = normalize_steam_app_type(app_type);
+    if normalized_type.is_empty() {
+        return Ok(());
+    }
+
+    connection
+        .execute(
+            "
+            INSERT INTO steam_app_metadata (app_id, app_type, fetched_at)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(app_id) DO UPDATE SET
+              app_type = excluded.app_type,
+              fetched_at = excluded.fetched_at
+            ",
+            params![app_id.to_string(), normalized_type, Utc::now().to_rfc3339()],
+        )
+        .map_err(|error| format!("Failed to cache Steam app metadata: {error}"))?;
+
+    Ok(())
+}
+
+fn fetch_steam_app_types_batch(
+    client: &Client,
+    app_id_batch: &[u64],
+) -> Result<HashMap<u64, String>, String> {
+    if app_id_batch.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let app_ids = app_id_batch
+        .iter()
+        .map(u64::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut request_url = Url::parse(STEAM_APP_DETAILS_ENDPOINT)
+        .map_err(|error| format!("Failed to parse Steam app details endpoint: {error}"))?;
+    request_url
+        .query_pairs_mut()
+        .append_pair("appids", &app_ids);
+
+    let response = client
+        .get(request_url)
+        .send()
+        .map_err(|error| format!("Steam app details request failed: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Steam app details request failed with status {}",
+            response.status()
+        ));
+    }
+
+    let payload = response
+        .json::<serde_json::Value>()
+        .map_err(|error| format!("Failed to decode Steam app details response: {error}"))?;
+
+    let mut app_types = HashMap::new();
+    for app_id in app_id_batch {
+        let key = app_id.to_string();
+        let Some(entry) = payload.get(&key) else {
+            continue;
+        };
+        let Some(true) = entry.get("success").and_then(serde_json::Value::as_bool) else {
+            continue;
+        };
+
+        let app_type = entry
+            .get("data")
+            .and_then(|value| value.get("type"))
+            .and_then(serde_json::Value::as_str)
+            .map(normalize_steam_app_type)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| String::from("unknown"));
+
+        app_types.insert(*app_id, app_type);
+    }
+
+    Ok(app_types)
+}
+
+fn normalize_steam_app_type(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
+fn steam_kind_from_app_type(app_type: &str) -> &'static str {
+    match normalize_steam_app_type(app_type).as_str() {
+        "game" => "game",
+        "demo" => "demo",
+        "dlc" => "dlc",
+        _ => "unknown",
+    }
+}
+
+fn map_steam_game(game: SteamOwnedGame, resolved_kind: Option<&str>) -> LibraryGameInput {
     let external_id = game.appid.to_string();
-    let name = game
+    let normalized_name = game
         .name
-        .map(|raw_name| raw_name.trim().to_owned())
-        .filter(|value| !value.is_empty())
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let name = normalized_name
+        .map(str::to_owned)
         .unwrap_or_else(|| format!("Steam App {external_id}"));
+    let fallback_kind = normalized_name
+        .map(classify_steam_game_kind)
+        .unwrap_or("unknown");
+    let kind = resolved_kind
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "unknown")
+        .unwrap_or(fallback_kind)
+        .to_owned();
     let artwork_url = game
         .img_logo_url
         .as_deref()
@@ -613,10 +805,36 @@ fn map_steam_game(game: SteamOwnedGame) -> LibraryGameInput {
     LibraryGameInput {
         external_id,
         name,
+        kind,
         playtime_minutes: game.playtime_forever.unwrap_or(0),
         artwork_url,
         last_synced_at: Utc::now().to_rfc3339(),
     }
+}
+
+fn classify_steam_game_kind(name: &str) -> &'static str {
+    let normalized = name.to_ascii_lowercase();
+    let contains_word = |needle: &str| {
+        normalized
+            .split(|character: char| !character.is_ascii_alphanumeric())
+            .any(|token| token == needle)
+    };
+
+    if contains_word("demo") {
+        return "demo";
+    }
+
+    if contains_word("dlc")
+        || normalized.contains("season pass")
+        || normalized.contains("expansion pass")
+        || normalized.contains("add-on")
+        || normalized.contains("add on")
+        || normalized.contains("soundtrack")
+    {
+        return "dlc";
+    }
+
+    "game"
 }
 
 fn replace_provider_games(
@@ -634,7 +852,7 @@ fn replace_provider_games(
 
     let mut insert = connection
         .prepare(
-            "INSERT INTO games (user_id, provider, external_id, name, playtime_minutes, artwork_url, last_synced_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO games (user_id, provider, external_id, name, kind, playtime_minutes, artwork_url, last_synced_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )
         .map_err(|error| format!("Failed to prepare game insert statement: {error}"))?;
 
@@ -645,6 +863,7 @@ fn replace_provider_games(
                 provider,
                 game.external_id,
                 game.name,
+                game.kind,
                 game.playtime_minutes,
                 game.artwork_url,
                 game.last_synced_at
@@ -658,7 +877,7 @@ fn replace_provider_games(
 fn list_games_by_user(connection: &Connection, user_id: &str) -> Result<Vec<GameResponse>, String> {
     let mut statement = connection
         .prepare(
-            "SELECT provider, external_id, name, playtime_minutes, artwork_url, last_synced_at FROM games WHERE user_id = ?1 ORDER BY name COLLATE NOCASE ASC",
+            "SELECT provider, external_id, name, kind, playtime_minutes, artwork_url, last_synced_at FROM games WHERE user_id = ?1 ORDER BY name COLLATE NOCASE ASC",
         )
         .map_err(|error| format!("Failed to prepare library query: {error}"))?;
 
@@ -671,9 +890,10 @@ fn list_games_by_user(connection: &Connection, user_id: &str) -> Result<Vec<Game
                 provider,
                 external_id,
                 name: row.get(2)?,
-                playtime_minutes: row.get(3)?,
-                artwork_url: row.get(4)?,
-                last_synced_at: row.get(5)?,
+                kind: row.get(3)?,
+                playtime_minutes: row.get(4)?,
+                artwork_url: row.get(5)?,
+                last_synced_at: row.get(6)?,
             })
         })
         .map_err(|error| format!("Failed to query library rows: {error}"))?;
@@ -1077,6 +1297,7 @@ fn initialize_database(db_path: &Path) -> Result<(), String> {
               provider TEXT NOT NULL,
               external_id TEXT NOT NULL,
               name TEXT NOT NULL,
+              kind TEXT NOT NULL DEFAULT 'unknown',
               playtime_minutes INTEGER NOT NULL,
               artwork_url TEXT,
               last_synced_at TEXT NOT NULL,
@@ -1086,11 +1307,55 @@ fn initialize_database(db_path: &Path) -> Result<(), String> {
 
             CREATE INDEX IF NOT EXISTS idx_games_user_id ON games(user_id);
             CREATE INDEX IF NOT EXISTS idx_games_provider ON games(provider);
+
+            CREATE TABLE IF NOT EXISTS steam_app_metadata (
+              app_id TEXT PRIMARY KEY,
+              app_type TEXT NOT NULL,
+              fetched_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_steam_app_metadata_fetched_at ON steam_app_metadata(fetched_at);
             ",
         )
         .map_err(|error| format!("Failed to run SQLite migrations: {error}"))?;
+    migrate_games_table(&connection)?;
 
     Ok(())
+}
+
+fn migrate_games_table(connection: &Connection) -> Result<(), String> {
+    if games_table_has_kind_column(connection)? {
+        return Ok(());
+    }
+
+    connection
+        .execute(
+            "ALTER TABLE games ADD COLUMN kind TEXT NOT NULL DEFAULT 'unknown'",
+            [],
+        )
+        .map_err(|error| format!("Failed to migrate games table with kind column: {error}"))?;
+
+    Ok(())
+}
+
+fn games_table_has_kind_column(connection: &Connection) -> Result<bool, String> {
+    let mut statement = connection
+        .prepare("PRAGMA table_info(games)")
+        .map_err(|error| format!("Failed to inspect games table schema: {error}"))?;
+
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|error| format!("Failed to query games table schema: {error}"))?;
+
+    for row in rows {
+        let column_name =
+            row.map_err(|error| format!("Failed to decode games table schema row: {error}"))?;
+        if column_name == "kind" {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

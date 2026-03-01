@@ -43,6 +43,7 @@ if (
 
 let allGames: GameResponse[] = [];
 let isLoadingLibrary = false;
+let steamLinked = false;
 const GRID_CARD_WIDTH_CSS_VAR = "--game-grid-card-min-width";
 const GRID_CARD_WIDTH_DEFAULT_PX = 180;
 const GRID_CARD_WIDTH_MIN_PX = 140;
@@ -71,6 +72,7 @@ const getSessionMenuActionItems = (): HTMLButtonElement[] => {
 };
 
 const setSessionStatus = (steamConnected: boolean, isError = false): void => {
+  steamLinked = steamConnected && !isError;
   sessionAccountLabelElement.textContent = APP_NAME;
   sessionAccountSteamButton.classList.toggle("is-connected", steamConnected && !isError);
   sessionAccountSteamButton.classList.toggle("is-disconnected", !steamConnected || isError);
@@ -313,7 +315,7 @@ sessionAccountSettingsButton.addEventListener("click", () => {
   focusOptionsPanel(null);
 });
 
-const refreshLibrary = async (): Promise<void> => {
+const refreshLibrary = async (syncBeforeLoad = false): Promise<void> => {
   if (isLoadingLibrary) {
     return;
   }
@@ -321,6 +323,14 @@ const refreshLibrary = async (): Promise<void> => {
   try {
     setLibraryLoadingState(true);
     setLibrarySummary("Loading library...");
+
+    if (syncBeforeLoad && steamLinked) {
+      try {
+        await invoke("sync_steam_library");
+      } catch (error) {
+        console.error(toErrorMessage(error, "Steam sync failed. Loading cached library."));
+      }
+    }
 
     const library = await invoke<LibraryResponse>("get_library");
     allGames = library.games;
@@ -356,7 +366,7 @@ const refreshSession = async (): Promise<boolean> => {
 };
 
 refreshLibraryButton.addEventListener("click", () => {
-  void refreshLibrary();
+  void refreshLibrary(true);
 });
 
 const initialize = async (): Promise<void> => {

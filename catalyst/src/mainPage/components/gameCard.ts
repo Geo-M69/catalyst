@@ -33,6 +33,19 @@ const initialsFromName = (name: string): string => {
   return words.slice(0, 2).map((part) => part[0]?.toUpperCase() ?? "").join("") || "?";
 };
 
+const formatKind = (kind: GameResponse["kind"]): string => {
+  if (kind === "demo") {
+    return "Demo";
+  }
+  if (kind === "dlc") {
+    return "DLC";
+  }
+  if (kind === "unknown") {
+    return "Unknown";
+  }
+  return "Game";
+};
+
 const appendPlaceholder = (container: HTMLElement, gameName: string): void => {
   const placeholder = document.createElement("div");
   placeholder.className = "game-card-placeholder";
@@ -105,7 +118,7 @@ export const createGameCard = (game: GameResponse): HTMLElement => {
 
   const provider = document.createElement("p");
   provider.className = "game-card-meta";
-  provider.textContent = game.provider.toUpperCase();
+  provider.textContent = `${game.provider.toUpperCase()} (${formatKind(game.kind)})`;
 
   const playtime = document.createElement("p");
   playtime.className = "game-card-meta";

@@ -10,6 +10,7 @@ export interface GameResponse {
   provider: string;
   externalId: string;
   name: string;
+  kind: GameKind;
   playtimeMinutes: number;
   artworkUrl?: string;
   lastSyncedAt: string;
@@ -35,6 +36,8 @@ export type FilterByOption =
   | "never-played";
 export type PlatformFilter = "all" | "windows" | "macos" | "linux";
 export type SourceFilter = "all" | "steam" | "epic-games";
+export type GameKind = "game" | "demo" | "dlc" | "unknown";
+export type GameKindFilter = "all" | GameKind;
 export type GenreFilter = "all" | "action" | "rpg" | "strategy" | "simulation" | "fps";
 export type SortOption =
   | "alphabetical"
@@ -47,6 +50,7 @@ export interface LibraryFilters {
   filterBy: FilterByOption;
   platform: PlatformFilter;
   source: SourceFilter;
+  kind: GameKindFilter;
   genre: GenreFilter;
   sortBy: SortOption;
 }

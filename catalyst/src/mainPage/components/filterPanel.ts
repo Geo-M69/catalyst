@@ -1,5 +1,6 @@
 import type {
   FilterByOption,
+  GameKindFilter,
   GenreFilter,
   LibraryFilters,
   PlatformFilter,
@@ -12,6 +13,7 @@ const DEFAULT_FILTERS: LibraryFilters = {
   filterBy: "all",
   platform: "all",
   source: "all",
+  kind: "all",
   genre: "all",
   sortBy: "alphabetical",
 };
@@ -93,6 +95,28 @@ const FILTER_TEMPLATE = `
         <button type="button" class="filter-select-option" role="option" data-value="all">All</button>
         <button type="button" class="filter-select-option" role="option" data-value="steam">Steam</button>
         <button type="button" class="filter-select-option" role="option" data-value="epic-games">Epic Games</button>
+      </div>
+    </div>
+
+    <div id="kind-field" class="filter-field filter-select-field">
+      <label class="field-label filter-field-label" for="kind-filter">Type</label>
+      <button
+        id="kind-filter"
+        class="text-input filter-input filter-select-trigger"
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded="false"
+        aria-controls="kind-menu"
+      >
+        <span class="filter-select-trigger-text">All</span>
+        <span class="filter-select-trigger-caret" aria-hidden="true"></span>
+      </button>
+      <div id="kind-menu" class="filter-select-menu" role="listbox" hidden>
+        <button type="button" class="filter-select-option" role="option" data-value="all">All</button>
+        <button type="button" class="filter-select-option" role="option" data-value="game">Games</button>
+        <button type="button" class="filter-select-option" role="option" data-value="demo">Demos</button>
+        <button type="button" class="filter-select-option" role="option" data-value="dlc">DLCs</button>
+        <button type="button" class="filter-select-option" role="option" data-value="unknown">Unknown</button>
       </div>
     </div>
 
@@ -326,6 +350,7 @@ export const createFilterPanel = (
   const filterByField = container.querySelector("#filter-by-field");
   const platformField = container.querySelector("#platform-field");
   const sourceField = container.querySelector("#source-field");
+  const kindField = container.querySelector("#kind-field");
   const genreField = container.querySelector("#genre-field");
   const sortByField = container.querySelector("#sort-by-field");
   const clearButton = container.querySelector("#clear-filters-button");
@@ -335,6 +360,7 @@ export const createFilterPanel = (
     || !(filterByField instanceof HTMLElement)
     || !(platformField instanceof HTMLElement)
     || !(sourceField instanceof HTMLElement)
+    || !(kindField instanceof HTMLElement)
     || !(genreField instanceof HTMLElement)
     || !(sortByField instanceof HTMLElement)
     || !(clearButton instanceof HTMLButtonElement)
@@ -356,10 +382,11 @@ export const createFilterPanel = (
   const filterBySelect = createCustomSelect<FilterByOption>(filterByField, notifyChange, closeAllSelectMenus);
   const platformSelect = createCustomSelect<PlatformFilter>(platformField, notifyChange, closeAllSelectMenus);
   const sourceSelect = createCustomSelect<SourceFilter>(sourceField, notifyChange, closeAllSelectMenus);
+  const kindSelect = createCustomSelect<GameKindFilter>(kindField, notifyChange, closeAllSelectMenus);
   const genreSelect = createCustomSelect<GenreFilter>(genreField, notifyChange, closeAllSelectMenus);
   const sortBySelect = createCustomSelect<SortOption>(sortByField, notifyChange, closeAllSelectMenus);
 
-  selectControllers.push(filterBySelect, platformSelect, sourceSelect, genreSelect, sortBySelect);
+  selectControllers.push(filterBySelect, platformSelect, sourceSelect, kindSelect, genreSelect, sortBySelect);
 
   const buildFiltersFromForm = (): LibraryFilters => {
     return {
@@ -367,6 +394,7 @@ export const createFilterPanel = (
       filterBy: filterBySelect.getValue(),
       platform: platformSelect.getValue(),
       source: sourceSelect.getValue(),
+      kind: kindSelect.getValue(),
       genre: genreSelect.getValue(),
       sortBy: sortBySelect.getValue(),
     };
@@ -379,6 +407,7 @@ export const createFilterPanel = (
     filterBySelect.setValue(DEFAULT_FILTERS.filterBy, false);
     platformSelect.setValue(DEFAULT_FILTERS.platform, false);
     sourceSelect.setValue(DEFAULT_FILTERS.source, false);
+    kindSelect.setValue(DEFAULT_FILTERS.kind, false);
     genreSelect.setValue(DEFAULT_FILTERS.genre, false);
     sortBySelect.setValue(DEFAULT_FILTERS.sortBy, false);
     closeAllSelectMenus();

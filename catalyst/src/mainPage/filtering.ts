@@ -43,6 +43,7 @@ export const applyLibraryFilters = (
       searchTerm.length > 0
       && !normalize(game.name).includes(searchTerm)
       && !normalize(game.provider).includes(searchTerm)
+      && !normalize(game.kind).includes(searchTerm)
     ) {
       return false;
     }
@@ -78,6 +79,10 @@ export const applyLibraryFilters = (
     }
 
     if (filters.source !== "all" && source !== filters.source) {
+      return false;
+    }
+
+    if (filters.kind !== "all" && game.kind !== filters.kind) {
       return false;
     }
 
