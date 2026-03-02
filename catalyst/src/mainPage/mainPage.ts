@@ -32,9 +32,7 @@ const libraryViewPickerMenuElement = document.getElementById("library-view-picke
 const librarySummaryElement = document.getElementById("library-summary");
 const refreshLibraryButton = document.getElementById("refresh-library-button");
 const downloadActivityElement = document.getElementById("download-activity");
-const downloadActivityButton = document.getElementById("download-activity-button");
 const downloadActivityCountElement = document.getElementById("download-activity-count");
-const downloadActivityPopoverElement = document.getElementById("download-activity-popover");
 const downloadActivityListElement = document.getElementById("download-activity-list");
 const filterPanelElement = document.getElementById("filter-panel");
 const libraryGridElement = document.getElementById("library-grid");
@@ -54,9 +52,7 @@ if (
   || !(librarySummaryElement instanceof HTMLElement)
   || !(refreshLibraryButton instanceof HTMLButtonElement)
   || !(downloadActivityElement instanceof HTMLElement)
-  || !(downloadActivityButton instanceof HTMLButtonElement)
   || !(downloadActivityCountElement instanceof HTMLElement)
-  || !(downloadActivityPopoverElement instanceof HTMLElement)
   || !(downloadActivityListElement instanceof HTMLElement)
   || !(filterPanelElement instanceof HTMLElement)
   || !(libraryGridElement instanceof HTMLElement)
@@ -196,13 +192,13 @@ const setSessionStatus = (steamConnected: boolean, isError = false): void => {
   sessionAccountButton.classList.toggle("is-error", isError);
   sessionAccountManageButton.disabled = isError;
   sessionAccountSignOutButton.disabled = false;
-  downloadActivityButton.disabled = isError || !steamLinked;
+  downloadActivityElement.classList.toggle("is-disabled", isError || !steamLinked);
   if (!steamLinked) {
     stopDownloadPolling();
     activeDownloads = [];
     renderDownloadActivity();
-    closeDownloadActivityPopover();
   } else {
+    renderDownloadActivity();
     startDownloadPolling();
   }
   closeSessionAccountMenu();
@@ -274,24 +270,11 @@ const normalizeDownloadPercent = (download: SteamDownloadProgressPayload): numbe
   return null;
 };
 
-const closeDownloadActivityPopover = (): void => {
-  downloadActivityPopoverElement.hidden = true;
-  downloadActivityElement.classList.remove("is-open");
-  downloadActivityButton.setAttribute("aria-expanded", "false");
-};
-
-const openDownloadActivityPopover = (): void => {
-  downloadActivityPopoverElement.hidden = false;
-  downloadActivityElement.classList.add("is-open");
-  downloadActivityButton.setAttribute("aria-expanded", "true");
-};
-
 const renderDownloadActivity = (): void => {
   const activeCount = activeDownloads.length;
-  downloadActivityButton.classList.toggle("has-active-downloads", activeCount > 0);
   downloadActivityCountElement.hidden = activeCount <= 0;
   downloadActivityCountElement.textContent = `${activeCount}`;
-  downloadActivityButton.setAttribute(
+  downloadActivityElement.setAttribute(
     "aria-label",
     activeCount > 0 ? `${activeCount} active download${activeCount === 1 ? "" : "s"}` : "Downloads"
   );
@@ -300,7 +283,9 @@ const renderDownloadActivity = (): void => {
   if (activeCount === 0) {
     const emptyMessage = document.createElement("p");
     emptyMessage.className = "download-activity-empty";
-    emptyMessage.textContent = "No active downloads";
+    emptyMessage.textContent = steamLinked
+      ? "No active downloads"
+      : "Connect Steam to view download activity";
     downloadActivityListElement.append(emptyMessage);
     return;
   }
@@ -456,13 +441,9 @@ const applyLibraryAspectSoftLock = (): void => {
     }
   }
 
-  // Use a "cover" fit so the main layout always fills the body without bars.
-  let frameWidth = viewportWidth;
-  let frameHeight = Math.ceil(frameWidth / targetAspect.ratio);
-  if (frameHeight < viewportHeight) {
-    frameHeight = viewportHeight;
-    frameWidth = Math.ceil(frameHeight * targetAspect.ratio);
-  }
+  // Fill the viewport to avoid both clipping and side letterboxing.
+  const frameWidth = viewportWidth;
+  const frameHeight = viewportHeight;
 
   libraryAspectShellElement.style.setProperty("--library-aspect-width", `${Math.max(frameWidth, 1)}px`);
   libraryAspectShellElement.style.setProperty("--library-aspect-height", `${Math.max(frameHeight, 1)}px`);
@@ -1279,7 +1260,6 @@ closeGameContextMenu = gameContextMenu.closeMenu;
 sessionAccountButton.addEventListener("click", () => {
   if (sessionAccountMenuElement.hidden) {
     closeLibraryViewPicker();
-    closeDownloadActivityPopover();
     openSessionAccountMenu();
     return;
   }
@@ -1296,7 +1276,6 @@ sessionAccountButton.addEventListener("keydown", (event) => {
   if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") {
     event.preventDefault();
     closeLibraryViewPicker();
-    closeDownloadActivityPopover();
     openSessionAccountMenu();
     const firstActionItem = getSessionMenuActionItems()[0];
     firstActionItem?.focus();
@@ -1360,7 +1339,6 @@ sessionAccountMenuElement.addEventListener("keydown", (event) => {
 libraryViewPickerButton.addEventListener("click", () => {
   if (libraryViewPickerMenuElement.hidden) {
     closeSessionAccountMenu();
-    closeDownloadActivityPopover();
     openLibraryViewPicker();
     focusSelectedLibraryViewOption();
     return;
@@ -1378,7 +1356,6 @@ libraryViewPickerButton.addEventListener("keydown", (event) => {
   if (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Enter" || event.key === " ") {
     event.preventDefault();
     closeSessionAccountMenu();
-    closeDownloadActivityPopover();
     openLibraryViewPicker();
     focusSelectedLibraryViewOption();
   }
@@ -1442,27 +1419,6 @@ libraryViewPickerMenuElement.addEventListener("keydown", (event) => {
   }
 });
 
-downloadActivityButton.addEventListener("click", () => {
-  if (downloadActivityButton.disabled) {
-    return;
-  }
-
-  if (downloadActivityPopoverElement.hidden) {
-    closeLibraryViewPicker();
-    closeSessionAccountMenu();
-    openDownloadActivityPopover();
-    return;
-  }
-
-  closeDownloadActivityPopover();
-});
-
-downloadActivityButton.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") {
-    closeDownloadActivityPopover();
-  }
-});
-
 document.addEventListener("pointerdown", (event) => {
   const target = event.target;
   if (!(target instanceof Node)) {
@@ -1473,10 +1429,6 @@ document.addEventListener("pointerdown", (event) => {
     closeSessionAccountMenu();
   }
 
-  if (!downloadActivityElement.contains(target)) {
-    closeDownloadActivityPopover();
-  }
-
   if (!libraryViewPickerElement.contains(target)) {
     closeLibraryViewPicker();
   }
@@ -1484,7 +1436,6 @@ document.addEventListener("pointerdown", (event) => {
 
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
-    closeDownloadActivityPopover();
     closeLibraryViewPicker();
   }
 });
@@ -1588,7 +1539,6 @@ const initialize = async (): Promise<void> => {
   closeLibraryViewPicker();
   setLibrarySummary("Loading library...");
   renderDownloadActivity();
-  closeDownloadActivityPopover();
 
   const hasSession = await refreshSession();
   if (!hasSession) {

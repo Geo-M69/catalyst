@@ -38,6 +38,13 @@
         </header>
 
         <div id="filter-panel"></div>
+        <section id="download-activity" class="download-activity download-activity-sidebar" aria-label="Download activity">
+          <div class="download-activity-header">
+            <p class="download-activity-title">Downloads</p>
+            <span id="download-activity-count" class="download-activity-count" hidden>0</span>
+          </div>
+          <div id="download-activity-list" class="download-activity-list"></div>
+        </section>
       </section>
 
       <section class="library-column panel-middle" aria-label="Library games grid">
@@ -79,30 +86,6 @@
             <p id="library-summary" class="status-message">Loading library...</p>
           </div>
           <div class="library-heading-actions">
-            <div id="download-activity" class="download-activity">
-              <button
-                id="download-activity-button"
-                class="secondary-button download-activity-button"
-                type="button"
-                aria-label="Downloads"
-                aria-haspopup="dialog"
-                aria-controls="download-activity-popover"
-                aria-expanded="false"
-              >
-                <span class="download-activity-icon" aria-hidden="true"></span>
-                <span id="download-activity-count" class="download-activity-count" hidden>0</span>
-              </button>
-              <section
-                id="download-activity-popover"
-                class="download-activity-popover"
-                role="dialog"
-                aria-label="Download activity"
-                hidden
-              >
-                <p class="download-activity-title">Downloads</p>
-                <div id="download-activity-list" class="download-activity-list"></div>
-              </section>
-            </div>
             <button id="refresh-library-button" class="secondary-button refresh-button" type="button">Refresh</button>
           </div>
         </header>
