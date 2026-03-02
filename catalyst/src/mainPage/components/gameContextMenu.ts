@@ -106,26 +106,39 @@ export const createGameContextMenu = ({
   collectionsButton.setAttribute("aria-haspopup", "menu");
   collectionsButton.setAttribute("aria-expanded", "false");
 
+  const manageButton = document.createElement("button");
+  manageButton.type = "button";
+  manageButton.className = "game-context-menu-item game-context-menu-has-submenu";
+  manageButton.textContent = "Manage";
+  manageButton.setAttribute("aria-haspopup", "menu");
+  manageButton.setAttribute("aria-expanded", "false");
+
   const propertiesButton = document.createElement("button");
   propertiesButton.type = "button";
   propertiesButton.className = "game-context-menu-item";
   propertiesButton.textContent = "Properties";
 
-  menu.append(primaryButton, favoriteButton, collectionsButton, propertiesButton);
+  menu.append(primaryButton, favoriteButton, collectionsButton, manageButton, propertiesButton);
 
   const collectionSubmenu = document.createElement("div");
   collectionSubmenu.className = "game-context-submenu";
   collectionSubmenu.setAttribute("role", "menu");
   collectionSubmenu.hidden = true;
 
-  document.body.append(menu, collectionSubmenu);
+  const manageSubmenu = document.createElement("div");
+  manageSubmenu.className = "game-context-submenu";
+  manageSubmenu.setAttribute("role", "menu");
+  manageSubmenu.hidden = true;
+
+  document.body.append(menu, collectionSubmenu, manageSubmenu);
 
   let activeCard: HTMLElement | null = null;
   let activeGame: GameResponse | null = null;
   let collectionActionButtons: HTMLButtonElement[] = [];
+  let manageActionButtons: HTMLButtonElement[] = [];
   let submenuRequestId = 0;
 
-  const mainActionButtons = [primaryButton, favoriteButton, collectionsButton, propertiesButton];
+  const mainActionButtons = [primaryButton, favoriteButton, collectionsButton, manageButton, propertiesButton];
 
   const closeCollectionSubmenu = (): void => {
     collectionSubmenu.hidden = true;
@@ -133,6 +146,14 @@ export const createGameContextMenu = ({
     collectionActionButtons = [];
     collectionsButton.setAttribute("aria-expanded", "false");
     collectionsButton.classList.remove("is-open");
+  };
+
+  const closeManageSubmenu = (): void => {
+    manageSubmenu.hidden = true;
+    manageSubmenu.replaceChildren();
+    manageActionButtons = [];
+    manageButton.setAttribute("aria-expanded", "false");
+    manageButton.classList.remove("is-open");
   };
 
   const closeMenu = (): void => {
@@ -143,6 +164,7 @@ export const createGameContextMenu = ({
     submenuRequestId += 1;
     menu.hidden = true;
     closeCollectionSubmenu();
+    closeManageSubmenu();
     activeGame = null;
     activeCard = null;
   };
@@ -174,6 +196,25 @@ export const createGameContextMenu = ({
 
     collectionSubmenu.style.left = `${left}px`;
     collectionSubmenu.style.top = `${top}px`;
+  };
+
+  const positionManageSubmenu = (): void => {
+    const menuRect = menu.getBoundingClientRect();
+    let left = menuRect.right + SUBMENU_GAP_PX;
+    if (left + manageSubmenu.offsetWidth + VIEWPORT_PADDING_PX > window.innerWidth) {
+      left = menuRect.left - manageSubmenu.offsetWidth - SUBMENU_GAP_PX;
+    }
+
+    const buttonRect = manageButton.getBoundingClientRect();
+    const preferredTop = buttonRect.top;
+    const maxTop = Math.max(
+      VIEWPORT_PADDING_PX,
+      window.innerHeight - manageSubmenu.offsetHeight - VIEWPORT_PADDING_PX
+    );
+    const top = clamp(preferredTop, VIEWPORT_PADDING_PX, maxTop);
+
+    manageSubmenu.style.left = `${left}px`;
+    manageSubmenu.style.top = `${top}px`;
   };
 
   const renderCollectionButtons = (
@@ -224,6 +265,36 @@ export const createGameContextMenu = ({
 
     collectionActionButtons = Array.from(
       collectionSubmenu.querySelectorAll("button")
+    ).filter((button): button is HTMLButtonElement => button instanceof HTMLButtonElement);
+  };
+
+  const renderManageButtons = (): void => {
+    manageSubmenu.replaceChildren();
+
+    const items = [
+      "Add desktop shortcut",
+      "Set custom artwork",
+      "Browse local files",
+      "Hide this game",
+      "Mark as Private",
+      "Uninstall",
+      "Back up game files...",
+    ];
+
+    for (const text of items) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "game-context-menu-item";
+      btn.textContent = text;
+      btn.addEventListener("click", () => {
+        // UI-only for now: close the menu when an action is chosen.
+        closeMenu();
+      });
+      manageSubmenu.append(btn);
+    }
+
+    manageActionButtons = Array.from(
+      manageSubmenu.querySelectorAll("button")
     ).filter((button): button is HTMLButtonElement => button instanceof HTMLButtonElement);
   };
 
@@ -281,10 +352,28 @@ export const createGameContextMenu = ({
     }
   };
 
+  const openManageSubmenu = (focusFirstButton: boolean): void => {
+    const game = activeGame;
+    if (!game || menu.hidden) {
+      return;
+    }
+
+    closeCollectionSubmenu();
+    renderManageButtons();
+    manageSubmenu.hidden = false;
+    manageButton.setAttribute("aria-expanded", "true");
+    manageButton.classList.add("is-open");
+    positionManageSubmenu();
+    if (focusFirstButton) {
+      manageActionButtons[0]?.focus();
+    }
+  };
+
   const openMenu = (game: GameResponse, card: HTMLElement, x: number, y: number): void => {
     activeGame = game;
     activeCard = card;
     closeCollectionSubmenu();
+    closeManageSubmenu();
     primaryButton.textContent = game.installed ? "Play" : "Install";
     favoriteButton.textContent = game.favorite ? "Remove from Favorites" : "Add to Favorites";
     menu.hidden = false;
@@ -304,6 +393,42 @@ export const createGameContextMenu = ({
     }
 
     void runMenuAction(() => actions.installGame(game), "Could not install game.");
+  });
+
+  manageSubmenu.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeManageSubmenu();
+      manageButton.focus();
+      return;
+    }
+
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      closeManageSubmenu();
+      manageButton.focus();
+      return;
+    }
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      focusCycledButton(manageActionButtons, document.activeElement, "next");
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      focusCycledButton(manageActionButtons, document.activeElement, "previous");
+      return;
+    }
+
+    if (event.key === "Enter" || event.key === " ") {
+      const activeElement = document.activeElement;
+      if (activeElement instanceof HTMLButtonElement && manageActionButtons.includes(activeElement)) {
+        event.preventDefault();
+        activeElement.click();
+      }
+    }
   });
 
   favoriteButton.addEventListener("click", () => {
@@ -336,15 +461,36 @@ export const createGameContextMenu = ({
     void openCollectionSubmenu(true);
   });
 
+  manageButton.addEventListener("click", () => {
+    if (!manageSubmenu.hidden) {
+      closeManageSubmenu();
+      return;
+    }
+
+    openManageSubmenu(true);
+  });
+
   collectionsButton.addEventListener("pointerenter", () => {
     if (!menu.hidden) {
       void openCollectionSubmenu(false);
     }
   });
 
+  manageButton.addEventListener("pointerenter", () => {
+    if (!menu.hidden) {
+      openManageSubmenu(false);
+    }
+  });
+
   menu.addEventListener("focusin", (event) => {
-    if (event.target instanceof HTMLButtonElement && event.target !== collectionsButton) {
-      closeCollectionSubmenu();
+    if (event.target instanceof HTMLButtonElement) {
+      if (event.target !== collectionsButton) {
+        closeCollectionSubmenu();
+      }
+
+      if (event.target !== manageButton) {
+        closeManageSubmenu();
+      }
     }
   });
 
@@ -372,6 +518,12 @@ export const createGameContextMenu = ({
     if (event.key === "ArrowRight" && document.activeElement === collectionsButton) {
       event.preventDefault();
       void openCollectionSubmenu(true);
+      return;
+    }
+
+    if (event.key === "ArrowRight" && document.activeElement === manageButton) {
+      event.preventDefault();
+      openManageSubmenu(true);
       return;
     }
 
@@ -466,7 +618,7 @@ export const createGameContextMenu = ({
       return;
     }
 
-    if (!menu.contains(target) && !collectionSubmenu.contains(target)) {
+    if (!menu.contains(target) && !collectionSubmenu.contains(target) && !manageSubmenu.contains(target)) {
       closeMenu();
     }
   });
