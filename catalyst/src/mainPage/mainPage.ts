@@ -76,6 +76,9 @@ const WHEEL_DELTA_LINE_HEIGHT_PX = 16;
 const GRID_CARD_WIDTH_STORAGE_KEY = "catalyst.library.gridCardMinWidthPx";
 const APP_NAME = "Catalyst";
 const DOWNLOAD_POLL_INTERVAL_MS = 2500;
+const DOWNLOAD_ETA_SMOOTHING_FACTOR = 0.35;
+const DOWNLOAD_ETA_SAMPLE_MIN_SECONDS = 0.5;
+const DOWNLOAD_ETA_STALE_MS = 15000;
 const TOAST_DURATION_MS = 3200;
 const BYTE_UNITS = ["B", "KB", "MB", "GB", "TB"];
 const LIBRARY_SOFT_LOCK_ASPECTS: ReadonlyArray<{ label: string; ratio: number }> = [
@@ -89,6 +92,7 @@ let closeGameContextMenu: (() => void) | null = null;
 let downloadPollTimer: number | null = null;
 let isDownloadPollInFlight = false;
 let activeDownloads: SteamDownloadProgressPayload[] = [];
+const downloadEtaByKey = new Map<string, DownloadEtaSnapshot>();
 let allCollections: CollectionResponse[] = [];
 
 type LibraryViewMode = "games" | "collections";
@@ -166,6 +170,13 @@ interface SteamDownloadProgressPayload {
   bytesDownloaded?: number;
   bytesTotal?: number;
   progressPercent?: number;
+  progressSource?: string;
+}
+
+interface DownloadEtaSnapshot {
+  lastBytesDownloaded: number;
+  lastSampleAtMs: number;
+  smoothedBytesPerSecond: number;
 }
 
 type GameInstallSizeEstimatePayload = number | null;
@@ -196,6 +207,7 @@ const setSessionStatus = (steamConnected: boolean, isError = false): void => {
   if (!steamLinked) {
     stopDownloadPolling();
     activeDownloads = [];
+    downloadEtaByKey.clear();
     renderDownloadActivity();
   } else {
     renderDownloadActivity();
@@ -232,7 +244,7 @@ const showLauncherToast = (message: string, variant: "info" | "error" = "info"):
 };
 
 const formatBytes = (sizeInBytes?: number): string | null => {
-  if (typeof sizeInBytes !== "number" || !Number.isFinite(sizeInBytes) || sizeInBytes <= 0) {
+  if (typeof sizeInBytes !== "number" || !Number.isFinite(sizeInBytes) || sizeInBytes < 0) {
     return null;
   }
 
@@ -243,8 +255,105 @@ const formatBytes = (sizeInBytes?: number): string | null => {
     unitIndex += 1;
   }
 
+  if (unitIndex === 0) {
+    return `${Math.round(value)} ${BYTE_UNITS[unitIndex]}`;
+  }
+
   const fractionDigits = value >= 100 ? 0 : value >= 10 ? 1 : 2;
   return `${value.toFixed(fractionDigits)} ${BYTE_UNITS[unitIndex]}`;
+};
+
+const isFiniteNonNegativeNumber = (value: unknown): value is number => {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+};
+
+const getDownloadEtaKey = (download: SteamDownloadProgressPayload): string => {
+  return `${download.provider}:${download.externalId}`;
+};
+
+const updateDownloadEtaSnapshots = (downloads: SteamDownloadProgressPayload[]): void => {
+  const nowMs = Date.now();
+  const activeKeys = new Set<string>();
+
+  for (const download of downloads) {
+    const key = getDownloadEtaKey(download);
+    activeKeys.add(key);
+
+    if (!isFiniteNonNegativeNumber(download.bytesDownloaded)) {
+      downloadEtaByKey.delete(key);
+      continue;
+    }
+
+    const currentBytesDownloaded = download.bytesDownloaded;
+    const previousSnapshot = downloadEtaByKey.get(key);
+    if (
+      !previousSnapshot
+      || currentBytesDownloaded < previousSnapshot.lastBytesDownloaded
+      || nowMs <= previousSnapshot.lastSampleAtMs
+    ) {
+      downloadEtaByKey.set(key, {
+        lastBytesDownloaded: currentBytesDownloaded,
+        lastSampleAtMs: nowMs,
+        smoothedBytesPerSecond: previousSnapshot?.smoothedBytesPerSecond ?? 0,
+      });
+      continue;
+    }
+
+    const elapsedSeconds = (nowMs - previousSnapshot.lastSampleAtMs) / 1000;
+    let smoothedBytesPerSecond = previousSnapshot.smoothedBytesPerSecond;
+    if (elapsedSeconds >= DOWNLOAD_ETA_SAMPLE_MIN_SECONDS) {
+      const deltaBytes = currentBytesDownloaded - previousSnapshot.lastBytesDownloaded;
+      if (deltaBytes > 0) {
+        const instantaneousBytesPerSecond = deltaBytes / elapsedSeconds;
+        if (Number.isFinite(instantaneousBytesPerSecond) && instantaneousBytesPerSecond > 0) {
+          smoothedBytesPerSecond = smoothedBytesPerSecond > 0
+            ? (
+                smoothedBytesPerSecond * (1 - DOWNLOAD_ETA_SMOOTHING_FACTOR)
+                + instantaneousBytesPerSecond * DOWNLOAD_ETA_SMOOTHING_FACTOR
+              )
+            : instantaneousBytesPerSecond;
+        }
+      }
+    }
+
+    downloadEtaByKey.set(key, {
+      lastBytesDownloaded: currentBytesDownloaded,
+      lastSampleAtMs: nowMs,
+      smoothedBytesPerSecond,
+    });
+  }
+
+  for (const key of [...downloadEtaByKey.keys()]) {
+    if (!activeKeys.has(key)) {
+      downloadEtaByKey.delete(key);
+    }
+  }
+};
+
+const getDownloadTransferRateLabel = (download: SteamDownloadProgressPayload): string | null => {
+  if (download.progressSource === "directory-estimate") {
+    return null;
+  }
+  const stateLabel = download.state.trim().toLocaleLowerCase();
+  if (!(stateLabel.includes("download") || stateLabel === "updating")) {
+    return null;
+  }
+
+  const etaSnapshot = downloadEtaByKey.get(getDownloadEtaKey(download));
+  if (!etaSnapshot || etaSnapshot.smoothedBytesPerSecond <= 0) {
+    return null;
+  }
+
+  if (Date.now() - etaSnapshot.lastSampleAtMs > DOWNLOAD_ETA_STALE_MS) {
+    return null;
+  }
+
+  const speedLabel = formatBytes(etaSnapshot.smoothedBytesPerSecond);
+  if (!speedLabel) {
+    return null;
+  }
+
+  return `${speedLabel}/s`;
 };
 
 const normalizeDownloadPercent = (download: SteamDownloadProgressPayload): number | null => {
@@ -330,19 +439,30 @@ const renderDownloadActivity = (): void => {
 
     const meta = document.createElement("p");
     meta.className = "download-activity-item-meta";
-    const downloadedLabel = formatBytes(download.bytesDownloaded);
+    const displayDownloadedBytes = isFiniteNonNegativeNumber(download.bytesDownloaded)
+      && isFiniteNonNegativeNumber(download.bytesTotal)
+      ? Math.min(download.bytesDownloaded, download.bytesTotal)
+      : download.bytesDownloaded;
+    const downloadedLabel = formatBytes(displayDownloadedBytes);
     const totalLabel = formatBytes(download.bytesTotal);
+    let metadataLabel: string;
     if (downloadedLabel && totalLabel) {
-      meta.textContent = normalizedPercent !== null
+      metadataLabel = normalizedPercent !== null
         ? `${downloadedLabel} / ${totalLabel} (${Math.round(normalizedPercent)}%)`
         : `${downloadedLabel} / ${totalLabel}`;
     } else if (totalLabel) {
-      meta.textContent = `Total ${totalLabel}`;
+      metadataLabel = `Total ${totalLabel}`;
     } else if (normalizedPercent !== null) {
-      meta.textContent = `${Math.round(normalizedPercent)}%`;
+      metadataLabel = `${Math.round(normalizedPercent)}%`;
     } else {
-      meta.textContent = download.state;
+      metadataLabel = download.state;
     }
+
+    const transferRateLabel = getDownloadTransferRateLabel(download);
+    if (transferRateLabel) {
+      metadataLabel = `${metadataLabel} | ${transferRateLabel}`;
+    }
+    meta.textContent = metadataLabel;
 
     row.append(meta);
     downloadActivityListElement.append(row);
@@ -1044,7 +1164,8 @@ const getGameInstallSizeEstimateForGame = async (game: GameResponse): Promise<nu
 const listSteamDownloadsForSession = async (): Promise<SteamDownloadProgressPayload[]> => {
   try {
     return await invoke<SteamDownloadProgressPayload[]>("list_steam_downloads");
-  } catch {
+  } catch (error) {
+    console.error("Could not load Steam downloads.", error);
     return [];
   }
 };
@@ -1057,6 +1178,7 @@ const refreshSteamDownloads = async (): Promise<void> => {
   isDownloadPollInFlight = true;
   try {
     activeDownloads = await listSteamDownloadsForSession();
+    updateDownloadEtaSnapshots(activeDownloads);
   } finally {
     isDownloadPollInFlight = false;
     renderDownloadActivity();

@@ -7,7 +7,7 @@ use std::{
     process::Command,
     sync::Mutex,
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use bcrypt::{hash, verify, DEFAULT_COST};
@@ -59,6 +59,9 @@ const STEAM_APP_STATE_PREALLOCATING: u64 = 0x80_000;
 const STEAM_APP_STATE_DOWNLOADING: u64 = 0x100_000;
 const STEAM_APP_STATE_STAGING: u64 = 0x200_000;
 const STEAM_APP_STATE_COMMITTING: u64 = 0x400_000;
+const STEAM_DIRECTORY_PROGRESS_MANIFEST_STALE_SECONDS: u64 = 20;
+const STEAM_DIRECTORY_PROGRESS_MIN_DELTA_BYTES: u64 = 256 * 1024 * 1024;
+const STEAM_DIRECTORY_PROGRESS_BLEND_FACTOR: f64 = 0.5;
 
 struct AppState {
     db_path: PathBuf,
@@ -237,6 +240,7 @@ struct SteamDownloadProgressResponse {
     bytes_downloaded: Option<u64>,
     bytes_total: Option<u64>,
     progress_percent: Option<f64>,
+    progress_source: Option<String>,
 }
 
 #[derive(Clone)]
@@ -249,7 +253,16 @@ struct OwnedSteamGameMetadata {
 struct SteamManifestDownloadProgressSnapshot {
     state_flags: Option<u64>,
     bytes_downloaded: Option<u64>,
+    bytes_to_download: Option<u64>,
+    bytes_staged: Option<u64>,
+    bytes_to_stage: Option<u64>,
+}
+
+struct ResolvedSteamDownloadProgressSnapshot {
+    state_flags: Option<u64>,
+    bytes_downloaded: Option<u64>,
     bytes_total: Option<u64>,
+    progress_source: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -977,36 +990,56 @@ fn list_game_install_locations(
         return Ok(Vec::new());
     }
 
-    let Some(steam_root) = resolve_steam_root_path(state.steam_root_override.as_deref()) else {
+    let steam_roots = resolve_steam_root_paths(state.steam_root_override.as_deref());
+    if steam_roots.is_empty() {
         return Ok(Vec::new());
-    };
-    let steamapps_directories = resolve_steamapps_directories(&steam_root)?;
+    }
 
     let mut locations = Vec::new();
     let mut seen_paths = HashSet::new();
-    for steamapps_directory in steamapps_directories {
-        let library_path = steamapps_directory
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or(steamapps_directory);
-        let path_label = library_path.display().to_string();
-        let normalized_key = path_label.to_ascii_lowercase();
-        if !seen_paths.insert(normalized_key) {
-            continue;
-        }
+    for steam_root in &steam_roots {
+        let steamapps_directories = match resolve_steamapps_directories(steam_root) {
+            Ok(paths) => paths,
+            Err(error) => {
+                eprintln!(
+                    "Could not resolve Steam library paths from root {}: {}",
+                    steam_root.display(),
+                    error
+                );
+                continue;
+            }
+        };
 
-        locations.push(GameInstallLocationResponse {
-            free_space_bytes: detect_available_disk_space_bytes(&library_path),
-            path: path_label,
-        });
+        for steamapps_directory in steamapps_directories {
+            let library_path = steamapps_directory
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or(steamapps_directory);
+            let path_label = library_path.display().to_string();
+            let normalized_key = path_label.to_ascii_lowercase();
+            if !seen_paths.insert(normalized_key) {
+                continue;
+            }
+
+            locations.push(GameInstallLocationResponse {
+                free_space_bytes: detect_available_disk_space_bytes(&library_path),
+                path: path_label,
+            });
+        }
     }
 
     if locations.is_empty() {
-        let path_label = steam_root.display().to_string();
-        locations.push(GameInstallLocationResponse {
-            free_space_bytes: detect_available_disk_space_bytes(&steam_root),
-            path: path_label,
-        });
+        for steam_root in steam_roots {
+            let path_label = steam_root.display().to_string();
+            let normalized_key = path_label.to_ascii_lowercase();
+            if !seen_paths.insert(normalized_key) {
+                continue;
+            }
+            locations.push(GameInstallLocationResponse {
+                free_space_bytes: detect_available_disk_space_bytes(&steam_root),
+                path: path_label,
+            });
+        }
     }
 
     Ok(locations)
@@ -1014,28 +1047,74 @@ fn list_game_install_locations(
 
 #[tauri::command]
 fn list_steam_downloads(state: State<'_, AppState>) -> Result<Vec<SteamDownloadProgressResponse>, String> {
-    let connection = open_connection(&state.db_path)?;
-    cleanup_expired_sessions(&connection)?;
-    let user = get_authenticated_user(state.inner(), &connection)?;
-    let owned_games_by_app_id = load_owned_steam_games_by_app_id(&connection, &user.id)?;
-    if owned_games_by_app_id.is_empty() {
+    let owned_games_by_app_id = match open_connection(&state.db_path) {
+        Ok(connection) => {
+            if let Err(error) = cleanup_expired_sessions(&connection) {
+                eprintln!(
+                    "Steam download tracking: failed to cleanup expired sessions ({error}); continuing without ownership map."
+                );
+                HashMap::new()
+            } else {
+                match get_authenticated_user(state.inner(), &connection) {
+                    Ok(user) => match load_owned_steam_games_by_app_id(&connection, &user.id) {
+                        Ok(games) => games,
+                        Err(error) => {
+                            eprintln!(
+                                "Steam download tracking: could not load owned Steam games ({error}); continuing without ownership map."
+                            );
+                            HashMap::new()
+                        }
+                    },
+                    Err(error) => {
+                        eprintln!(
+                            "Steam download tracking: could not resolve authenticated user metadata ({error}); continuing without ownership map."
+                        );
+                        HashMap::new()
+                    }
+                }
+            }
+        }
+        Err(error) => {
+            eprintln!(
+                "Steam download tracking: could not open app database ({error}); continuing without ownership map."
+            );
+            HashMap::new()
+        }
+    };
+
+    let steam_roots = resolve_steam_root_paths(state.steam_root_override.as_deref());
+    if steam_roots.is_empty() {
         return Ok(Vec::new());
     }
-
-    let Some(steam_root) = resolve_steam_root_path(state.steam_root_override.as_deref()) else {
-        return Ok(Vec::new());
-    };
-    let steamapps_directories = resolve_steamapps_directories(&steam_root)?;
     let mut downloads = Vec::new();
     let mut seen_external_ids = HashSet::new();
 
-    for steamapps_directory in steamapps_directories {
-        collect_steam_download_progress_from_steamapps_dir(
-            &steamapps_directory,
-            &owned_games_by_app_id,
-            &mut seen_external_ids,
-            &mut downloads,
-        )?;
+    for steam_root in steam_roots {
+        let steamapps_directories = match resolve_steamapps_directories(&steam_root) {
+            Ok(paths) => paths,
+            Err(error) => {
+                eprintln!(
+                    "Could not resolve Steam library paths from root {}: {}",
+                    steam_root.display(),
+                    error
+                );
+                continue;
+            }
+        };
+        for steamapps_directory in steamapps_directories {
+            if let Err(error) = collect_steam_download_progress_from_steamapps_dir(
+                &steamapps_directory,
+                &owned_games_by_app_id,
+                &mut seen_external_ids,
+                &mut downloads,
+            ) {
+                eprintln!(
+                    "Could not read Steam download progress from {}: {}",
+                    steamapps_directory.display(),
+                    error
+                );
+            }
+        }
     }
 
     downloads.sort_by(|left, right| {
@@ -1951,30 +2030,69 @@ fn refresh_provider_installed_flags(
 fn detect_locally_installed_steam_app_ids(
     steam_root_override: Option<&str>,
 ) -> Result<HashSet<u64>, String> {
-    let Some(steam_root) = resolve_steam_root_path(steam_root_override) else {
+    let steam_roots = resolve_steam_root_paths(steam_root_override);
+    if steam_roots.is_empty() {
         return Ok(HashSet::new());
-    };
-
-    let steamapps_directories = resolve_steamapps_directories(&steam_root)?;
+    }
     let mut installed_app_ids = HashSet::new();
-    for steamapps_directory in steamapps_directories {
-        collect_installed_app_ids_from_steamapps_dir(&steamapps_directory, &mut installed_app_ids)?;
+    for steam_root in steam_roots {
+        let steamapps_directories = match resolve_steamapps_directories(&steam_root) {
+            Ok(paths) => paths,
+            Err(error) => {
+                eprintln!(
+                    "Could not resolve Steam library paths from root {}: {}",
+                    steam_root.display(),
+                    error
+                );
+                continue;
+            }
+        };
+        for steamapps_directory in steamapps_directories {
+            if let Err(error) = collect_installed_app_ids_from_steamapps_dir(
+                &steamapps_directory,
+                &mut installed_app_ids,
+            ) {
+                eprintln!(
+                    "Could not collect installed Steam app IDs from {}: {}",
+                    steamapps_directory.display(),
+                    error
+                );
+            }
+        }
     }
 
     Ok(installed_app_ids)
 }
 
-fn resolve_steam_root_path(steam_root_override: Option<&str>) -> Option<PathBuf> {
+fn resolve_steam_root_paths(steam_root_override: Option<&str>) -> Vec<PathBuf> {
     if let Some(override_path) = steam_root_override
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        return Some(PathBuf::from(override_path));
+        return vec![PathBuf::from(override_path)];
     }
 
-    steam_root_candidates()
+    let mut roots = Vec::new();
+    let mut seen_paths = HashSet::new();
+    for candidate in steam_root_candidates() {
+        if !candidate.join("steamapps").is_dir() {
+            continue;
+        }
+
+        let dedupe_path = fs::canonicalize(&candidate).unwrap_or_else(|_| candidate.clone());
+        if !seen_paths.insert(dedupe_path) {
+            continue;
+        }
+        roots.push(candidate);
+    }
+
+    roots
+}
+
+fn resolve_steam_root_path(steam_root_override: Option<&str>) -> Option<PathBuf> {
+    resolve_steam_root_paths(steam_root_override)
         .into_iter()
-        .find(|candidate| candidate.join("steamapps").is_dir())
+        .next()
 }
 
 fn resolve_steam_userdata_directory(steam_root: &Path, steam_id: &str) -> Result<PathBuf, String> {
@@ -2061,6 +2179,7 @@ fn steam_root_candidates() -> Vec<PathBuf> {
             candidates.push(home_path.join(".steam/steam"));
             candidates.push(home_path.join(".local/share/Steam"));
             candidates.push(home_path.join(".var/app/com.valvesoftware.Steam/.local/share/Steam"));
+            candidates.push(home_path.join(".var/app/com.valvesoftware.Steam/data/Steam"));
         }
     }
 
@@ -2083,13 +2202,25 @@ fn resolve_steamapps_directories(steam_root: &Path) -> Result<Vec<PathBuf>, Stri
             return Ok(steamapps_directories);
         }
         Err(error) => {
-            return Err(format!(
-                "Failed to read Steam library folder file at {}: {error}",
-                library_folders_path.display()
-            ));
+            eprintln!(
+                "Could not read Steam library folder file at {}: {}; using root steamapps only.",
+                library_folders_path.display(),
+                error
+            );
+            return Ok(steamapps_directories);
         }
     };
-    let library_paths = parse_steam_libraryfolder_paths(&library_folders_content)?;
+    let library_paths = match parse_steam_libraryfolder_paths(&library_folders_content) {
+        Ok(paths) => paths,
+        Err(error) => {
+            eprintln!(
+                "Could not parse Steam library folders at {}: {}; using root steamapps only.",
+                library_folders_path.display(),
+                error
+            );
+            return Ok(steamapps_directories);
+        }
+    };
 
     for library_path in library_paths {
         let steamapps_directory = library_path.join("steamapps");
@@ -2196,13 +2327,59 @@ fn collect_installed_app_ids_from_steamapps_dir(
     };
 
     for directory_entry in directory_entries {
-        let entry = directory_entry
-            .map_err(|error| format!("Failed to read Steam library entry: {error}"))?;
+        let entry = match directory_entry {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!(
+                    "Could not read Steam library entry in {}: {}",
+                    steamapps_directory.display(),
+                    error
+                );
+                continue;
+            }
+        };
         let file_name = entry.file_name();
         let file_name = file_name.to_string_lossy();
         let Some(app_id) = parse_steam_manifest_app_id(&file_name) else {
             continue;
         };
+
+        let manifest_contents = match fs::read_to_string(entry.path()) {
+            Ok(contents) => contents,
+            Err(error) => {
+                eprintln!(
+                    "Could not read Steam app manifest {}: {}",
+                    entry.path().display(),
+                    error
+                );
+                continue;
+            }
+        };
+
+        // Require a fully installed state when the flag is present.
+        if let Some(state_flags) = parse_steam_manifest_u64_field(&manifest_contents, "StateFlags") {
+            if state_flags & STEAM_APP_STATE_FULLY_INSTALLED == 0 {
+                continue;
+            }
+        }
+
+        let install_dir_name = match parse_steam_manifest_install_directory(&manifest_contents) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let install_directory = steamapps_directory.join("common").join(install_dir_name);
+        if !install_directory.is_dir() {
+            continue;
+        }
+
+        let has_install_content = match fs::read_dir(&install_directory) {
+            Ok(mut entries) => entries.next().is_some(),
+            Err(_) => false,
+        };
+        if !has_install_content {
+            continue;
+        }
+
         installed_app_ids.insert(app_id);
     }
 
@@ -2220,16 +2397,28 @@ fn resolve_steam_manifest_path_for_app_id(
     steam_root_override: Option<&str>,
     app_id: u64,
 ) -> Result<PathBuf, String> {
-    let Some(steam_root) = resolve_steam_root_path(steam_root_override) else {
+    let steam_roots = resolve_steam_root_paths(steam_root_override);
+    if steam_roots.is_empty() {
         return Err(String::from("Could not locate local Steam installation"));
-    };
-
-    let steamapps_directories = resolve_steamapps_directories(&steam_root)?;
+    }
     let manifest_file_name = format!("appmanifest_{app_id}.acf");
-    for steamapps_directory in steamapps_directories {
-        let manifest_path = steamapps_directory.join(&manifest_file_name);
-        if manifest_path.is_file() {
-            return Ok(manifest_path);
+    for steam_root in steam_roots {
+        let steamapps_directories = match resolve_steamapps_directories(&steam_root) {
+            Ok(paths) => paths,
+            Err(error) => {
+                eprintln!(
+                    "Could not resolve Steam library paths from root {}: {}",
+                    steam_root.display(),
+                    error
+                );
+                continue;
+            }
+        };
+        for steamapps_directory in steamapps_directories {
+            let manifest_path = steamapps_directory.join(&manifest_file_name);
+            if manifest_path.is_file() {
+                return Ok(manifest_path);
+            }
         }
     }
 
@@ -2328,15 +2517,140 @@ fn parse_steam_manifest_u64_field(manifest_contents: &str, field_name: &str) -> 
 fn parse_steam_manifest_download_progress(
     manifest_contents: &str,
 ) -> SteamManifestDownloadProgressSnapshot {
-    let bytes_total = parse_steam_manifest_u64_field(manifest_contents, "BytesToDownload")
-        .or_else(|| parse_steam_manifest_u64_field(manifest_contents, "TotalDownloaded"));
-    let bytes_downloaded = parse_steam_manifest_u64_field(manifest_contents, "BytesDownloaded")
-        .or_else(|| parse_steam_manifest_u64_field(manifest_contents, "BytesDownloadedOnCurrentRun"));
+    let bytes_to_download = parse_steam_manifest_u64_field(manifest_contents, "BytesToDownload");
+    let bytes_downloaded = [
+        parse_steam_manifest_u64_field(manifest_contents, "BytesDownloaded"),
+        parse_steam_manifest_u64_field(manifest_contents, "BytesDownloadedOnCurrentRun"),
+        parse_steam_manifest_u64_field(manifest_contents, "TotalDownloaded"),
+    ]
+    .into_iter()
+    .flatten()
+    .max();
+    let bytes_to_stage = parse_steam_manifest_u64_field(manifest_contents, "BytesToStage");
+    let bytes_staged = [
+        parse_steam_manifest_u64_field(manifest_contents, "BytesStaged"),
+        parse_steam_manifest_u64_field(manifest_contents, "BytesStagedOnCurrentRun"),
+    ]
+    .into_iter()
+    .flatten()
+    .max();
 
     SteamManifestDownloadProgressSnapshot {
         state_flags: parse_steam_manifest_u64_field(manifest_contents, "StateFlags"),
         bytes_downloaded,
+        bytes_to_download,
+        bytes_staged,
+        bytes_to_stage,
+    }
+}
+
+fn steam_manifest_is_stale(manifest_path: &Path) -> bool {
+    let Ok(metadata) = fs::metadata(manifest_path) else {
+        return false;
+    };
+    let Ok(last_modified_at) = metadata.modified() else {
+        return false;
+    };
+    let Ok(age) = SystemTime::now().duration_since(last_modified_at) else {
+        return false;
+    };
+    age.as_secs() >= STEAM_DIRECTORY_PROGRESS_MANIFEST_STALE_SECONDS
+}
+
+fn resolve_steam_manifest_download_progress(
+    manifest_path: &Path,
+    manifest_contents: &str,
+    active_download_directory: &Path,
+    active_temp_directory: &Path,
+) -> ResolvedSteamDownloadProgressSnapshot {
+    let progress_snapshot = parse_steam_manifest_download_progress(manifest_contents);
+    let download_total = progress_snapshot.bytes_to_download.filter(|value| *value > 0);
+    let stage_total = progress_snapshot.bytes_to_stage.filter(|value| *value > 0);
+    let mut bytes_total = download_total.or(stage_total);
+    let mut bytes_downloaded = if download_total.is_some() {
+        match (progress_snapshot.bytes_downloaded, bytes_total) {
+            (Some(downloaded), _) => Some(downloaded),
+            (None, Some(_)) => Some(0),
+            (None, None) => None,
+        }
+    } else {
+        match (progress_snapshot.bytes_staged, bytes_total) {
+            (Some(staged), _) => Some(staged),
+            (None, Some(_)) => Some(0),
+            (None, None) => None,
+        }
+    };
+    let manifest_is_stale = steam_manifest_is_stale(manifest_path);
+    let has_active_download_directory =
+        active_download_directory.is_dir() || active_temp_directory.is_dir();
+    let mut progress_source = String::from("manifest");
+
+    if has_active_download_directory && (matches!(bytes_downloaded, Some(0)) || manifest_is_stale) {
+        let measured_downloaded_bytes = directory_size_bytes(active_download_directory)
+            .or_else(|| directory_size_bytes(active_temp_directory));
+        if let Some(measured_downloaded_bytes) = measured_downloaded_bytes {
+            if let Some(stage_total_bytes) = stage_total {
+                let manifest_staged_bytes = progress_snapshot
+                    .bytes_staged
+                    .unwrap_or(0)
+                    .min(stage_total_bytes);
+                let staged_bytes = measured_downloaded_bytes
+                    .min(stage_total_bytes)
+                    .max(manifest_staged_bytes);
+
+                if let Some(download_total_bytes) = download_total {
+                    let stage_ratio =
+                        (staged_bytes as f64 / stage_total_bytes as f64).clamp(0.0, 1.0);
+                    let scaled_download_bytes =
+                        (stage_ratio * download_total_bytes as f64).round() as u64;
+                    let manifest_downloaded_bytes = bytes_downloaded.unwrap_or(0);
+                    let scaled_download_bytes = scaled_download_bytes.max(manifest_downloaded_bytes);
+                    let delta_bytes =
+                        scaled_download_bytes.saturating_sub(manifest_downloaded_bytes);
+                    let should_use_directory_estimate = manifest_downloaded_bytes == 0
+                        || (manifest_is_stale
+                            && delta_bytes >= STEAM_DIRECTORY_PROGRESS_MIN_DELTA_BYTES);
+
+                    if should_use_directory_estimate && scaled_download_bytes > manifest_downloaded_bytes
+                    {
+                        let estimated_downloaded_bytes = if manifest_downloaded_bytes == 0 {
+                            scaled_download_bytes
+                        } else {
+                            let blended = manifest_downloaded_bytes as f64
+                                + (scaled_download_bytes as f64 - manifest_downloaded_bytes as f64)
+                                    * STEAM_DIRECTORY_PROGRESS_BLEND_FACTOR;
+                            blended.round() as u64
+                        };
+                        bytes_total = Some(download_total_bytes);
+                        bytes_downloaded = Some(estimated_downloaded_bytes.min(download_total_bytes));
+                        progress_source = String::from("directory-estimate");
+                    }
+                } else if staged_bytes > bytes_downloaded.unwrap_or(0) {
+                    bytes_total = Some(stage_total_bytes);
+                    bytes_downloaded = Some(staged_bytes);
+                    progress_source = String::from("directory-estimate");
+                }
+            } else if let Some(download_total_bytes) = download_total {
+                let estimated_downloaded_bytes = measured_downloaded_bytes.min(download_total_bytes);
+                if estimated_downloaded_bytes > bytes_downloaded.unwrap_or(0) {
+                    bytes_total = Some(download_total_bytes);
+                    bytes_downloaded = Some(estimated_downloaded_bytes);
+                    progress_source = String::from("directory-estimate");
+                }
+            }
+        }
+    }
+
+    let bytes_downloaded = match (bytes_downloaded, bytes_total) {
+        (Some(downloaded), Some(total)) => Some(downloaded.min(total)),
+        (value, _) => value,
+    };
+
+    ResolvedSteamDownloadProgressSnapshot {
+        state_flags: progress_snapshot.state_flags,
+        bytes_downloaded,
         bytes_total,
+        progress_source,
     }
 }
 
@@ -2397,6 +2711,7 @@ fn collect_steam_download_progress_from_steamapps_dir(
     seen_external_ids: &mut HashSet<String>,
     output: &mut Vec<SteamDownloadProgressResponse>,
 ) -> Result<(), String> {
+    let allow_unknown_games = owned_games_by_app_id.is_empty();
     let directory_entries = match fs::read_dir(steamapps_directory) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -2417,10 +2732,6 @@ fn collect_steam_download_progress_from_steamapps_dir(
             continue;
         };
 
-        let Some(game) = owned_games_by_app_id.get(&app_id) else {
-            continue;
-        };
-
         let manifest_contents = match fs::read_to_string(entry.path()) {
             Ok(contents) => contents,
             Err(error) => {
@@ -2433,33 +2744,47 @@ fn collect_steam_download_progress_from_steamapps_dir(
             }
         };
 
-        let progress_snapshot = parse_steam_manifest_download_progress(&manifest_contents);
-        let bytes_total = progress_snapshot.bytes_total.filter(|value| *value > 0);
-        let bytes_downloaded = match (progress_snapshot.bytes_downloaded, bytes_total) {
-            (Some(downloaded), _) => Some(downloaded),
-            (None, Some(_)) => Some(0),
-            (None, None) => None,
-        };
+        let app_id_path_segment = app_id.to_string();
+        let active_download_directory = steamapps_directory
+            .join("downloading")
+            .join(&app_id_path_segment);
+        let active_temp_directory = steamapps_directory.join("temp").join(&app_id_path_segment);
+        let progress_snapshot = resolve_steam_manifest_download_progress(
+            &entry.path(),
+            &manifest_contents,
+            &active_download_directory,
+            &active_temp_directory,
+        );
+        let bytes_total = progress_snapshot.bytes_total;
+        let has_active_download_directory =
+            active_download_directory.is_dir() || active_temp_directory.is_dir();
+        let bytes_downloaded = progress_snapshot.bytes_downloaded;
+        let progress_source = progress_snapshot.progress_source;
+
         let has_progress = match (bytes_downloaded, bytes_total) {
             (Some(downloaded), Some(total)) => downloaded < total,
             _ => false,
         };
-        let app_id_path_segment = app_id.to_string();
-        let has_active_download_directory = steamapps_directory
-            .join("downloading")
-            .join(&app_id_path_segment)
-            .is_dir()
-            || steamapps_directory
-                .join("temp")
-                .join(&app_id_path_segment)
-                .is_dir();
         let state_flags = progress_snapshot.state_flags.unwrap_or(0);
         let Some(state_label) =
             infer_steam_download_state(state_flags, has_progress, has_active_download_directory)
         else {
             continue;
         };
-        if !seen_external_ids.insert(game.external_id.clone()) {
+        let is_actively_transferring = has_active_download_directory
+            || state_flags & STEAM_APP_STATE_DOWNLOADING != 0
+            || state_flags & STEAM_APP_STATE_PREALLOCATING != 0;
+        let game_metadata = owned_games_by_app_id.get(&app_id);
+        if !allow_unknown_games && game_metadata.is_none() {
+            continue;
+        }
+        if !state_label.eq_ignore_ascii_case("Downloading") || !is_actively_transferring {
+            continue;
+        }
+        let external_id = game_metadata
+            .map(|game| game.external_id.clone())
+            .unwrap_or_else(|| app_id.to_string());
+        if !seen_external_ids.insert(external_id.clone()) {
             continue;
         }
 
@@ -2469,20 +2794,143 @@ fn collect_steam_download_progress_from_steamapps_dir(
             ),
             _ => None,
         };
+        let name = game_metadata
+            .map(|game| game.name.clone())
+            .or_else(|| parse_steam_manifest_string_field(&manifest_contents, "name"))
+            .unwrap_or_else(|| format!("Steam App {app_id}"));
+        let game_id = game_metadata
+            .map(|game| game.game_id.clone())
+            .unwrap_or_else(|| format!("steam:{app_id}"));
 
         output.push(SteamDownloadProgressResponse {
-            game_id: game.game_id.clone(),
+            game_id,
             provider: String::from("steam"),
-            external_id: game.external_id.clone(),
-            name: game.name.clone(),
+            external_id,
+            name,
             state: String::from(state_label),
             bytes_downloaded,
             bytes_total,
             progress_percent,
+            progress_source: Some(progress_source),
         });
     }
 
+    for download_subdirectory in ["downloading", "temp"] {
+        let active_downloads_directory = steamapps_directory.join(download_subdirectory);
+        let directory_entries = match fs::read_dir(&active_downloads_directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                eprintln!(
+                    "Could not read Steam active download directory {}: {}",
+                    active_downloads_directory.display(),
+                    error
+                );
+                continue;
+            }
+        };
+
+        for directory_entry in directory_entries {
+            let entry = match directory_entry {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!(
+                        "Could not read Steam active download entry in {}: {}",
+                        active_downloads_directory.display(),
+                        error
+                    );
+                    continue;
+                }
+            };
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_dir() {
+                continue;
+            }
+            let raw_file_name = entry.file_name();
+            let Some(file_name) = raw_file_name.to_str().map(str::trim) else {
+                continue;
+            };
+            let Some(app_id) = file_name.parse::<u64>().ok() else {
+                continue;
+            };
+
+            let game_metadata = owned_games_by_app_id.get(&app_id);
+            if !allow_unknown_games && game_metadata.is_none() {
+                continue;
+            }
+            let external_id = game_metadata
+                .map(|game| game.external_id.clone())
+                .unwrap_or_else(|| app_id.to_string());
+            if !seen_external_ids.insert(external_id.clone()) {
+                continue;
+            }
+
+            let name = game_metadata
+                .map(|game| game.name.clone())
+                .unwrap_or_else(|| format!("Steam App {app_id}"));
+            let game_id = game_metadata
+                .map(|game| game.game_id.clone())
+                .unwrap_or_else(|| format!("steam:{app_id}"));
+
+            let manifest_path = steamapps_directory.join(format!("appmanifest_{app_id}.acf"));
+            let (bytes_downloaded, bytes_total, progress_percent, progress_source) =
+                if let Ok(manifest_contents) = fs::read_to_string(&manifest_path) {
+                    let progress_snapshot = resolve_steam_manifest_download_progress(
+                        &manifest_path,
+                        &manifest_contents,
+                        &steamapps_directory.join("downloading").join(file_name),
+                        &steamapps_directory.join("temp").join(file_name),
+                    );
+                    let bytes_downloaded = progress_snapshot.bytes_downloaded;
+                    let bytes_total = progress_snapshot.bytes_total;
+                    let progress_source = progress_snapshot.progress_source;
+                    let progress_percent = match (bytes_downloaded, bytes_total) {
+                        (Some(downloaded), Some(total)) if total > 0 => Some(
+                            ((downloaded.min(total)) as f64 / total as f64 * 100.0).clamp(0.0, 100.0),
+                        ),
+                        _ => None,
+                    };
+                    (bytes_downloaded, bytes_total, progress_percent, Some(progress_source))
+                } else {
+                    (None, None, None, None)
+                };
+
+            output.push(SteamDownloadProgressResponse {
+                game_id,
+                provider: String::from("steam"),
+                external_id,
+                name,
+                state: String::from("Downloading"),
+                bytes_downloaded,
+                bytes_total,
+                progress_percent,
+                progress_source,
+            });
+        }
+    }
+
     Ok(())
+}
+
+fn directory_size_bytes(path: &Path) -> Option<u64> {
+    if !path.is_dir() {
+        return None;
+    }
+
+    if cfg!(target_os = "linux") {
+        let output = Command::new("du").arg("-sb").arg(path).output().ok()?;
+        if output.status.success() {
+            let stdout = String::from_utf8(output.stdout).ok()?;
+            let first_token = stdout.split_whitespace().next()?;
+            if let Ok(size_bytes) = first_token.parse::<u64>() {
+                return Some(size_bytes);
+            }
+        }
+    }
+
+    None
 }
 
 fn detect_available_disk_space_bytes(path: &Path) -> Option<u64> {
@@ -4486,7 +4934,7 @@ fn load_owned_steam_games_by_app_id(
     let mut statement = connection
         .prepare(
             "
-            SELECT id, external_id, name
+            SELECT external_id, name
             FROM games
             WHERE user_id = ?1 AND provider = 'steam'
             ",
@@ -4494,10 +4942,11 @@ fn load_owned_steam_games_by_app_id(
         .map_err(|error| format!("Failed to prepare owned Steam game query: {error}"))?;
     let rows = statement
         .query_map(params![user_id], |row| {
+            let external_id = row.get::<_, String>(0)?;
             Ok(OwnedSteamGameMetadata {
-                game_id: row.get::<_, String>(0)?,
-                external_id: row.get::<_, String>(1)?,
-                name: row.get::<_, String>(2)?,
+                game_id: format!("steam:{external_id}"),
+                external_id,
+                name: row.get::<_, String>(1)?,
             })
         })
         .map_err(|error| format!("Failed to query owned Steam games: {error}"))?;
@@ -5056,24 +5505,20 @@ fn launch_steam_uri(uri: &str, action: &str) -> Result<(), String> {
         let mut errors = Vec::new();
 
         if install_action {
-            match try_spawn_command("steam", &["-silent", uri]) {
-                Ok(()) => return Ok(()),
-                Err(error) => errors.push(error),
-            }
-
-            match try_spawn_command("steam-runtime", &["-silent", uri]) {
-                Ok(()) => return Ok(()),
-                Err(error) => errors.push(error),
-            }
-
-            match try_spawn_command("flatpak", &["run", "com.valvesoftware.Steam", "-silent", uri]) {
-                Ok(()) => return Ok(()),
-                Err(error) => errors.push(error),
-            }
-
+            // Warm Steam in the background, then dispatch the URI via open commands.
             let _ = try_spawn_command("steam", &["-silent"]);
             let _ = try_spawn_command("steam-runtime", &["-silent"]);
             let _ = try_spawn_command("flatpak", &["run", "com.valvesoftware.Steam", "-silent"]);
+        }
+
+        match try_spawn_command("xdg-open", &[uri]) {
+            Ok(()) => return Ok(()),
+            Err(error) => errors.push(error),
+        }
+
+        match try_spawn_command("gio", &["open", uri]) {
+            Ok(()) => return Ok(()),
+            Err(error) => errors.push(error),
         }
 
         match try_spawn_command("steam", &[uri]) {
@@ -5089,6 +5534,11 @@ fn launch_steam_uri(uri: &str, action: &str) -> Result<(), String> {
         match try_spawn_command("flatpak", &["run", "com.valvesoftware.Steam", uri]) {
             Ok(()) => return Ok(()),
             Err(error) => errors.push(error),
+        }
+
+        match webbrowser::open(uri) {
+            Ok(_) => return Ok(()),
+            Err(error) => errors.push(format!("webbrowser::open {uri}: {error}")),
         }
 
         return Err(format!(
