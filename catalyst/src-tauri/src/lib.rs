@@ -1475,6 +1475,20 @@ fn install_game(
 }
 
 #[tauri::command]
+fn uninstall_game(
+    provider: String,
+    external_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let connection = open_connection(&state.db_path)?;
+    cleanup_expired_sessions(&connection)?;
+    let user = get_authenticated_user(state.inner(), &connection)?;
+    let (provider, external_id) = normalize_game_identity_input(&provider, &external_id)?;
+    ensure_owned_game_exists(&connection, &user.id, &provider, &external_id)?;
+    open_provider_game_uri(&provider, &external_id, "uninstall", None)
+}
+
+#[tauri::command]
 fn browse_game_installed_files(
     provider: String,
     external_id: String,
@@ -5572,6 +5586,7 @@ fn open_provider_game_uri(
                     None => format!("steam://run/{app_id}"),
                 },
                 "install" => format!("steam://install/{app_id}"),
+                "uninstall" => format!("steam://uninstall/{app_id}"),
                 "validate" => format!("steam://validate/{app_id}"),
                 "backup" => format!("steam://backup/{app_id}"),
                 _ => return Err(String::from("Unsupported Steam action")),
@@ -6877,6 +6892,7 @@ pub fn run() {
             add_game_to_collection,
             play_game,
             install_game,
+            uninstall_game,
             browse_game_installed_files,
             backup_game_files,
             verify_game_files,

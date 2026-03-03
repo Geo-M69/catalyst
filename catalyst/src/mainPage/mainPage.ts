@@ -92,6 +92,8 @@ let closeGameContextMenu: (() => void) | null = null;
 let downloadPollTimer: number | null = null;
 let isDownloadPollInFlight = false;
 let activeDownloads: SteamDownloadProgressPayload[] = [];
+let previousActiveDownloadKeys = new Set<string>();
+let downloadCompletionRefreshTimer: number | null = null;
 const downloadEtaByKey = new Map<string, DownloadEtaSnapshot>();
 let allCollections: CollectionResponse[] = [];
 
@@ -207,6 +209,11 @@ const setSessionStatus = (steamConnected: boolean, isError = false): void => {
   if (!steamLinked) {
     stopDownloadPolling();
     activeDownloads = [];
+    previousActiveDownloadKeys.clear();
+    if (downloadCompletionRefreshTimer !== null) {
+      window.clearTimeout(downloadCompletionRefreshTimer);
+      downloadCompletionRefreshTimer = null;
+    }
     downloadEtaByKey.clear();
     renderDownloadActivity();
   } else {
@@ -1170,6 +1177,24 @@ const listSteamDownloadsForSession = async (): Promise<SteamDownloadProgressPayl
   }
 };
 
+const scheduleLibraryRefreshAfterDownloadCompletion = (): void => {
+  if (downloadCompletionRefreshTimer !== null) {
+    return;
+  }
+
+  const attemptRefresh = (): void => {
+    if (isLoadingLibrary) {
+      downloadCompletionRefreshTimer = window.setTimeout(attemptRefresh, 1200);
+      return;
+    }
+
+    downloadCompletionRefreshTimer = null;
+    void refreshLibrary(true);
+  };
+
+  downloadCompletionRefreshTimer = window.setTimeout(attemptRefresh, 0);
+};
+
 const refreshSteamDownloads = async (): Promise<void> => {
   if (!steamLinked || isDownloadPollInFlight) {
     return;
@@ -1177,8 +1202,22 @@ const refreshSteamDownloads = async (): Promise<void> => {
 
   isDownloadPollInFlight = true;
   try {
-    activeDownloads = await listSteamDownloadsForSession();
+    const latestDownloads = await listSteamDownloadsForSession();
+    const latestDownloadKeys = new Set<string>(latestDownloads.map(getDownloadEtaKey));
+    let hadRemovedDownload = false;
+    for (const previousKey of previousActiveDownloadKeys) {
+      if (!latestDownloadKeys.has(previousKey)) {
+        hadRemovedDownload = true;
+        break;
+      }
+    }
+
+    activeDownloads = latestDownloads;
+    previousActiveDownloadKeys = latestDownloadKeys;
     updateDownloadEtaSnapshots(activeDownloads);
+    if (hadRemovedDownload) {
+      scheduleLibraryRefreshAfterDownloadCompletion();
+    }
   } finally {
     isDownloadPollInFlight = false;
     renderDownloadActivity();
@@ -1241,6 +1280,13 @@ const backupGameFilesForGame = async (game: GameResponse): Promise<void> => {
 
 const verifyGameFilesForGame = async (game: GameResponse): Promise<void> => {
   await invoke("verify_game_files", {
+    provider: game.provider,
+    externalId: game.externalId,
+  });
+};
+
+const uninstallGameForGame = async (game: GameResponse): Promise<void> => {
+  await invoke("uninstall_game", {
     provider: game.provider,
     externalId: game.externalId,
   });
@@ -1368,6 +1414,53 @@ const gameContextMenu = createGameContextMenu({
       });
       updateGameInState(game.id, (existingGame) => ({ ...existingGame, favorite }));
       renderGameLibrary();
+    },
+    uninstallGame: async (game) => {
+      if (!game.installed) {
+        showLauncherToast(`"${game.name}" is not currently installed.`, "error");
+        return;
+      }
+
+      const shouldUninstall = await confirmationDialog.open({
+        title: "Uninstall Game",
+        description: `Uninstall "${game.name}"? Local files will be removed, but the game stays in your library.`,
+        confirmLabel: "Uninstall",
+        confirmTone: "danger",
+      });
+      if (!shouldUninstall) {
+        return;
+      }
+
+      await uninstallGameForGame(game);
+      updateGameInState(game.id, (existingGame) => ({
+        ...existingGame,
+        installed: false,
+      }));
+      renderActiveLibraryView();
+      showLauncherToast(`Opened uninstall flow for "${game.name}".`);
+
+      let refreshCompleted = false;
+      let refreshFallbackTimer: number | null = null;
+      const runRefresh = (): void => {
+        if (refreshCompleted) {
+          return;
+        }
+        refreshCompleted = true;
+        if (refreshFallbackTimer !== null) {
+          window.clearTimeout(refreshFallbackTimer);
+          refreshFallbackTimer = null;
+        }
+        void refreshLibrary(true);
+      };
+
+      const handleFocus = (): void => {
+        runRefresh();
+      };
+
+      window.addEventListener("focus", handleFocus, { once: true });
+      refreshFallbackTimer = window.setTimeout(() => {
+        runRefresh();
+      }, 20000);
     },
   },
   container: libraryGridElement,

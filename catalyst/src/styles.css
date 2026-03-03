@@ -1669,10 +1669,19 @@ button:disabled {
   box-shadow: none;
 }
 
+.game-context-menu-item.is-danger {
+  color: rgba(255, 172, 172, 0.96);
+}
+
 @media (hover: hover) {
   .game-context-menu-item:not(:disabled):hover {
     background: rgba(255, 255, 255, 0.08);
     color: rgba(255, 255, 255, 0.96);
+  }
+
+  .game-context-menu-item.is-danger:not(:disabled):hover {
+    background: rgba(255, 120, 120, 0.14);
+    color: rgba(255, 190, 190, 0.98);
   }
 }
 
@@ -1680,6 +1689,11 @@ button:disabled {
   outline: none;
   background: rgba(255, 255, 255, 0.11);
   color: rgba(255, 255, 255, 0.98);
+}
+
+.game-context-menu-item.is-danger:focus-visible {
+  background: rgba(255, 120, 120, 0.14);
+  color: rgba(255, 190, 190, 0.98);
 }
 
 .game-context-menu-item.is-selected {

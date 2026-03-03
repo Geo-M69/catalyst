@@ -8,6 +8,7 @@ interface GameContextMenuActions {
   openProperties: (game: GameResponse) => Promise<void>;
   playGame: (game: GameResponse) => Promise<void>;
   setFavorite: (game: GameResponse, favorite: boolean) => Promise<void>;
+  uninstallGame: (game: GameResponse) => Promise<void>;
   createCollectionAndAdd: (game: GameResponse, name: string) => Promise<void>;
 }
 
@@ -268,27 +269,73 @@ export const createGameContextMenu = ({
     ).filter((button): button is HTMLButtonElement => button instanceof HTMLButtonElement);
   };
 
-  const renderManageButtons = (): void => {
+  const renderManageButtons = (game: GameResponse): void => {
     manageSubmenu.replaceChildren();
 
-    const items = [
-      "Add desktop shortcut",
-      "Set custom artwork",
-      "Browse local files",
-      "Hide this game",
-      "Mark as Private",
-      "Uninstall",
-      "Back up game files...",
+    const items: Array<{
+      disabled?: boolean;
+      isDanger?: boolean;
+      onClick: () => void;
+      text: string;
+    }> = [
+      {
+        text: "Add desktop shortcut",
+        onClick: () => {
+          closeMenu();
+        },
+      },
+      {
+        text: "Set custom artwork",
+        onClick: () => {
+          closeMenu();
+        },
+      },
+      {
+        text: "Browse local files",
+        onClick: () => {
+          closeMenu();
+        },
+      },
+      {
+        text: "Hide this game",
+        onClick: () => {
+          closeMenu();
+        },
+      },
+      {
+        text: "Mark as Private",
+        onClick: () => {
+          closeMenu();
+        },
+      },
+      {
+        text: "Uninstall",
+        isDanger: true,
+        disabled: !game.installed,
+        onClick: () => {
+          if (!game.installed) {
+            return;
+          }
+          void runMenuAction(() => actions.uninstallGame(game), "Could not start uninstall.");
+        },
+      },
+      {
+        text: "Back up game files...",
+        onClick: () => {
+          closeMenu();
+        },
+      },
     ];
 
-    for (const text of items) {
+    for (const item of items) {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "game-context-menu-item";
-      btn.textContent = text;
+      btn.textContent = item.text;
+      btn.classList.toggle("is-danger", item.isDanger === true);
+      btn.disabled = item.disabled === true;
       btn.addEventListener("click", () => {
-        // UI-only for now: close the menu when an action is chosen.
-        closeMenu();
+        item.onClick();
       });
       manageSubmenu.append(btn);
     }
@@ -359,7 +406,7 @@ export const createGameContextMenu = ({
     }
 
     closeCollectionSubmenu();
-    renderManageButtons();
+    renderManageButtons(game);
     manageSubmenu.hidden = false;
     manageButton.setAttribute("aria-expanded", "true");
     manageButton.classList.add("is-open");
