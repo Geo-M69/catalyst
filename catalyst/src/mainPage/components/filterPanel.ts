@@ -71,11 +71,10 @@ const FILTER_TEMPLATE = `
             aria-expanded="false"
             aria-controls="platform-menu"
           >
-            <span class="filter-select-trigger-text">All</span>
+            <span class="filter-select-trigger-text">Platforms</span>
             <span class="filter-select-trigger-caret" aria-hidden="true"></span>
           </button>
           <div id="platform-menu" class="filter-select-menu" role="listbox" hidden>
-            <button type="button" class="filter-select-option" role="option" data-value="all">All</button>
             <button type="button" class="filter-select-option" role="option" data-value="windows">Windows</button>
             <button type="button" class="filter-select-option" role="option" data-value="macos">MacOS</button>
             <button type="button" class="filter-select-option" role="option" data-value="linux">Linux</button>
@@ -92,11 +91,10 @@ const FILTER_TEMPLATE = `
             aria-expanded="false"
             aria-controls="genre-menu"
           >
-            <span class="filter-select-trigger-text">All</span>
+            <span class="filter-select-trigger-text">Genres</span>
             <span class="filter-select-trigger-caret" aria-hidden="true"></span>
           </button>
           <div id="genre-menu" class="filter-select-menu" role="listbox" hidden>
-            <button type="button" class="filter-select-option" role="option" data-value="all">All</button>
             <button type="button" class="filter-select-option" role="option" data-value="action">Action</button>
             <button type="button" class="filter-select-option" role="option" data-value="rpg">RPG</button>
             <button type="button" class="filter-select-option" role="option" data-value="strategy">Strategy</button>
@@ -168,12 +166,10 @@ const FILTER_TEMPLATE = `
                 aria-expanded="false"
                 aria-controls="collection-menu"
               >
-                <span class="filter-select-trigger-text">All</span>
+                <span class="filter-select-trigger-text">Collections</span>
                 <span class="filter-select-trigger-caret" aria-hidden="true"></span>
               </button>
-              <div id="collection-menu" class="filter-select-menu" role="listbox" hidden>
-                <button type="button" class="filter-select-option" role="option" data-value="">All</button>
-              </div>
+              <div id="collection-menu" class="filter-select-menu" role="listbox" hidden></div>
             </div>
 
             <div id="filter-by-field" class="filter-field filter-select-field">
@@ -186,11 +182,10 @@ const FILTER_TEMPLATE = `
                 aria-expanded="false"
                 aria-controls="filter-by-menu"
               >
-                <span class="filter-select-trigger-text">All</span>
+                <span class="filter-select-trigger-text">Status</span>
                 <span class="filter-select-trigger-caret" aria-hidden="true"></span>
               </button>
               <div id="filter-by-menu" class="filter-select-menu" role="listbox" hidden>
-                <button type="button" class="filter-select-option" role="option" data-value="all">All</button>
                 <button type="button" class="filter-select-option" role="option" data-value="installed">Installed</button>
                 <button type="button" class="filter-select-option" role="option" data-value="not-installed">Not Installed</button>
                 <button type="button" class="filter-select-option" role="option" data-value="favorites">Favorites</button>
@@ -228,12 +223,10 @@ const FILTER_TEMPLATE = `
                 aria-expanded="false"
                 aria-controls="steam-tag-menu"
               >
-                <span class="filter-select-trigger-text">All</span>
+                <span class="filter-select-trigger-text">Steam Tags</span>
                 <span class="filter-select-trigger-caret" aria-hidden="true"></span>
               </button>
-              <div id="steam-tag-menu" class="filter-select-menu" role="listbox" hidden>
-                <button type="button" class="filter-select-option" role="option" data-value="">All</button>
-              </div>
+              <div id="steam-tag-menu" class="filter-select-menu" role="listbox" hidden></div>
             </div>
 
             <div id="source-field" class="filter-field filter-select-field">
@@ -246,11 +239,10 @@ const FILTER_TEMPLATE = `
                 aria-expanded="false"
                 aria-controls="source-menu"
               >
-                <span class="filter-select-trigger-text">All</span>
+                <span class="filter-select-trigger-text">Sources</span>
                 <span class="filter-select-trigger-caret" aria-hidden="true"></span>
               </button>
               <div id="source-menu" class="filter-select-menu" role="listbox" hidden>
-                <button type="button" class="filter-select-option" role="option" data-value="all">All</button>
                 <button type="button" class="filter-select-option" role="option" data-value="steam">Steam</button>
                 <button type="button" class="filter-select-option" role="option" data-value="epic-games">Epic Games</button>
               </div>
@@ -285,11 +277,10 @@ const FILTER_TEMPLATE = `
                 aria-expanded="false"
                 aria-controls="kind-menu"
               >
-                <span class="filter-select-trigger-text">All</span>
+                <span class="filter-select-trigger-text">Types</span>
                 <span class="filter-select-trigger-caret" aria-hidden="true"></span>
               </button>
               <div id="kind-menu" class="filter-select-menu" role="listbox" hidden>
-                <button type="button" class="filter-select-option" role="option" data-value="all">All</button>
                 <button type="button" class="filter-select-option" role="option" data-value="game">Games</button>
                 <button type="button" class="filter-select-option" role="option" data-value="demo">Demos</button>
                 <button type="button" class="filter-select-option" role="option" data-value="dlc">DLCs</button>
@@ -308,7 +299,8 @@ const FILTER_TEMPLATE = `
 const createCustomSelect = <T extends string>(
   field: HTMLElement,
   onChange: () => void,
-  closeOtherMenus: () => void
+  closeOtherMenus: () => void,
+  defaultValue: T
 ): CustomSelectController<T> => {
   const trigger = field.querySelector(".filter-select-trigger");
   const triggerText = field.querySelector(".filter-select-trigger-text");
@@ -323,7 +315,8 @@ const createCustomSelect = <T extends string>(
   }
 
   let optionButtons: HTMLButtonElement[] = [];
-  let currentValue = "" as T;
+  let currentValue = defaultValue;
+  const placeholderLabel = triggerText.textContent?.trim() ?? "";
 
   const closeMenu = (): void => {
     menu.hidden = true;
@@ -348,12 +341,14 @@ const createCustomSelect = <T extends string>(
 
   const setValue = (value: T, notifyChange = true): boolean => {
     const selectedOption = optionButtons.find((optionButton) => optionButton.dataset.value === value);
-    if (!selectedOption) {
+    if (!selectedOption && value !== defaultValue) {
       return false;
     }
 
     currentValue = value;
-    triggerText.textContent = selectedOption.textContent?.trim() ?? "";
+    triggerText.textContent = selectedOption
+      ? selectedOption.textContent?.trim() ?? ""
+      : placeholderLabel;
 
     for (const optionButton of optionButtons) {
       const isSelected = optionButton === selectedOption;
@@ -391,10 +386,6 @@ const createCustomSelect = <T extends string>(
     preferredValue?: T,
     notifyChange = false
   ): void => {
-    if (options.length === 0) {
-      throw new Error("Custom select must include at least one option with a value");
-    }
-
     const fragment = document.createDocumentFragment();
     for (const option of options) {
       const optionButton = document.createElement("button");
@@ -411,8 +402,13 @@ const createCustomSelect = <T extends string>(
     optionButtons = Array.from(menu.querySelectorAll(".filter-select-option")) as HTMLButtonElement[];
 
     const candidateValue = preferredValue ?? currentValue;
-    const hasCandidateValue = optionButtons.some((optionButton) => optionButton.dataset.value === candidateValue);
-    const nextValue = hasCandidateValue ? candidateValue : options[0].value;
+    const hasCandidateValue = candidateValue === defaultValue
+      || optionButtons.some((optionButton) => optionButton.dataset.value === candidateValue);
+    const nextValue = hasCandidateValue
+      ? candidateValue
+      : options.length > 0
+        ? options[0].value
+        : defaultValue;
     const shouldNotify = notifyChange && nextValue !== currentValue;
     void setValue(nextValue, shouldNotify);
   };
@@ -513,7 +509,7 @@ const createCustomSelect = <T extends string>(
       label: optionButton.textContent?.trim() ?? value,
     };
   });
-  setOptions(initialOptions, undefined, false);
+  setOptions(initialOptions, defaultValue, false);
 
   return {
     getValue: (): T => currentValue as T,
@@ -585,14 +581,54 @@ export const createFilterPanel = (
 
   let handleSelectChange = (): void => {};
 
-  const steamTagSelect = createCustomSelect<string>(steamTagField, () => handleSelectChange(), closeAllSelectMenus);
-  const collectionSelect = createCustomSelect<string>(collectionField, () => handleSelectChange(), closeAllSelectMenus);
-  const filterBySelect = createCustomSelect<FilterByOption>(filterByField, () => handleSelectChange(), closeAllSelectMenus);
-  const platformSelect = createCustomSelect<PlatformFilter>(platformField, () => handleSelectChange(), closeAllSelectMenus);
-  const sourceSelect = createCustomSelect<SourceFilter>(sourceField, () => handleSelectChange(), closeAllSelectMenus);
-  const kindSelect = createCustomSelect<GameKindFilter>(kindField, () => handleSelectChange(), closeAllSelectMenus);
-  const genreSelect = createCustomSelect<GenreFilter>(genreField, () => handleSelectChange(), closeAllSelectMenus);
-  const sortBySelect = createCustomSelect<SortOption>(sortByField, () => handleSelectChange(), closeAllSelectMenus);
+  const steamTagSelect = createCustomSelect<string>(
+    steamTagField,
+    () => handleSelectChange(),
+    closeAllSelectMenus,
+    DEFAULT_FILTERS.steamTag
+  );
+  const collectionSelect = createCustomSelect<string>(
+    collectionField,
+    () => handleSelectChange(),
+    closeAllSelectMenus,
+    DEFAULT_FILTERS.collection
+  );
+  const filterBySelect = createCustomSelect<FilterByOption>(
+    filterByField,
+    () => handleSelectChange(),
+    closeAllSelectMenus,
+    DEFAULT_FILTERS.filterBy
+  );
+  const platformSelect = createCustomSelect<PlatformFilter>(
+    platformField,
+    () => handleSelectChange(),
+    closeAllSelectMenus,
+    DEFAULT_FILTERS.platform
+  );
+  const sourceSelect = createCustomSelect<SourceFilter>(
+    sourceField,
+    () => handleSelectChange(),
+    closeAllSelectMenus,
+    DEFAULT_FILTERS.source
+  );
+  const kindSelect = createCustomSelect<GameKindFilter>(
+    kindField,
+    () => handleSelectChange(),
+    closeAllSelectMenus,
+    DEFAULT_FILTERS.kind
+  );
+  const genreSelect = createCustomSelect<GenreFilter>(
+    genreField,
+    () => handleSelectChange(),
+    closeAllSelectMenus,
+    DEFAULT_FILTERS.genre
+  );
+  const sortBySelect = createCustomSelect<SortOption>(
+    sortByField,
+    () => handleSelectChange(),
+    closeAllSelectMenus,
+    DEFAULT_FILTERS.sortBy
+  );
 
   selectControllers.push(
     steamTagSelect,
@@ -868,18 +904,15 @@ export const createFilterPanel = (
       return setSelectValue(filterBySelect, filterBy, shouldNotify);
     },
     setSteamTagSuggestions: (tags: string[]) => {
-      const options: CustomSelectOption<string>[] = [
-        { value: "", label: "All" },
-        ...tags.map((tag) => ({ value: tag, label: tag })),
-      ];
+      const options: CustomSelectOption<string>[] = tags.map((tag) => ({ value: tag, label: tag }));
       steamTagSelect.setOptions(options, steamTagSelect.getValue(), false);
       refreshFilterUi();
     },
     setCollectionSuggestions: (collections: string[]) => {
-      const options: CustomSelectOption<string>[] = [
-        { value: "", label: "All" },
-        ...collections.map((collection) => ({ value: collection, label: collection })),
-      ];
+      const options: CustomSelectOption<string>[] = collections.map((collection) => ({
+        value: collection,
+        label: collection,
+      }));
       collectionSelect.setOptions(options, collectionSelect.getValue(), false);
       refreshFilterUi();
     },

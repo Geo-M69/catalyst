@@ -73,6 +73,9 @@ const GRID_CARD_WIDTH_STEP_PX = 8;
 const GRID_CARD_WIDTH_FINE_STEP_PX = 2;
 const GRID_ZOOM_WHEEL_THRESHOLD_PX = 100;
 const WHEEL_DELTA_LINE_HEIGHT_PX = 16;
+const GRID_WHEEL_SMOOTHING_LERP = 0.16;
+const GRID_WHEEL_SMOOTHING_MAX_STEP_PX = 180;
+const GRID_WHEEL_SMOOTHING_MIN_WHEEL_DELTA_PX = 8;
 const GRID_CARD_WIDTH_STORAGE_KEY = "catalyst.library.gridCardMinWidthPx";
 const APP_NAME = "Catalyst";
 const DOWNLOAD_POLL_INTERVAL_MS = 2500;
@@ -98,6 +101,7 @@ const downloadEtaByKey = new Map<string, DownloadEtaSnapshot>();
 let allCollections: CollectionResponse[] = [];
 
 type LibraryViewMode = "games" | "collections";
+type RuntimePlatform = "windows" | "macos" | "linux" | "other";
 const LIBRARY_VIEW_LABELS: Record<LibraryViewMode, string> = {
   games: "Game Library",
   collections: "Collections",
@@ -551,6 +555,146 @@ const normalizeWheelDeltaToPx = (event: WheelEvent): number => {
   }
 
   return event.deltaY;
+};
+
+const resolveRuntimePlatform = (): RuntimePlatform => {
+  const userAgentDataPlatform = (
+    navigator as Navigator & { userAgentData?: { platform?: string } }
+  ).userAgentData?.platform?.toLocaleLowerCase();
+  if (userAgentDataPlatform) {
+    if (userAgentDataPlatform.includes("win")) {
+      return "windows";
+    }
+    if (userAgentDataPlatform.includes("mac")) {
+      return "macos";
+    }
+    if (userAgentDataPlatform.includes("linux")) {
+      return "linux";
+    }
+  }
+
+  const platform = navigator.platform.toLocaleLowerCase();
+  if (platform.includes("win")) {
+    return "windows";
+  }
+  if (platform.includes("mac")) {
+    return "macos";
+  }
+  if (platform.includes("linux")) {
+    return "linux";
+  }
+
+  const userAgent = navigator.userAgent.toLocaleLowerCase();
+  if (userAgent.includes("windows")) {
+    return "windows";
+  }
+  if (userAgent.includes("mac os")) {
+    return "macos";
+  }
+  if (userAgent.includes("linux")) {
+    return "linux";
+  }
+
+  return "other";
+};
+
+const isLikelyTrackpadWheelEvent = (event: WheelEvent): boolean => {
+  if (event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL) {
+    return false;
+  }
+
+  if (Math.abs(event.deltaX) > 0) {
+    return true;
+  }
+
+  if (!Number.isInteger(event.deltaY)) {
+    return true;
+  }
+
+  return Math.abs(event.deltaY) < GRID_WHEEL_SMOOTHING_MIN_WHEEL_DELTA_PX;
+};
+
+const registerLinuxGridWheelSmoothing = (): (() => void) => {
+  if (resolveRuntimePlatform() !== "linux") {
+    return () => {};
+  }
+
+  const reducedMotionMediaQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+  let currentScrollTop = libraryGridElement.scrollTop;
+  let targetScrollTop = currentScrollTop;
+  let animationFrameId: number | null = null;
+
+  const getMaxGridScrollTop = (): number => {
+    return Math.max(libraryGridElement.scrollHeight - libraryGridElement.clientHeight, 0);
+  };
+
+  const syncGridScrollPosition = (): void => {
+    if (animationFrameId !== null) {
+      return;
+    }
+    currentScrollTop = libraryGridElement.scrollTop;
+    targetScrollTop = currentScrollTop;
+  };
+
+  const animateGridScroll = (): void => {
+    targetScrollTop = clamp(targetScrollTop, 0, getMaxGridScrollTop());
+    currentScrollTop += (targetScrollTop - currentScrollTop) * GRID_WHEEL_SMOOTHING_LERP;
+
+    if (Math.abs(targetScrollTop - currentScrollTop) < 0.35) {
+      currentScrollTop = targetScrollTop;
+    }
+
+    libraryGridElement.scrollTop = currentScrollTop;
+    if (currentScrollTop !== targetScrollTop) {
+      animationFrameId = window.requestAnimationFrame(animateGridScroll);
+      return;
+    }
+
+    animationFrameId = null;
+  };
+
+  const handleWheel = (event: WheelEvent): void => {
+    if (activeLibraryViewMode !== "games" || event.ctrlKey || event.metaKey) {
+      return;
+    }
+    if (reducedMotionMediaQuery.matches || isLikelyTrackpadWheelEvent(event)) {
+      return;
+    }
+
+    const rawDeltaPx = normalizeWheelDeltaToPx(event);
+    if (rawDeltaPx === 0) {
+      return;
+    }
+
+    const maxScrollTop = getMaxGridScrollTop();
+    if (maxScrollTop <= 0) {
+      return;
+    }
+
+    event.preventDefault();
+    const deltaPx = clamp(rawDeltaPx, -GRID_WHEEL_SMOOTHING_MAX_STEP_PX, GRID_WHEEL_SMOOTHING_MAX_STEP_PX);
+    currentScrollTop = libraryGridElement.scrollTop;
+    if (animationFrameId === null) {
+      targetScrollTop = currentScrollTop;
+    }
+    targetScrollTop = clamp(targetScrollTop + deltaPx, 0, maxScrollTop);
+
+    if (animationFrameId === null) {
+      animationFrameId = window.requestAnimationFrame(animateGridScroll);
+    }
+  };
+
+  libraryGridElement.addEventListener("scroll", syncGridScrollPosition, { passive: true });
+  libraryGridElement.addEventListener("wheel", handleWheel, { passive: false });
+
+  return () => {
+    libraryGridElement.removeEventListener("scroll", syncGridScrollPosition);
+    libraryGridElement.removeEventListener("wheel", handleWheel);
+    if (animationFrameId !== null) {
+      window.cancelAnimationFrame(animationFrameId);
+      animationFrameId = null;
+    }
+  };
 };
 
 const applyLibraryAspectSoftLock = (): void => {
@@ -1807,6 +1951,8 @@ window.addEventListener("beforeunload", stopDownloadPolling);
 const initialize = async (): Promise<void> => {
   applyLibraryAspectSoftLock();
   registerGridZoomShortcut();
+  const cleanupGridWheelSmoothing = registerLinuxGridWheelSmoothing();
+  window.addEventListener("beforeunload", cleanupGridWheelSmoothing, { once: true });
   setLibraryViewMode("games", false);
   closeLibraryViewPicker();
   setLibrarySummary("Loading library...");
