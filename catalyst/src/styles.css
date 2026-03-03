@@ -771,8 +771,10 @@ button:disabled {
 .download-activity-list {
   display: grid;
   gap: 0.42rem;
+  min-width: 0;
   max-height: min(27vh, 190px);
   overflow-y: auto;
+  overflow-x: hidden;
   padding-right: 0.08rem;
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
@@ -787,6 +789,7 @@ button:disabled {
 .download-activity-item {
   display: grid;
   gap: 0.3rem;
+  min-width: 0;
   padding: 0.52rem;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 10px;
@@ -798,10 +801,12 @@ button:disabled {
   align-items: center;
   justify-content: space-between;
   gap: 0.8rem;
+  min-width: 0;
 }
 
 .download-activity-item-name {
   margin: 0;
+  flex: 1 1 auto;
   font-size: 0.89rem;
   font-weight: 580;
   color: rgba(255, 255, 255, 0.94);
@@ -813,11 +818,14 @@ button:disabled {
 
 .download-activity-item-state {
   margin: 0;
+  flex: 0 0 auto;
   font-size: 0.78rem;
   color: rgba(255, 255, 255, 0.72);
 }
 
 .download-activity-progress-track {
+  width: 100%;
+  max-width: 100%;
   height: 0.36rem;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.09);
@@ -833,8 +841,10 @@ button:disabled {
 
 .download-activity-item-meta {
   margin: 0;
+  min-width: 0;
   font-size: 0.75rem;
   color: rgba(255, 255, 255, 0.62);
+  overflow-wrap: anywhere;
 }
 
 .library-grid-scroll {

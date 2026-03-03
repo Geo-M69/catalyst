@@ -92,7 +92,7 @@ let closeGameContextMenu: (() => void) | null = null;
 let downloadPollTimer: number | null = null;
 let isDownloadPollInFlight = false;
 let activeDownloads: SteamDownloadProgressPayload[] = [];
-let previousActiveDownloadKeys = new Set<string>();
+let previousActiveDownloadsByKey = new Map<string, SteamDownloadProgressPayload>();
 let downloadCompletionRefreshTimer: number | null = null;
 const downloadEtaByKey = new Map<string, DownloadEtaSnapshot>();
 let allCollections: CollectionResponse[] = [];
@@ -209,7 +209,7 @@ const setSessionStatus = (steamConnected: boolean, isError = false): void => {
   if (!steamLinked) {
     stopDownloadPolling();
     activeDownloads = [];
-    previousActiveDownloadKeys.clear();
+    previousActiveDownloadsByKey.clear();
     if (downloadCompletionRefreshTimer !== null) {
       window.clearTimeout(downloadCompletionRefreshTimer);
       downloadCompletionRefreshTimer = null;
@@ -1177,13 +1177,63 @@ const listSteamDownloadsForSession = async (): Promise<SteamDownloadProgressPayl
   }
 };
 
+const isLikelyCompletedDownload = (download: SteamDownloadProgressPayload): boolean => {
+  const normalizedPercent = normalizeDownloadPercent(download);
+  if (normalizedPercent !== null && normalizedPercent >= 99.5) {
+    return true;
+  }
+
+  if (
+    isFiniteNonNegativeNumber(download.bytesDownloaded)
+    && isFiniteNonNegativeNumber(download.bytesTotal)
+    && download.bytesTotal > 0
+    && download.bytesDownloaded >= download.bytesTotal
+  ) {
+    return true;
+  }
+
+  return false;
+};
+
+const markCompletedDownloadsAsInstalled = (downloads: SteamDownloadProgressPayload[]): void => {
+  let didUpdateInstalledState = false;
+
+  for (const download of downloads) {
+    let updatedGame = updateGameInState(download.gameId, (existingGame) => ({
+      ...existingGame,
+      installed: true,
+    }));
+
+    if (!updatedGame) {
+      const fallbackGame = allGames.find((game) =>
+        game.provider === download.provider
+        && game.externalId === download.externalId
+      );
+      if (fallbackGame) {
+        updatedGame = updateGameInState(fallbackGame.id, (existingGame) => ({
+          ...existingGame,
+          installed: true,
+        }));
+      }
+    }
+
+    if (updatedGame) {
+      didUpdateInstalledState = true;
+    }
+  }
+
+  if (didUpdateInstalledState) {
+    renderActiveLibraryView();
+  }
+};
+
 const scheduleLibraryRefreshAfterDownloadCompletion = (): void => {
   if (downloadCompletionRefreshTimer !== null) {
     return;
   }
 
   const attemptRefresh = (): void => {
-    if (isLoadingLibrary) {
+    if (isLoadingLibrary || document.visibilityState !== "visible" || !document.hasFocus()) {
       downloadCompletionRefreshTimer = window.setTimeout(attemptRefresh, 1200);
       return;
     }
@@ -1203,19 +1253,26 @@ const refreshSteamDownloads = async (): Promise<void> => {
   isDownloadPollInFlight = true;
   try {
     const latestDownloads = await listSteamDownloadsForSession();
-    const latestDownloadKeys = new Set<string>(latestDownloads.map(getDownloadEtaKey));
-    let hadRemovedDownload = false;
-    for (const previousKey of previousActiveDownloadKeys) {
-      if (!latestDownloadKeys.has(previousKey)) {
-        hadRemovedDownload = true;
-        break;
+    const latestDownloadsByKey = new Map<string, SteamDownloadProgressPayload>();
+    for (const download of latestDownloads) {
+      latestDownloadsByKey.set(getDownloadEtaKey(download), download);
+    }
+
+    const completedDownloads: SteamDownloadProgressPayload[] = [];
+    for (const [previousKey, previousDownload] of previousActiveDownloadsByKey) {
+      if (latestDownloadsByKey.has(previousKey)) {
+        continue;
+      }
+      if (isLikelyCompletedDownload(previousDownload)) {
+        completedDownloads.push(previousDownload);
       }
     }
 
     activeDownloads = latestDownloads;
-    previousActiveDownloadKeys = latestDownloadKeys;
+    previousActiveDownloadsByKey = latestDownloadsByKey;
     updateDownloadEtaSnapshots(activeDownloads);
-    if (hadRemovedDownload) {
+    if (completedDownloads.length > 0) {
+      markCompletedDownloadsAsInstalled(completedDownloads);
       scheduleLibraryRefreshAfterDownloadCompletion();
     }
   } finally {
