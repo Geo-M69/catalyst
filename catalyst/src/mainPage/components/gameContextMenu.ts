@@ -3,9 +3,16 @@ import type { CollectionResponse, GameResponse } from "../types";
 
 interface GameContextMenuActions {
   addGameToCollection: (game: GameResponse, collectionId: string) => Promise<void>;
+  addDesktopShortcut: (game: GameResponse) => Promise<void>;
+  backupGameFiles: (game: GameResponse) => Promise<void>;
+  browseLocalFiles: (game: GameResponse) => Promise<void>;
+  hideGameInLibrary: (game: GameResponse) => Promise<void>;
+  unhideGameInLibrary: (game: GameResponse) => Promise<void>;
   installGame: (game: GameResponse) => Promise<void>;
   listCollections: (game: GameResponse) => Promise<CollectionResponse[]>;
+  markGamePrivate: (game: GameResponse) => Promise<void>;
   openProperties: (game: GameResponse) => Promise<void>;
+  setCustomArtwork: (game: GameResponse) => Promise<void>;
   playGame: (game: GameResponse) => Promise<void>;
   setFavorite: (game: GameResponse, favorite: boolean) => Promise<void>;
   uninstallGame: (game: GameResponse) => Promise<void>;
@@ -280,32 +287,63 @@ export const createGameContextMenu = ({
     }> = [
       {
         text: "Add desktop shortcut",
+        disabled: !game.installed,
         onClick: () => {
-          closeMenu();
+          if (!game.installed) {
+            return;
+          }
+          void runMenuAction(
+            () => actions.addDesktopShortcut(game),
+            "Could not add desktop shortcut."
+          );
         },
       },
       {
         text: "Set custom artwork",
         onClick: () => {
-          closeMenu();
+          void runMenuAction(
+            () => actions.setCustomArtwork(game),
+            "Could not open custom artwork settings."
+          );
         },
       },
       {
         text: "Browse local files",
+        disabled: !game.installed,
         onClick: () => {
-          closeMenu();
+          if (!game.installed) {
+            return;
+          }
+          void runMenuAction(
+            () => actions.browseLocalFiles(game),
+            "Could not open local files."
+          );
         },
       },
       {
-        text: "Hide this game",
+        text: game.hideInLibrary === true ? "Remove from Hidden" : "Hide this game",
         onClick: () => {
-          closeMenu();
+          if (game.hideInLibrary === true) {
+            void runMenuAction(
+              () => actions.unhideGameInLibrary(game),
+              "Could not remove this game from hidden."
+            );
+            return;
+          }
+
+          void runMenuAction(
+            () => actions.hideGameInLibrary(game),
+            "Could not hide this game."
+          );
         },
       },
       {
         text: "Mark as Private",
         onClick: () => {
-          closeMenu();
+          void runMenuAction(
+            () => actions.markGamePrivate(game),
+            "Could not mark this game as private."
+          );
         },
       },
       {
@@ -321,8 +359,15 @@ export const createGameContextMenu = ({
       },
       {
         text: "Back up game files...",
+        disabled: !game.installed,
         onClick: () => {
-          closeMenu();
+          if (!game.installed) {
+            return;
+          }
+          void runMenuAction(
+            () => actions.backupGameFiles(game),
+            "Could not start game file backup."
+          );
         },
       },
     ];

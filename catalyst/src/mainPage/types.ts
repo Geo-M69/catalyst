@@ -1,3 +1,5 @@
+export const HIDDEN_GAMES_COLLECTION_NAME = "Hidden Games";
+
 export interface PublicUser {
   id: string;
   email: string;
@@ -21,6 +23,7 @@ export interface GameResponse {
   genres?: string[];
   steamTags?: string[];
   collections?: string[];
+  hideInLibrary?: boolean;
 }
 
 export interface CollectionResponse {

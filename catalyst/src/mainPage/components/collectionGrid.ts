@@ -8,10 +8,12 @@ interface RenderCollectionGridArgs {
   container: HTMLElement;
   collections: CollectionGridItem[];
   favoritesCount?: number;
+  hiddenCount?: number;
   onCreateCollection?: () => void;
   onDeleteCollection?: (collection: CollectionGridItem) => void;
   onRenameCollection?: (collection: CollectionGridItem) => void;
   onSelectFavorites?: () => void;
+  onSelectHidden?: () => void;
   onSelectCollection?: (collection: CollectionGridItem) => void;
 }
 
@@ -25,10 +27,12 @@ export const renderCollectionGrid = ({
   container,
   collections,
   favoritesCount = 0,
+  hiddenCount = 0,
   onCreateCollection,
   onDeleteCollection,
   onRenameCollection,
   onSelectFavorites,
+  onSelectHidden,
   onSelectCollection,
 }: RenderCollectionGridArgs): void => {
   const cleanupContainer = container as CollectionGridContainer;
@@ -141,6 +145,33 @@ export const renderCollectionGrid = ({
 
     favoritesTile.append(openFavoritesButton);
     grid.append(favoritesTile);
+  }
+
+  if (hiddenCount > 0) {
+    const hiddenTile = document.createElement("article");
+    hiddenTile.className = "collection-grid-card";
+
+    const openHiddenButton = document.createElement("button");
+    openHiddenButton.type = "button";
+    openHiddenButton.className = "collection-grid-card-open";
+    openHiddenButton.setAttribute("aria-label", `Hidden Games (${hiddenCount} games)`);
+
+    const hiddenName = document.createElement("span");
+    hiddenName.className = "collection-grid-card-name";
+    hiddenName.textContent = "Hidden Games";
+
+    const hiddenCountText = document.createElement("span");
+    hiddenCountText.className = "collection-grid-card-count";
+    hiddenCountText.textContent = `(${hiddenCount})`;
+
+    openHiddenButton.append(hiddenName, hiddenCountText);
+    openHiddenButton.addEventListener("click", () => {
+      closeContextMenu();
+      onSelectHidden?.();
+    });
+
+    hiddenTile.append(openHiddenButton);
+    grid.append(hiddenTile);
   }
 
   const handlePointerDown = (event: PointerEvent): void => {

@@ -20,6 +20,8 @@ use sha2::{Digest, Sha256};
 use tauri::{Manager, State};
 use url::Url;
 use uuid::Uuid;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 const STEAM_OPENID_ENDPOINT: &str = "https://steamcommunity.com/openid/login";
 const STEAM_WEB_API_ENDPOINT: &str =
@@ -161,6 +163,7 @@ struct GameResponse {
     favorite: bool,
     steam_tags: Vec<String>,
     collections: Vec<String>,
+    hide_in_library: bool,
 }
 
 #[derive(Serialize)]
@@ -761,6 +764,14 @@ fn set_game_privacy_settings(
     )?;
     settings.hide_in_library = hide_in_library;
     settings.mark_as_private = mark_as_private;
+
+    if normalized_provider == "steam" {
+        let app_id = normalized_external_id
+            .parse::<u64>()
+            .map_err(|_| String::from("Steam external_id must be a numeric app ID"))?;
+        apply_steam_game_privacy_settings(state.inner(), &user, app_id, &settings)?;
+    }
+
     save_game_privacy_settings(
         &connection,
         &user.id,
@@ -787,6 +798,13 @@ fn clear_game_overlay_data(
         &normalized_provider,
         &normalized_external_id,
     )?;
+
+    if normalized_provider == "steam" {
+        let app_id = normalized_external_id
+            .parse::<u64>()
+            .map_err(|_| String::from("Steam external_id must be a numeric app ID"))?;
+        clear_steam_game_overlay_data(state.inner(), &user, app_id)?;
+    }
 
     let mut settings = load_game_privacy_settings(
         &connection,
@@ -1605,6 +1623,57 @@ fn verify_game_files(
 }
 
 #[tauri::command]
+fn add_game_desktop_shortcut(
+    provider: String,
+    external_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let connection = open_connection(&state.db_path)?;
+    cleanup_expired_sessions(&connection)?;
+    let user = get_authenticated_user(state.inner(), &connection)?;
+    let (provider, external_id) = normalize_game_identity_input(&provider, &external_id)?;
+    ensure_owned_game_exists(&connection, &user.id, &provider, &external_id)?;
+
+    let fallback_name = format!("Game {}", external_id);
+    let game_name = connection
+        .query_row(
+            "
+            SELECT name
+            FROM games
+            WHERE user_id = ?1 AND provider = ?2 AND external_id = ?3
+            ",
+            params![&user.id, &provider, &external_id],
+            |record| record.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| format!("Failed to query game name for desktop shortcut: {error}"))?
+        .unwrap_or(fallback_name);
+
+    create_provider_game_desktop_shortcut(&provider, &external_id, &game_name)
+}
+
+#[tauri::command]
+fn open_game_recording_settings(
+    provider: String,
+    external_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let connection = open_connection(&state.db_path)?;
+    cleanup_expired_sessions(&connection)?;
+    let user = get_authenticated_user(state.inner(), &connection)?;
+    let (provider, external_id) = normalize_game_identity_input(&provider, &external_id)?;
+    ensure_owned_game_exists(&connection, &user.id, &provider, &external_id)?;
+
+    if provider != "steam" {
+        return Err(String::from(
+            "Game recording settings are currently only available for Steam games.",
+        ));
+    }
+
+    open_steam_game_recording_settings()
+}
+
+#[tauri::command]
 fn import_steam_collections(state: State<'_, AppState>) -> Result<SteamCollectionsImportResponse, String> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
@@ -2197,6 +2266,40 @@ fn resolve_steam_localconfig_path(
     }
 
     Ok(localconfig_path)
+}
+
+fn resolve_steam_sharedconfig_paths(
+    steam_root_override: Option<&str>,
+    steam_id: &str,
+) -> Result<Vec<PathBuf>, String> {
+    let steam_root = resolve_steam_root_path(steam_root_override)
+        .ok_or_else(|| String::from("Could not locate local Steam installation"))?;
+    let userdata_directory = resolve_steam_userdata_directory(&steam_root, steam_id)?;
+    let candidates = [
+        userdata_directory.join("7").join("remote").join("sharedconfig.vdf"),
+        userdata_directory.join("config").join("sharedconfig.vdf"),
+    ];
+    Ok(candidates
+        .into_iter()
+        .filter(|candidate_path| candidate_path.is_file())
+        .collect())
+}
+
+fn resolve_steam_cloudstorage_directory(
+    steam_root_override: Option<&str>,
+    steam_id: &str,
+) -> Result<PathBuf, String> {
+    let steam_root = resolve_steam_root_path(steam_root_override)
+        .ok_or_else(|| String::from("Could not locate local Steam installation"))?;
+    let userdata_directory = resolve_steam_userdata_directory(&steam_root, steam_id)?;
+    let cloudstorage_directory = userdata_directory.join("config").join("cloudstorage");
+    if !cloudstorage_directory.is_dir() {
+        return Err(format!(
+            "Could not locate Steam cloudstorage directory at {}",
+            cloudstorage_directory.display()
+        ));
+    }
+    Ok(cloudstorage_directory)
 }
 
 fn empty_game_customization_artwork_response() -> GameCustomizationArtworkResponse {
@@ -4573,8 +4676,13 @@ fn list_games_by_user(connection: &Connection, user_id: &str) -> Result<Vec<Game
                 WHERE favorite.user_id = g.user_id
                   AND favorite.provider = g.provider
                   AND favorite.external_id = g.external_id
-              ) AS favorite
+              ) AS favorite,
+              COALESCE(privacy.hide_in_library, 0) AS hide_in_library
             FROM games g
+            LEFT JOIN game_privacy_settings privacy
+              ON privacy.user_id = g.user_id
+              AND privacy.provider = g.provider
+              AND privacy.external_id = g.external_id
             WHERE g.user_id = ?1
             ORDER BY g.name COLLATE NOCASE ASC
             ",
@@ -4587,6 +4695,7 @@ fn list_games_by_user(connection: &Connection, user_id: &str) -> Result<Vec<Game
             let external_id: String = row.get(1)?;
             let installed_raw: i64 = row.get(5)?;
             let favorite_raw: i64 = row.get(8)?;
+            let hide_in_library_raw: i64 = row.get(9)?;
             let game_key = game_membership_key(&provider, &external_id);
             let steam_tags = if provider.eq_ignore_ascii_case("steam") {
                 steam_tags_by_game
@@ -4613,6 +4722,7 @@ fn list_games_by_user(connection: &Connection, user_id: &str) -> Result<Vec<Game
                 favorite: favorite_raw > 0,
                 steam_tags,
                 collections,
+                hide_in_library: hide_in_library_raw > 0,
             })
         })
         .map_err(|error| format!("Failed to query library rows: {error}"))?;
@@ -5376,6 +5486,19 @@ fn vdf_remove_entry(value: &mut VdfValue, key: &str) {
     entries.retain(|(entry_key, _)| !entry_key.eq_ignore_ascii_case(key));
 }
 
+fn vdf_get_text_entry<'a>(value: &'a VdfValue, key: &str) -> Option<&'a str> {
+    let VdfValue::Object(entries) = value else {
+        return None;
+    };
+    entries
+        .iter()
+        .find(|(entry_key, _)| entry_key.eq_ignore_ascii_case(key))
+        .and_then(|(_, entry_value)| match entry_value {
+            VdfValue::Text(text) => Some(text.as_str()),
+            VdfValue::Object(_) => None,
+        })
+}
+
 fn escape_vdf_text(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
     for character in value.chars() {
@@ -5616,6 +5739,154 @@ fn try_spawn_command(command: &str, args: &[&str]) -> Result<(), String> {
         })
 }
 
+fn sanitize_desktop_shortcut_name(name: &str) -> String {
+    let mut sanitized = String::new();
+    for character in name.chars() {
+        if character.is_ascii_alphanumeric() || matches!(character, ' ' | '-' | '_') {
+            sanitized.push(character);
+        }
+    }
+
+    let trimmed = sanitized.trim();
+    if trimmed.is_empty() {
+        return String::from("Steam Game");
+    }
+
+    trimmed.to_owned()
+}
+
+fn resolve_desktop_shortcuts_directory() -> Result<PathBuf, String> {
+    let home_directory = std::env::var("HOME")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var("USERPROFILE")
+                .ok()
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+        })
+        .ok_or_else(|| String::from("Could not resolve user home directory for desktop shortcut"))?;
+
+    let desktop_directory = home_directory.join("Desktop");
+    if desktop_directory.is_dir() {
+        return Ok(desktop_directory);
+    }
+    if fs::create_dir_all(&desktop_directory).is_ok() {
+        return Ok(desktop_directory);
+    }
+
+    let fallback_directory = if cfg!(target_os = "windows") {
+        home_directory
+    } else if cfg!(target_os = "macos") {
+        home_directory.join("Applications")
+    } else {
+        home_directory.join(".local").join("share").join("applications")
+    };
+    fs::create_dir_all(&fallback_directory).map_err(|error| {
+        format!(
+            "Could not create fallback shortcut directory at {}: {error}",
+            fallback_directory.display()
+        )
+    })?;
+    Ok(fallback_directory)
+}
+
+fn create_provider_game_desktop_shortcut(
+    provider: &str,
+    external_id: &str,
+    game_name: &str,
+) -> Result<(), String> {
+    match provider {
+        "steam" => create_steam_game_desktop_shortcut(external_id, game_name),
+        _ => Err(format!(
+            "Provider '{provider}' is not supported for desktop shortcut creation"
+        )),
+    }
+}
+
+fn create_steam_game_desktop_shortcut(external_id: &str, game_name: &str) -> Result<(), String> {
+    let app_id = external_id
+        .parse::<u64>()
+        .map_err(|_| String::from("Steam external_id must be a numeric app ID"))?;
+    let shortcuts_directory = resolve_desktop_shortcuts_directory()?;
+    let shortcut_name = sanitize_desktop_shortcut_name(game_name);
+
+    #[cfg(target_os = "windows")]
+    {
+        let shortcut_path = shortcuts_directory.join(format!("{shortcut_name}.url"));
+        let content = format!("[InternetShortcut]\r\nURL=steam://run/{app_id}\r\n");
+        fs::write(&shortcut_path, content).map_err(|error| {
+            format!(
+                "Could not write desktop shortcut at {}: {error}",
+                shortcut_path.display()
+            )
+        })?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let shortcut_path = shortcuts_directory.join(format!("{shortcut_name}.webloc"));
+        let content = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>URL</key>
+  <string>steam://run/{app_id}</string>
+</dict>
+</plist>
+"#
+        );
+        fs::write(&shortcut_path, content).map_err(|error| {
+            format!(
+                "Could not write desktop shortcut at {}: {error}",
+                shortcut_path.display()
+            )
+        })?;
+        return Ok(());
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let shortcut_path = shortcuts_directory.join(format!("{shortcut_name}.desktop"));
+        let content = format!(
+            "[Desktop Entry]\nType=Application\nVersion=1.0\nName={shortcut_name}\nExec=xdg-open steam://run/{app_id}\nIcon=steam\nTerminal=false\nCategories=Game;\nStartupNotify=true\n"
+        );
+        fs::write(&shortcut_path, content).map_err(|error| {
+            format!(
+                "Could not write desktop shortcut at {}: {error}",
+                shortcut_path.display()
+            )
+        })?;
+
+        let metadata = fs::metadata(&shortcut_path).map_err(|error| {
+            format!(
+                "Could not read desktop shortcut metadata at {}: {error}",
+                shortcut_path.display()
+            )
+        })?;
+        let mut permissions = metadata.permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&shortcut_path, permissions).map_err(|error| {
+            format!(
+                "Could not set executable permissions on desktop shortcut at {}: {error}",
+                shortcut_path.display()
+            )
+        })?;
+
+        return Ok(());
+    }
+
+    #[allow(unreachable_code)]
+    Err(String::from(
+        "Desktop shortcut creation is unsupported on this platform",
+    ))
+}
+
 fn launch_steam_uri(uri: &str, action: &str) -> Result<(), String> {
     let install_action = action.eq_ignore_ascii_case("install");
 
@@ -5716,6 +5987,34 @@ fn launch_steam_uri(uri: &str, action: &str) -> Result<(), String> {
     webbrowser::open(uri)
         .map(|_| ())
         .map_err(|error| format!("Failed to open Steam URI '{uri}': {error}"))
+}
+
+fn open_steam_game_recording_settings() -> Result<(), String> {
+    let candidate_uris = [
+        "steam://open/settings/gamerecording",
+        "steam://settings/gamerecording",
+        "steam://open/settings",
+        "steam://settings",
+    ];
+    let mut errors = Vec::new();
+    for uri in candidate_uris {
+        match launch_steam_uri(uri, "open-settings") {
+            Ok(()) => return Ok(()),
+            Err(error) => errors.push(error),
+        }
+    }
+
+    let help_url = "https://help.steampowered.com/en/";
+    match webbrowser::open(help_url) {
+        Ok(_) => Ok(()),
+        Err(error) => {
+            errors.push(format!("webbrowser::open {help_url}: {error}"));
+            Err(format!(
+                "Could not open Steam game recording settings. Attempts: {}",
+                errors.join("; ")
+            ))
+        }
+    }
 }
 
 fn open_provider_game_uri(
@@ -6179,10 +6478,823 @@ fn resolve_steam_compatibility_tools(
     Ok(tools)
 }
 
+fn normalize_steam_manifest_language(language: &str) -> Option<String> {
+    let normalized = language.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    let mapped = match normalized.as_str() {
+        "arabic" => "arabic",
+        "bulgarian" => "bulgarian",
+        "brazilian portuguese" => "brazilian",
+        "chinese (simplified)" => "schinese",
+        "chinese (traditional)" => "tchinese",
+        "croatian" => "croatian",
+        "czech" => "czech",
+        "danish" => "danish",
+        "dutch" => "dutch",
+        "english" => "english",
+        "estonian" => "estonian",
+        "finnish" => "finnish",
+        "french" => "french",
+        "german" => "german",
+        "greek" => "greek",
+        "hungarian" => "hungarian",
+        "indonesian" => "indonesian",
+        "italian" => "italian",
+        "japanese" => "japanese",
+        "korean" => "koreana",
+        "latam" => "latam",
+        "latin american spanish" => "latam",
+        "norwegian" => "norwegian",
+        "polish" => "polish",
+        "portuguese" => "portuguese",
+        "romanian" => "romanian",
+        "russian" => "russian",
+        "simplified chinese" => "schinese",
+        "spanish" => "spanish",
+        "spanish - latin america" => "latam",
+        "swedish" => "swedish",
+        "thai" => "thai",
+        "traditional chinese" => "tchinese",
+        "turkish" => "turkish",
+        "ukrainian" => "ukrainian",
+        "vietnamese" => "vietnamese",
+        _ => {
+            if normalized.contains("simplified") && normalized.contains("chinese") {
+                "schinese"
+            } else if normalized.contains("traditional") && normalized.contains("chinese") {
+                "tchinese"
+            } else if normalized.contains("latin") && normalized.contains("spanish") {
+                "latam"
+            } else if normalized.contains("brazil") && normalized.contains("portuguese") {
+                "brazilian"
+            } else if normalized.contains("korean") {
+                "koreana"
+            } else {
+                let compact = normalized.replace([' ', '-', '_'], "");
+                if compact.is_empty() {
+                    return None;
+                }
+                return Some(compact);
+            }
+        }
+    };
+
+    Some(mapped.to_owned())
+}
+
+fn apply_steam_manifest_game_properties_settings(
+    state: &AppState,
+    app_id: u64,
+    settings: &GamePropertiesSettingsPayload,
+) -> Result<(), String> {
+    let manifest_path = match resolve_steam_manifest_path_for_app_id(state.steam_root_override.as_deref(), app_id) {
+        Ok(path) => path,
+        Err(error) => {
+            log_steam_settings_debug(
+                state,
+                &format!(
+                    "app {}: skipping manifest settings write because no manifest was found ({})",
+                    app_id, error
+                ),
+            );
+            return Ok(());
+        }
+    };
+    let manifest_contents = fs::read_to_string(&manifest_path).map_err(|error| {
+        format!(
+            "Failed to read Steam app manifest at {}: {error}",
+            manifest_path.display()
+        )
+    })?;
+    let mut manifest_value = parse_vdf_document(&manifest_contents)?;
+    let app_state_object = vdf_ensure_object_path_mut(&mut manifest_value, &["AppState"]);
+
+    match settings.updates.automatic_updates_mode.as_str() {
+        "use-global-setting" => vdf_remove_entry(app_state_object, "AutoUpdateBehavior"),
+        "wait-until-launch" => vdf_set_text_entry(app_state_object, "AutoUpdateBehavior", "1"),
+        "let-steam-decide" => vdf_set_text_entry(app_state_object, "AutoUpdateBehavior", "0"),
+        "immediately-download" => vdf_set_text_entry(app_state_object, "AutoUpdateBehavior", "2"),
+        _ => {}
+    }
+
+    match settings.updates.background_downloads_mode.as_str() {
+        "pause-while-playing-global" => vdf_remove_entry(app_state_object, "AllowOtherDownloadsWhileRunning"),
+        "always-allow" => vdf_set_text_entry(app_state_object, "AllowOtherDownloadsWhileRunning", "1"),
+        "never-allow" => vdf_set_text_entry(app_state_object, "AllowOtherDownloadsWhileRunning", "0"),
+        _ => {}
+    }
+
+    let user_config_object = vdf_ensure_object_path_mut(app_state_object, &["UserConfig"]);
+    if let Some(language) = normalize_steam_manifest_language(&settings.general.language) {
+        vdf_set_text_entry(user_config_object, "language", &language);
+    }
+
+    let selected_beta_branch = settings.game_versions_betas.selected_version_id.trim();
+    if selected_beta_branch.is_empty() || selected_beta_branch.eq_ignore_ascii_case("public") {
+        vdf_remove_entry(user_config_object, "betakey");
+        vdf_remove_entry(user_config_object, "BetaKey");
+    } else {
+        vdf_set_text_entry(user_config_object, "betakey", selected_beta_branch);
+    }
+
+    let private_access_code = settings.game_versions_betas.private_access_code.trim();
+    if private_access_code.is_empty() {
+        vdf_remove_entry(user_config_object, "betapassword");
+    } else {
+        vdf_set_text_entry(user_config_object, "betapassword", private_access_code);
+    }
+
+    let serialized_manifest = serialize_vdf_document(&manifest_value);
+    fs::write(&manifest_path, serialized_manifest).map_err(|error| {
+        format!(
+            "Failed to write Steam app manifest at {}: {error}",
+            manifest_path.display()
+        )
+    })?;
+    log_steam_settings_debug(
+        state,
+        &format!("app {}: wrote Steam app manifest successfully", app_id),
+    );
+    Ok(())
+}
+
+fn vdf_remove_entries_with_case_insensitive_prefixes(
+    value: &mut VdfValue,
+    prefixes: &[&str],
+) -> usize {
+    let VdfValue::Object(entries) = value else {
+        return 0;
+    };
+    let normalized_prefixes = prefixes
+        .iter()
+        .map(|prefix| prefix.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    if normalized_prefixes.is_empty() {
+        return 0;
+    }
+
+    let original_len = entries.len();
+    entries.retain(|(entry_key, _)| {
+        let normalized_key = entry_key.to_ascii_lowercase();
+        !normalized_prefixes
+            .iter()
+            .any(|prefix| normalized_key.starts_with(prefix))
+    });
+    original_len.saturating_sub(entries.len())
+}
+
+fn clear_steam_game_overlay_data(state: &AppState, user: &UserRow, app_id: u64) -> Result<(), String> {
+    let steam_id = user
+        .steam_id
+        .as_deref()
+        .ok_or_else(|| String::from("Steam is not linked for this account"))?;
+    let localconfig_path = resolve_steam_localconfig_path(state.steam_root_override.as_deref(), steam_id)?;
+    let localconfig_contents = fs::read_to_string(&localconfig_path).map_err(|error| {
+        format!(
+            "Failed to read Steam localconfig at {}: {error}",
+            localconfig_path.display()
+        )
+    })?;
+    let mut localconfig_value = parse_vdf_document(&localconfig_contents)?;
+    let steam_settings_object = vdf_ensure_object_path_mut(
+        &mut localconfig_value,
+        &["UserLocalConfigStore", "Software", "Valve", "Steam"],
+    );
+    let overlay_prefix = format!("OverlaySavedDataV2_{app_id}_");
+    let legacy_overlay_prefix = format!("OverlaySavedData_{app_id}_");
+    let removed_entries = vdf_remove_entries_with_case_insensitive_prefixes(
+        steam_settings_object,
+        &[
+            overlay_prefix.as_str(),
+            legacy_overlay_prefix.as_str(),
+            &format!("OverlaySavedDataV2_{app_id}"),
+        ],
+    );
+    if removed_entries == 0 {
+        log_steam_settings_debug(
+            state,
+            &format!("app {}: no overlay entries found to remove", app_id),
+        );
+        return Ok(());
+    }
+
+    let serialized_localconfig = serialize_vdf_document(&localconfig_value);
+    fs::write(&localconfig_path, serialized_localconfig).map_err(|error| {
+        format!(
+            "Failed to write Steam localconfig at {}: {error}",
+            localconfig_path.display()
+        )
+    })?;
+    log_steam_settings_debug(
+        state,
+        &format!("app {}: removed {} overlay entries", app_id, removed_entries),
+    );
+    Ok(())
+}
+
 fn log_steam_settings_debug(state: &AppState, message: &str) {
     if state.steam_settings_debug_logging {
         eprintln!("[catalyst:steam-settings] {message}");
     }
+}
+
+fn json_value_matches_app_id(value: &serde_json::Value, app_id: u64) -> bool {
+    if let Some(value_number) = value.as_u64() {
+        return value_number == app_id;
+    }
+    value
+        .as_str()
+        .and_then(|text| text.trim().parse::<u64>().ok())
+        .is_some_and(|value_number| value_number == app_id)
+}
+
+fn json_array_contains_app_id(values: &[serde_json::Value], app_id: u64) -> bool {
+    values
+        .iter()
+        .any(|entry_value| json_value_matches_app_id(entry_value, app_id))
+}
+
+fn json_array_remove_app_id(values: &mut Vec<serde_json::Value>, app_id: u64) {
+    values.retain(|entry_value| !json_value_matches_app_id(entry_value, app_id));
+}
+
+fn update_hidden_collection_membership(
+    hidden_collection_object: &mut serde_json::Map<String, serde_json::Value>,
+    app_id: u64,
+    hide_in_library: bool,
+) {
+    let mut added_values = hidden_collection_object
+        .get("added")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut removed_values = hidden_collection_object
+        .get("removed")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    json_array_remove_app_id(&mut added_values, app_id);
+    json_array_remove_app_id(&mut removed_values, app_id);
+    if hide_in_library {
+        if !json_array_contains_app_id(&added_values, app_id) {
+            added_values.push(serde_json::Value::from(app_id));
+        }
+    } else if !json_array_contains_app_id(&removed_values, app_id) {
+        removed_values.push(serde_json::Value::from(app_id));
+    }
+    hidden_collection_object.insert(String::from("added"), serde_json::Value::Array(added_values));
+    hidden_collection_object.insert(String::from("removed"), serde_json::Value::Array(removed_values));
+}
+
+fn update_steam_user_collections_hidden_state(
+    steam_settings_object: &mut VdfValue,
+    app_id: u64,
+    hide_in_library: bool,
+) -> Result<(), String> {
+    let mut user_collections_value = vdf_get_text_entry(steam_settings_object, "user-collections")
+        .and_then(|json_text| serde_json::from_str::<serde_json::Value>(json_text).ok())
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| serde_json::json!({}));
+    let Some(user_collections_object) = user_collections_value.as_object_mut() else {
+        return Err(String::from("Steam user-collections value must be a JSON object"));
+    };
+    let hidden_collection_value = user_collections_object
+        .entry(String::from("hidden"))
+        .or_insert_with(|| serde_json::json!({}));
+    let hidden_collection_name = hidden_collection_value
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("Hidden")
+        .to_owned();
+    let mut hidden_collection_object = hidden_collection_value
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    hidden_collection_object.insert(
+        String::from("name"),
+        serde_json::Value::String(hidden_collection_name),
+    );
+    update_hidden_collection_membership(&mut hidden_collection_object, app_id, hide_in_library);
+    user_collections_object.insert(
+        String::from("hidden"),
+        serde_json::Value::Object(hidden_collection_object),
+    );
+    let serialized_user_collections = serde_json::to_string(&user_collections_value)
+        .map_err(|error| format!("Failed to serialize Steam user-collections JSON: {error}"))?;
+    vdf_remove_entry(steam_settings_object, "user-collections");
+    vdf_set_text_entry(
+        steam_settings_object,
+        "user-collections",
+        &serialized_user_collections,
+    );
+    Ok(())
+}
+
+fn vdf_for_each_object_path_mut<F>(
+    value: &mut VdfValue,
+    path: &[&str],
+    on_match: &mut F,
+) -> Result<usize, String>
+where
+    F: FnMut(&mut VdfValue) -> Result<(), String>,
+{
+    if path.is_empty() {
+        on_match(value)?;
+        return Ok(1);
+    }
+
+    if matches!(value, VdfValue::Text(_)) {
+        *value = VdfValue::Object(Vec::new());
+    }
+    let VdfValue::Object(entries) = value else {
+        return Ok(0);
+    };
+    let mut matched_count = 0usize;
+
+    for (entry_key, entry_value) in entries.iter_mut() {
+        if !entry_key.eq_ignore_ascii_case(path[0]) {
+            continue;
+        }
+        matched_count += vdf_for_each_object_path_mut(entry_value, &path[1..], on_match)?;
+    }
+
+    Ok(matched_count)
+}
+
+fn vdf_for_each_matching_app_entry_in_apps_sections_mut<F>(
+    value: &mut VdfValue,
+    app_id_key: &str,
+    on_match: &mut F,
+) where
+    F: FnMut(&mut VdfValue),
+{
+    let VdfValue::Object(entries) = value else {
+        return;
+    };
+
+    for (entry_key, entry_value) in entries.iter_mut() {
+        if entry_key.eq_ignore_ascii_case("apps") {
+            if let VdfValue::Object(app_entries) = entry_value {
+                for (app_entry_key, app_entry_value) in app_entries.iter_mut() {
+                    if !app_entry_key.eq_ignore_ascii_case(app_id_key) {
+                        continue;
+                    }
+                    if matches!(app_entry_value, VdfValue::Text(_)) {
+                        *app_entry_value = VdfValue::Object(Vec::new());
+                    }
+                    on_match(app_entry_value);
+                }
+            }
+        }
+        vdf_for_each_matching_app_entry_in_apps_sections_mut(entry_value, app_id_key, on_match);
+    }
+}
+
+fn apply_steam_game_privacy_settings_to_steam_root_object(
+    steam_settings_object: &mut VdfValue,
+    app_id: u64,
+    settings: &GamePrivacySettingsResponse,
+) -> Result<(), String> {
+    let app_id_key = app_id.to_string();
+    let update_app_settings_object = |app_settings_object: &mut VdfValue| {
+        if settings.hide_in_library {
+            vdf_set_text_entry(app_settings_object, "Hidden", "1");
+            vdf_set_text_entry(app_settings_object, "hidden", "1");
+        } else {
+            vdf_remove_entry(app_settings_object, "Hidden");
+            vdf_remove_entry(app_settings_object, "hidden");
+        }
+
+        if settings.mark_as_private {
+            vdf_set_text_entry(app_settings_object, "Private", "1");
+            vdf_set_text_entry(app_settings_object, "private", "1");
+        } else {
+            vdf_remove_entry(app_settings_object, "Private");
+            vdf_remove_entry(app_settings_object, "private");
+        }
+    };
+    let mut matched_any_app_entry = false;
+    let mut update_existing_app_settings = |app_settings_object: &mut VdfValue| {
+        matched_any_app_entry = true;
+        update_app_settings_object(app_settings_object);
+    };
+    vdf_for_each_matching_app_entry_in_apps_sections_mut(
+        steam_settings_object,
+        &app_id_key,
+        &mut update_existing_app_settings,
+    );
+    if !matched_any_app_entry {
+        let apps_object = vdf_ensure_object_path_mut(steam_settings_object, &["apps"]);
+        let app_settings_object = vdf_ensure_object_path_mut(apps_object, &[app_id_key.as_str()]);
+        update_app_settings_object(app_settings_object);
+    }
+
+    update_steam_user_collections_hidden_state(
+        steam_settings_object,
+        app_id,
+        settings.hide_in_library,
+    )?;
+    Ok(())
+}
+
+fn apply_steam_game_privacy_settings_to_vdf_document(
+    vdf_document: &mut VdfValue,
+    steam_store_root_path: &[&str],
+    app_id: u64,
+    settings: &GamePrivacySettingsResponse,
+) -> Result<(), String> {
+    let mut apply_to_steam_root = |steam_settings_object: &mut VdfValue| {
+        apply_steam_game_privacy_settings_to_steam_root_object(
+            steam_settings_object,
+            app_id,
+            settings,
+        )
+    };
+
+    let matched_count =
+        vdf_for_each_object_path_mut(vdf_document, steam_store_root_path, &mut apply_to_steam_root)?;
+    if matched_count > 0 {
+        return Ok(());
+    }
+
+    let steam_settings_object = vdf_ensure_object_path_mut(vdf_document, steam_store_root_path);
+    apply_to_steam_root(steam_settings_object)
+}
+
+fn apply_steam_user_collections_hidden_state_to_vdf_document(
+    vdf_document: &mut VdfValue,
+    steam_store_root_path: &[&str],
+    app_id: u64,
+    hide_in_library: bool,
+) -> Result<(), String> {
+    let mut apply_to_steam_root = |steam_settings_object: &mut VdfValue| {
+        update_steam_user_collections_hidden_state(steam_settings_object, app_id, hide_in_library)
+    };
+    let matched_count =
+        vdf_for_each_object_path_mut(vdf_document, steam_store_root_path, &mut apply_to_steam_root)?;
+    if matched_count > 0 {
+        return Ok(());
+    }
+
+    let steam_settings_object = vdf_ensure_object_path_mut(vdf_document, steam_store_root_path);
+    apply_to_steam_root(steam_settings_object)
+}
+
+fn current_unix_timestamp_seconds() -> i64 {
+    SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn serialize_steam_hidden_collection_cloudstorage_value(
+    existing_value_text: Option<&str>,
+    app_id: u64,
+    hide_in_library: bool,
+) -> Result<String, String> {
+    let mut hidden_collection_object = existing_value_text
+        .and_then(|value_text| serde_json::from_str::<serde_json::Value>(value_text).ok())
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    let hidden_collection_id = hidden_collection_object
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("hidden")
+        .to_owned();
+    let hidden_collection_name = hidden_collection_object
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("Hidden")
+        .to_owned();
+    hidden_collection_object.insert(
+        String::from("id"),
+        serde_json::Value::String(hidden_collection_id),
+    );
+    hidden_collection_object.insert(
+        String::from("name"),
+        serde_json::Value::String(hidden_collection_name),
+    );
+    update_hidden_collection_membership(&mut hidden_collection_object, app_id, hide_in_library);
+    serde_json::to_string(&serde_json::Value::Object(hidden_collection_object))
+        .map_err(|error| format!("Failed to serialize Steam hidden cloudstorage JSON: {error}"))
+}
+
+fn update_steam_cloudstorage_hidden_collection_namespace(
+    namespace_path: &Path,
+    app_id: u64,
+    hide_in_library: bool,
+) -> Result<String, String> {
+    let namespace_contents = fs::read_to_string(namespace_path).map_err(|error| {
+        format!(
+            "Failed to read Steam cloudstorage namespace file at {}: {error}",
+            namespace_path.display()
+        )
+    })?;
+    let mut namespace_value = serde_json::from_str::<serde_json::Value>(&namespace_contents).map_err(
+        |error| {
+            format!(
+                "Failed to parse Steam cloudstorage namespace JSON at {}: {error}",
+                namespace_path.display()
+            )
+        },
+    )?;
+    let Some(namespace_entries) = namespace_value.as_array_mut() else {
+        return Err(format!(
+            "Steam cloudstorage namespace data at {} must be a JSON array",
+            namespace_path.display()
+        ));
+    };
+
+    let mut updated_namespace_version: Option<String> = None;
+    for namespace_entry in namespace_entries.iter_mut() {
+        let Some(entry_parts) = namespace_entry.as_array_mut() else {
+            continue;
+        };
+        if entry_parts
+            .first()
+            .and_then(serde_json::Value::as_str)
+            != Some("user-collections.hidden")
+        {
+            continue;
+        }
+
+        if entry_parts.len() < 2 {
+            entry_parts.resize(2, serde_json::json!({}));
+        }
+        if !entry_parts[1].is_object() {
+            entry_parts[1] = serde_json::json!({});
+        }
+        let Some(hidden_collection_metadata) = entry_parts[1].as_object_mut() else {
+            continue;
+        };
+        let serialized_hidden_collection = serialize_steam_hidden_collection_cloudstorage_value(
+            hidden_collection_metadata
+                .get("value")
+                .and_then(serde_json::Value::as_str),
+            app_id,
+            hide_in_library,
+        )?;
+        let current_version = hidden_collection_metadata
+            .get("version")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|text| text.parse::<u64>().ok())
+            .unwrap_or(0);
+        let next_version = current_version.saturating_add(1);
+        let next_version_text = next_version.to_string();
+        hidden_collection_metadata.insert(
+            String::from("key"),
+            serde_json::Value::String(String::from("user-collections.hidden")),
+        );
+        hidden_collection_metadata.insert(
+            String::from("timestamp"),
+            serde_json::Value::from(current_unix_timestamp_seconds()),
+        );
+        hidden_collection_metadata.insert(
+            String::from("value"),
+            serde_json::Value::String(serialized_hidden_collection),
+        );
+        hidden_collection_metadata.insert(
+            String::from("version"),
+            serde_json::Value::String(next_version_text.clone()),
+        );
+        hidden_collection_metadata.insert(
+            String::from("conflictResolutionMethod"),
+            serde_json::Value::String(String::from("custom")),
+        );
+        hidden_collection_metadata.insert(
+            String::from("strMethodId"),
+            serde_json::Value::String(String::from("union-collections")),
+        );
+        updated_namespace_version = Some(next_version_text);
+        break;
+    }
+
+    if updated_namespace_version.is_none() {
+        let serialized_hidden_collection =
+            serialize_steam_hidden_collection_cloudstorage_value(None, app_id, hide_in_library)?;
+        namespace_entries.push(serde_json::json!([
+            "user-collections.hidden",
+            {
+                "key": "user-collections.hidden",
+                "timestamp": current_unix_timestamp_seconds(),
+                "value": serialized_hidden_collection,
+                "version": "1",
+                "conflictResolutionMethod": "custom",
+                "strMethodId": "union-collections"
+            }
+        ]));
+        updated_namespace_version = Some(String::from("1"));
+    }
+
+    let serialized_namespace = serde_json::to_string(&namespace_value).map_err(|error| {
+        format!(
+            "Failed to serialize Steam cloudstorage namespace data at {}: {error}",
+            namespace_path.display()
+        )
+    })?;
+    fs::write(namespace_path, serialized_namespace).map_err(|error| {
+        format!(
+            "Failed to write Steam cloudstorage namespace file at {}: {error}",
+            namespace_path.display()
+        )
+    })?;
+    Ok(updated_namespace_version.unwrap_or_else(|| String::from("1")))
+}
+
+fn update_steam_cloudstorage_namespaces_version(
+    namespaces_path: &Path,
+    namespace_id: i64,
+    namespace_version: &str,
+) -> Result<(), String> {
+    let namespaces_contents = fs::read_to_string(namespaces_path).map_err(|error| {
+        format!(
+            "Failed to read Steam cloudstorage namespaces file at {}: {error}",
+            namespaces_path.display()
+        )
+    })?;
+    let mut namespaces_value = serde_json::from_str::<serde_json::Value>(&namespaces_contents).map_err(
+        |error| {
+            format!(
+                "Failed to parse Steam cloudstorage namespaces JSON at {}: {error}",
+                namespaces_path.display()
+            )
+        },
+    )?;
+    let Some(namespace_entries) = namespaces_value.as_array_mut() else {
+        return Err(format!(
+            "Steam cloudstorage namespaces data at {} must be a JSON array",
+            namespaces_path.display()
+        ));
+    };
+
+    let mut updated_existing_entry = false;
+    for namespace_entry in namespace_entries.iter_mut() {
+        let Some(entry_parts) = namespace_entry.as_array_mut() else {
+            continue;
+        };
+        let Some(entry_namespace_id) = entry_parts.first().and_then(serde_json::Value::as_i64) else {
+            continue;
+        };
+        if entry_namespace_id != namespace_id {
+            continue;
+        }
+        if entry_parts.len() < 2 {
+            entry_parts.resize(2, serde_json::Value::Null);
+        }
+        entry_parts[1] = serde_json::Value::String(namespace_version.to_owned());
+        updated_existing_entry = true;
+        break;
+    }
+
+    if !updated_existing_entry {
+        namespace_entries.push(serde_json::json!([namespace_id, namespace_version]));
+    }
+
+    let serialized_namespaces = serde_json::to_string(&namespaces_value).map_err(|error| {
+        format!(
+            "Failed to serialize Steam cloudstorage namespaces JSON at {}: {error}",
+            namespaces_path.display()
+        )
+    })?;
+    fs::write(namespaces_path, serialized_namespaces).map_err(|error| {
+        format!(
+            "Failed to write Steam cloudstorage namespaces file at {}: {error}",
+            namespaces_path.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn apply_steam_cloudstorage_hidden_collection_state(
+    state: &AppState,
+    steam_id: &str,
+    app_id: u64,
+    hide_in_library: bool,
+) -> Result<(), String> {
+    let cloudstorage_directory =
+        resolve_steam_cloudstorage_directory(state.steam_root_override.as_deref(), steam_id)?;
+    let namespace_path = cloudstorage_directory.join("cloud-storage-namespace-1.json");
+    if !namespace_path.is_file() {
+        return Ok(());
+    }
+    let namespace_version =
+        update_steam_cloudstorage_hidden_collection_namespace(&namespace_path, app_id, hide_in_library)?;
+    let namespaces_path = cloudstorage_directory.join("cloud-storage-namespaces.json");
+    if namespaces_path.is_file() {
+        update_steam_cloudstorage_namespaces_version(&namespaces_path, 1, &namespace_version)?;
+    }
+    log_steam_settings_debug(
+        state,
+        &format!(
+            "app {}: wrote Steam cloudstorage hidden collection state at {}",
+            app_id,
+            namespace_path.display()
+        ),
+    );
+    Ok(())
+}
+
+fn apply_steam_game_privacy_settings(
+    state: &AppState,
+    user: &UserRow,
+    app_id: u64,
+    settings: &GamePrivacySettingsResponse,
+) -> Result<(), String> {
+    let steam_id = user
+        .steam_id
+        .as_deref()
+        .ok_or_else(|| String::from("Steam is not linked for this account"))?;
+    let localconfig_path = resolve_steam_localconfig_path(state.steam_root_override.as_deref(), steam_id)?;
+    log_steam_settings_debug(
+        state,
+        &format!(
+            "Applying privacy settings for app {} using localconfig {}",
+            app_id,
+            localconfig_path.display()
+        ),
+    );
+    let localconfig_contents = fs::read_to_string(&localconfig_path).map_err(|error| {
+        format!(
+            "Failed to read Steam localconfig at {}: {error}",
+            localconfig_path.display()
+        )
+    })?;
+    let mut localconfig_value = parse_vdf_document(&localconfig_contents)?;
+    apply_steam_game_privacy_settings_to_vdf_document(
+        &mut localconfig_value,
+        &["UserLocalConfigStore", "Software", "Valve", "Steam"],
+        app_id,
+        settings,
+    )?;
+    apply_steam_user_collections_hidden_state_to_vdf_document(
+        &mut localconfig_value,
+        &["UserLocalConfigStore", "WebStorage"],
+        app_id,
+        settings.hide_in_library,
+    )?;
+
+    let serialized_localconfig = serialize_vdf_document(&localconfig_value);
+    fs::write(&localconfig_path, serialized_localconfig).map_err(|error| {
+        format!(
+            "Failed to write Steam localconfig at {}: {error}",
+            localconfig_path.display()
+        )
+    })?;
+    log_steam_settings_debug(
+        state,
+        &format!("app {}: wrote Steam localconfig privacy settings successfully", app_id),
+    );
+
+    let sharedconfig_paths =
+        resolve_steam_sharedconfig_paths(state.steam_root_override.as_deref(), steam_id)?;
+    for sharedconfig_path in sharedconfig_paths {
+        let sharedconfig_contents = fs::read_to_string(&sharedconfig_path).map_err(|error| {
+            format!(
+                "Failed to read Steam sharedconfig at {}: {error}",
+                sharedconfig_path.display()
+            )
+        })?;
+        let mut sharedconfig_value = parse_vdf_document(&sharedconfig_contents)?;
+        apply_steam_game_privacy_settings_to_vdf_document(
+            &mut sharedconfig_value,
+            &["UserRoamingConfigStore", "Software", "Valve", "Steam"],
+            app_id,
+            settings,
+        )?;
+        let serialized_sharedconfig = serialize_vdf_document(&sharedconfig_value);
+        fs::write(&sharedconfig_path, serialized_sharedconfig).map_err(|error| {
+            format!(
+                "Failed to write Steam sharedconfig at {}: {error}",
+                sharedconfig_path.display()
+            )
+        })?;
+        log_steam_settings_debug(
+            state,
+            &format!(
+                "app {}: wrote Steam sharedconfig privacy settings at {}",
+                app_id,
+                sharedconfig_path.display()
+            ),
+        );
+    }
+
+    if let Err(error) =
+        apply_steam_cloudstorage_hidden_collection_state(state, steam_id, app_id, settings.hide_in_library)
+    {
+        log_steam_settings_debug(
+            state,
+            &format!(
+                "app {}: skipped cloudstorage hidden collection update ({})",
+                app_id, error
+            ),
+        );
+    }
+
+    Ok(())
 }
 
 fn apply_steam_game_properties_settings(
@@ -6231,6 +7343,19 @@ fn apply_steam_game_properties_settings(
         );
     }
 
+    if settings.general.steam_overlay_enabled {
+        vdf_remove_entry(app_settings_object, "EnableGameOverlay");
+        vdf_remove_entry(app_settings_object, "DisableOverlay");
+        log_steam_settings_debug(
+            state,
+            &format!("app {}: restored default Steam Overlay behavior", app_id),
+        );
+    } else {
+        vdf_set_text_entry(app_settings_object, "EnableGameOverlay", "0");
+        vdf_set_text_entry(app_settings_object, "DisableOverlay", "1");
+        log_steam_settings_debug(state, &format!("app {}: disabled Steam Overlay", app_id));
+    }
+
     match settings.updates.automatic_updates_mode.as_str() {
         "use-global-setting" => {
             vdf_remove_entry(app_settings_object, "AutoUpdateBehavior");
@@ -6254,23 +7379,35 @@ fn apply_steam_game_properties_settings(
     match settings.updates.background_downloads_mode.as_str() {
         "pause-while-playing-global" => {
             vdf_remove_entry(app_settings_object, "AllowDownloadsWhileRunning");
+            vdf_remove_entry(app_settings_object, "AllowOtherDownloadsWhileRunning");
             log_steam_settings_debug(
                 state,
-                &format!("app {}: cleared AllowDownloadsWhileRunning", app_id),
+                &format!(
+                    "app {}: cleared AllowDownloadsWhileRunning and AllowOtherDownloadsWhileRunning",
+                    app_id
+                ),
             );
         }
         "always-allow" => {
             vdf_set_text_entry(app_settings_object, "AllowDownloadsWhileRunning", "1");
+            vdf_set_text_entry(app_settings_object, "AllowOtherDownloadsWhileRunning", "1");
             log_steam_settings_debug(
                 state,
-                &format!("app {}: set AllowDownloadsWhileRunning=1", app_id),
+                &format!(
+                    "app {}: set AllowDownloadsWhileRunning=1 and AllowOtherDownloadsWhileRunning=1",
+                    app_id
+                ),
             );
         }
         "never-allow" => {
             vdf_set_text_entry(app_settings_object, "AllowDownloadsWhileRunning", "0");
+            vdf_set_text_entry(app_settings_object, "AllowOtherDownloadsWhileRunning", "0");
             log_steam_settings_debug(
                 state,
-                &format!("app {}: set AllowDownloadsWhileRunning=0", app_id),
+                &format!(
+                    "app {}: set AllowDownloadsWhileRunning=0 and AllowOtherDownloadsWhileRunning=0",
+                    app_id
+                ),
             );
         }
         _ => {}
@@ -6344,6 +7481,7 @@ fn apply_steam_game_properties_settings(
         state,
         &format!("app {}: wrote Steam localconfig successfully", app_id),
     );
+    apply_steam_manifest_game_properties_settings(state, app_id, settings)?;
     Ok(())
 }
 
@@ -7059,6 +8197,8 @@ pub fn run() {
             browse_game_installed_files,
             backup_game_files,
             verify_game_files,
+            add_game_desktop_shortcut,
+            open_game_recording_settings,
             import_steam_collections
         ])
         .run(tauri::generate_context!())

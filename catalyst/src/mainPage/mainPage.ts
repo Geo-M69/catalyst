@@ -15,7 +15,13 @@ import {
   type GameVersionBetaOption,
 } from "./components/gamePropertiesPanel";
 import { applyLibraryFilters } from "./filtering";
-import type { CollectionResponse, GameResponse, LibraryResponse, PublicUser } from "./types";
+import {
+  HIDDEN_GAMES_COLLECTION_NAME,
+  type CollectionResponse,
+  type GameResponse,
+  type LibraryResponse,
+  type PublicUser,
+} from "./types";
 
 export {};
 
@@ -769,6 +775,35 @@ const setAllGames = (games: GameResponse[]): void => {
   allGames = games;
   gameById = new Map(games.map((game) => [game.id, game]));
   filterPanel.setSteamTagSuggestions(collectSteamTagSuggestions(games));
+  updateCollectionSuggestions();
+};
+
+const buildCollectionSuggestionList = (): string[] => {
+  const suggestionsByKey = new Map<string, string>();
+  const registerSuggestion = (suggestion: string): void => {
+    const trimmedSuggestion = suggestion.trim();
+    if (trimmedSuggestion.length === 0) {
+      return;
+    }
+
+    const normalizedSuggestion = trimmedSuggestion.toLocaleLowerCase();
+    if (!suggestionsByKey.has(normalizedSuggestion)) {
+      suggestionsByKey.set(normalizedSuggestion, trimmedSuggestion);
+    }
+  };
+
+  registerSuggestion(HIDDEN_GAMES_COLLECTION_NAME);
+  for (const collection of allCollections) {
+    registerSuggestion(collection.name);
+  }
+
+  return [...suggestionsByKey.values()].sort((left, right) =>
+    left.localeCompare(right, undefined, { sensitivity: "base" })
+  );
+};
+
+const updateCollectionSuggestions = (): void => {
+  filterPanel.setCollectionSuggestions(buildCollectionSuggestionList());
 };
 
 const setAllCollections = (collections: CollectionResponse[]): void => {
@@ -776,11 +811,47 @@ const setAllCollections = (collections: CollectionResponse[]): void => {
     left.name.localeCompare(right.name, undefined, { sensitivity: "base" })
   );
   allCollections = sortedCollections;
-  filterPanel.setCollectionSuggestions(allCollections.map((collection) => collection.name));
+  updateCollectionSuggestions();
 };
 
 const normalizeCollectionNameForMatch = (collectionName: string): string => {
   return collectionName.trim().toLocaleLowerCase();
+};
+
+const isHiddenGamesCollectionFilter = (collectionName: string): boolean => {
+  return normalizeCollectionNameForMatch(collectionName) === normalizeCollectionNameForMatch(HIDDEN_GAMES_COLLECTION_NAME);
+};
+
+const countHiddenGames = (): number => {
+  return allGames.filter((game) => game.hideInLibrary === true).length;
+};
+
+const countVisibleFavoriteGames = (): number => {
+  return allGames.filter((game) => game.favorite && game.hideInLibrary !== true).length;
+};
+
+const buildVisibleCollectionGameCounts = (): Map<string, number> => {
+  const countsByCollection = new Map<string, number>();
+
+  for (const game of allGames) {
+    if (game.hideInLibrary === true) {
+      continue;
+    }
+
+    const seenCollectionsForGame = new Set<string>();
+    for (const collectionName of game.collections ?? []) {
+      const normalizedCollectionName = normalizeCollectionNameForMatch(collectionName);
+      if (normalizedCollectionName.length === 0 || seenCollectionsForGame.has(normalizedCollectionName)) {
+        continue;
+      }
+
+      seenCollectionsForGame.add(normalizedCollectionName);
+      const previousCount = countsByCollection.get(normalizedCollectionName) ?? 0;
+      countsByCollection.set(normalizedCollectionName, previousCount + 1);
+    }
+  }
+
+  return countsByCollection;
 };
 
 const buildCollectionSectionsForGames = (
@@ -958,10 +1029,18 @@ const renderGameLibrary = (): void => {
   collectionGridCleanupTarget.__collectionGridCleanup?.();
   collectionGridCleanupTarget.__collectionGridCleanup = undefined;
   const filters = filterPanel.getFilters();
+  const showOnlyHiddenGames = isHiddenGamesCollectionFilter(filters.collection);
+  const eligibleGameCount = allGames.filter((game) =>
+    showOnlyHiddenGames ? game.hideInLibrary === true : game.hideInLibrary !== true
+  ).length;
   const filteredGames = applyLibraryFilters(allGames, filters);
   const emptyMessage = allGames.length === 0
     ? "No games synced yet."
-    : "No games match your current filters.";
+    : showOnlyHiddenGames
+      ? "No hidden games."
+      : eligibleGameCount === 0
+        ? "All games are hidden. Select \"Hidden Games\" in the Collection filter to view them."
+        : "No games match your current filters.";
   const canRenderCollectionSections = allCollections.length > 0 && filters.collection.trim().length === 0;
   const sections = canRenderCollectionSections
     ? buildCollectionSectionsForGames(filteredGames, allCollections)
@@ -973,7 +1052,7 @@ const renderGameLibrary = (): void => {
     emptyMessage,
     sections,
   });
-  setLibrarySummary(`${filteredGames.length} of ${allGames.length} games shown.`);
+  setLibrarySummary(`${filteredGames.length} of ${eligibleGameCount} games shown.`);
 };
 
 const gamePropertiesPanel = createGamePropertiesPanel();
@@ -1099,11 +1178,19 @@ const deleteCollectionFromGrid = async (collection: CollectionGridItem): Promise
 
 const renderCollectionLibrary = (): void => {
   closeGameContextMenu?.();
-  const favoritesCount = allGames.filter((game) => game.favorite).length;
+  const favoritesCount = countVisibleFavoriteGames();
+  const hiddenCount = countHiddenGames();
+  const visibleCollectionCounts = buildVisibleCollectionGameCounts();
+  const collectionItems: CollectionGridItem[] = allCollections.map((collection) => ({
+    ...collection,
+    gameCount: visibleCollectionCounts.get(normalizeCollectionNameForMatch(collection.name)) ?? 0,
+  }));
+
   renderCollectionGrid({
     container: libraryGridElement,
-    collections: allCollections,
+    collections: collectionItems,
     favoritesCount,
+    hiddenCount,
     onCreateCollection: () => {
       void createCollectionFromGrid();
     },
@@ -1119,6 +1206,15 @@ const renderCollectionLibrary = (): void => {
       filterPanel.setFilterBy("favorites", false);
       renderGameLibrary();
     },
+    onSelectHidden: () => {
+      setLibraryViewMode("games", false);
+      filterPanel.setFilterBy("all", false);
+      const appliedHiddenFilter = filterPanel.setCollectionFilter(HIDDEN_GAMES_COLLECTION_NAME, false);
+      if (!appliedHiddenFilter) {
+        filterPanel.setCollectionFilter("", false);
+      }
+      renderGameLibrary();
+    },
     onSelectCollection: (collection) => {
       setLibraryViewMode("games", false);
       filterPanel.setFilterBy("all", false);
@@ -1130,7 +1226,7 @@ const renderCollectionLibrary = (): void => {
     },
   });
 
-  const collectionCount = allCollections.length;
+  const collectionCount = allCollections.length + (hiddenCount > 0 ? 1 : 0);
   setLibrarySummary(`${collectionCount} collection${collectionCount === 1 ? "" : "s"}.`);
 };
 
@@ -1276,6 +1372,17 @@ const setGamePrivacySettingsForGame = async (
     externalId: game.externalId,
     hideInLibrary: settings.hideInLibrary,
     markAsPrivate: settings.markAsPrivate,
+  });
+};
+
+const updateGamePrivacySettingsForGame = async (
+  game: GameResponse,
+  settings: Partial<Pick<GamePrivacySettings, "hideInLibrary" | "markAsPrivate">>
+): Promise<void> => {
+  const currentSettings = await getGamePrivacySettingsForGame(game);
+  await setGamePrivacySettingsForGame(game, {
+    hideInLibrary: settings.hideInLibrary ?? currentSettings?.hideInLibrary ?? false,
+    markAsPrivate: settings.markAsPrivate ?? currentSettings?.markAsPrivate ?? false,
   });
 };
 
@@ -1506,6 +1613,20 @@ const verifyGameFilesForGame = async (game: GameResponse): Promise<void> => {
   });
 };
 
+const addGameDesktopShortcutForGame = async (game: GameResponse): Promise<void> => {
+  await invoke("add_game_desktop_shortcut", {
+    provider: game.provider,
+    externalId: game.externalId,
+  });
+};
+
+const openGameRecordingSettingsForGame = async (game: GameResponse): Promise<void> => {
+  await invoke("open_game_recording_settings", {
+    provider: game.provider,
+    externalId: game.externalId,
+  });
+};
+
 const uninstallGameForGame = async (game: GameResponse): Promise<void> => {
   await invoke("uninstall_game", {
     provider: game.provider,
@@ -1560,12 +1681,21 @@ const openGameProperties = async (game: GameResponse): Promise<void> => {
     privacySettings: privacySettings ?? undefined,
     setPrivacySettings: async (settings) => {
       await setGamePrivacySettingsForGame(game, settings);
+      updateGameInState(game.id, (existingGame) => ({
+        ...existingGame,
+        hideInLibrary: settings.hideInLibrary,
+      }));
+      updateCollectionSuggestions();
+      renderActiveLibraryView();
     },
     deleteOverlayData: async () => {
       await clearGameOverlayDataForGame(game);
     },
     validateBetaAccessCode: async (accessCode: string) => {
       return validateGameBetaAccessCodeForGame(game, accessCode);
+    },
+    openGameRecordingSettings: async () => {
+      await openGameRecordingSettingsForGame(game);
     },
   });
 };
@@ -1598,6 +1728,57 @@ const gameContextMenu = createGameContextMenu({
       showLauncherToast(`Created "${createdCollection.name}" and added "${game.name}".`);
       void refreshLibrary(false);
     },
+    addDesktopShortcut: async (game) => {
+      if (!game.installed) {
+        showLauncherToast(`"${game.name}" is not currently installed.`, "error");
+        return;
+      }
+
+      await addGameDesktopShortcutForGame(game);
+      showLauncherToast(`Added desktop shortcut for "${game.name}".`);
+    },
+    backupGameFiles: async (game) => {
+      if (!game.installed) {
+        showLauncherToast(`"${game.name}" is not currently installed.`, "error");
+        return;
+      }
+
+      await backupGameFilesForGame(game);
+      showLauncherToast(`Opened backup flow for "${game.name}".`);
+    },
+    browseLocalFiles: async (game) => {
+      if (!game.installed) {
+        showLauncherToast(`"${game.name}" is not currently installed.`, "error");
+        return;
+      }
+
+      await browseGameInstalledFilesForGame(game);
+      showLauncherToast(`Opened local files for "${game.name}".`);
+    },
+    hideGameInLibrary: async (game) => {
+      await updateGamePrivacySettingsForGame(game, {
+        hideInLibrary: true,
+      });
+      updateGameInState(game.id, (existingGame) => ({
+        ...existingGame,
+        hideInLibrary: true,
+      }));
+      updateCollectionSuggestions();
+      renderActiveLibraryView();
+      showLauncherToast(`"${game.name}" is now hidden in your library.`);
+    },
+    unhideGameInLibrary: async (game) => {
+      await updateGamePrivacySettingsForGame(game, {
+        hideInLibrary: false,
+      });
+      updateGameInState(game.id, (existingGame) => ({
+        ...existingGame,
+        hideInLibrary: false,
+      }));
+      updateCollectionSuggestions();
+      renderActiveLibraryView();
+      showLauncherToast(`"${game.name}" has been removed from hidden games.`);
+    },
     installGame: async (game) => {
       const [installLocations, installSizeBytes] = await Promise.all([
         listGameInstallLocationsForGame(game),
@@ -1623,7 +1804,16 @@ const gameContextMenu = createGameContextMenu({
       void refreshSteamDownloads();
     },
     listCollections: listCollectionsForGame,
+    markGamePrivate: async (game) => {
+      await updateGamePrivacySettingsForGame(game, {
+        markAsPrivate: true,
+      });
+      showLauncherToast(`"${game.name}" is now marked private.`);
+    },
     openProperties: openGameProperties,
+    setCustomArtwork: async (game) => {
+      await openGameProperties(game);
+    },
     playGame: async (game) => {
       await invoke("play_game", {
         provider: game.provider,

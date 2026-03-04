@@ -20,6 +20,7 @@ export interface GamePropertiesInput {
   setPrivacySettings?: (settings: Pick<GamePrivacySettings, "hideInLibrary" | "markAsPrivate">) => Promise<void>;
   deleteOverlayData?: () => Promise<void>;
   validateBetaAccessCode?: (accessCode: string) => Promise<GameBetaAccessCodeValidationResult>;
+  openGameRecordingSettings?: () => Promise<void>;
 }
 
 export interface GamePropertiesPanelController {
@@ -749,6 +750,7 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
   let currentVerifyInstalledFiles: (() => Promise<void>) | null = null;
   let currentSetPrivacySettings: ((settings: Pick<GamePrivacySettings, "hideInLibrary" | "markAsPrivate">) => Promise<void>) | null = null;
   let currentDeleteOverlayData: (() => Promise<void>) | null = null;
+  let currentOpenGameRecordingSettings: (() => Promise<void>) | null = null;
   let currentInstalledFilesStatus: InstalledFilesStatus = {
     kind: "idle",
     message: "",
@@ -2459,8 +2461,20 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
     manageButton.className = "game-properties-recording-action";
     manageButton.textContent = "Manage Game Recording";
 
+    const recordingStatus = document.createElement("p");
+    recordingStatus.className = "game-properties-validation-status";
+    recordingStatus.hidden = true;
+
+    const applyRecordingStatus = (status: { kind: "idle" | "loading" | "success" | "error"; message: string }): void => {
+      recordingStatus.classList.toggle("is-loading", status.kind === "loading");
+      recordingStatus.classList.toggle("is-success", status.kind === "success");
+      recordingStatus.classList.toggle("is-error", status.kind === "error");
+      recordingStatus.hidden = status.message.trim().length === 0;
+      recordingStatus.textContent = status.message;
+    };
+
     recordingCopy.append(recordingDescription, recordingHint);
-    recordingRow.append(recordingCopy, manageButton);
+    recordingRow.append(recordingCopy, manageButton, recordingStatus);
 
     const backgroundRow = document.createElement("section");
     backgroundRow.className = "game-properties-recording-row";
@@ -2487,6 +2501,43 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
 
     section.append(recordingRow, backgroundRow);
     tabPanel.append(heading, section);
+
+    let isManageActionInProgress = false;
+    manageButton.addEventListener("click", async () => {
+      if (isManageActionInProgress) {
+        return;
+      }
+
+      if (!currentOpenGameRecordingSettings) {
+        applyRecordingStatus({
+          kind: "error",
+          message: "Game recording settings are unavailable right now.",
+        });
+        return;
+      }
+
+      isManageActionInProgress = true;
+      manageButton.disabled = true;
+      applyRecordingStatus({
+        kind: "loading",
+        message: "Opening game recording settings...",
+      });
+      try {
+        await currentOpenGameRecordingSettings();
+        applyRecordingStatus({
+          kind: "success",
+          message: "Opened game recording settings.",
+        });
+      } catch {
+        applyRecordingStatus({
+          kind: "error",
+          message: "Could not open game recording settings right now.",
+        });
+      } finally {
+        isManageActionInProgress = false;
+        manageButton.disabled = false;
+      }
+    });
   };
 
   const renderPrivacyTab = (): void => {
@@ -3086,6 +3137,7 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
     };
     currentSetPrivacySettings = null;
     currentDeleteOverlayData = null;
+    currentOpenGameRecordingSettings = null;
     currentPrivacyStatus = {
       kind: "idle",
       message: "",
@@ -3141,6 +3193,7 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
     currentSetPrivacySettings = input.setPrivacySettings ?? null;
     currentDeleteOverlayData = input.deleteOverlayData ?? null;
     currentValidateBetaAccessCode = input.validateBetaAccessCode ?? null;
+    currentOpenGameRecordingSettings = input.openGameRecordingSettings ?? null;
     const persistedSettings = parseGamePropertiesPersistedSettings(input.persistedSettings);
     currentGeneralSettings = cloneGeneralSettings(persistedSettings.general);
     currentCompatibilitySettings = cloneCompatibilitySettings(persistedSettings.compatibility);

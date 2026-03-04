@@ -1,4 +1,4 @@
-import type { GameResponse, LibraryFilters } from "./types";
+import { HIDDEN_GAMES_COLLECTION_NAME, type GameResponse, type LibraryFilters } from "./types";
 
 const normalize = (value: string): string => value.trim().toLowerCase();
 
@@ -52,10 +52,22 @@ export const applyLibraryFilters = (
   const searchTerm = normalize(filters.search);
   const steamTagFilter = normalize(filters.steamTag);
   const collectionFilter = normalize(filters.collection);
+  const hiddenCollectionFilter = normalize(HIDDEN_GAMES_COLLECTION_NAME);
+  const showOnlyHiddenGames = collectionFilter === hiddenCollectionFilter;
   const now = Date.now();
   const thirtyDaysAgo = now - (30 * 24 * 60 * 60 * 1000);
 
   const filtered = games.filter((game) => {
+    const hideInLibrary = game.hideInLibrary === true;
+
+    if (showOnlyHiddenGames) {
+      if (!hideInLibrary) {
+        return false;
+      }
+    } else if (hideInLibrary) {
+      return false;
+    }
+
     const source = getSourceFromProvider(game.provider);
     const lastPlayedAt = game.lastPlayedAt ? parseDate(game.lastPlayedAt) : 0;
     const fallbackRecentlyPlayed = game.playtimeMinutes > 0 && parseDate(game.lastSyncedAt) >= thirtyDaysAgo;
@@ -110,7 +122,7 @@ export const applyLibraryFilters = (
       return false;
     }
 
-    if (collectionFilter.length > 0 && !hasExactTag(game.collections, collectionFilter)) {
+    if (collectionFilter.length > 0 && !showOnlyHiddenGames && !hasExactTag(game.collections, collectionFilter)) {
       return false;
     }
 
