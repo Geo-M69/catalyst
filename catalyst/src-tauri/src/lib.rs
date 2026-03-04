@@ -309,12 +309,29 @@ struct GameVersionsBetasSettingsPayload {
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
+struct GameCustomizationSettingsPayload {
+    custom_sort_name: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 struct GamePropertiesSettingsPayload {
     general: GameGeneralSettingsPayload,
     compatibility: GameCompatibilitySettingsPayload,
     updates: GameUpdatesSettingsPayload,
     controller: GameControllerSettingsPayload,
+    #[serde(default = "default_game_customization_settings_payload")]
+    customization: GameCustomizationSettingsPayload,
     game_versions_betas: GameVersionsBetasSettingsPayload,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GameCustomizationArtworkResponse {
+    cover: Option<String>,
+    background: Option<String>,
+    logo: Option<String>,
+    wide_cover: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -859,6 +876,44 @@ fn set_game_properties_settings(
     }
 
     Ok(())
+}
+
+#[tauri::command]
+fn get_game_customization_artwork(
+    provider: String,
+    external_id: String,
+    state: State<'_, AppState>,
+) -> Result<GameCustomizationArtworkResponse, String> {
+    let connection = open_connection(&state.db_path)?;
+    cleanup_expired_sessions(&connection)?;
+    let user = get_authenticated_user(state.inner(), &connection)?;
+    let (normalized_provider, normalized_external_id) =
+        normalize_game_identity_input(&provider, &external_id)?;
+    ensure_owned_game_exists(
+        &connection,
+        &user.id,
+        &normalized_provider,
+        &normalized_external_id,
+    )?;
+
+    if normalized_provider != "steam" || normalized_external_id.parse::<u64>().is_err() {
+        return Ok(empty_game_customization_artwork_response());
+    }
+
+    let Some(steam_id) = user
+        .steam_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(empty_game_customization_artwork_response());
+    };
+
+    Ok(resolve_steam_customization_artwork(
+        state.steam_root_override.as_deref(),
+        steam_id,
+        &normalized_external_id,
+    ))
 }
 
 #[tauri::command]
@@ -2142,6 +2197,103 @@ fn resolve_steam_localconfig_path(
     }
 
     Ok(localconfig_path)
+}
+
+fn empty_game_customization_artwork_response() -> GameCustomizationArtworkResponse {
+    GameCustomizationArtworkResponse {
+        cover: None,
+        background: None,
+        logo: None,
+        wide_cover: None,
+    }
+}
+
+fn extension_priority_rank(extension: &str) -> usize {
+    match extension {
+        "png" => 0,
+        "jpg" => 1,
+        "jpeg" => 2,
+        "webp" => 3,
+        _ => usize::MAX,
+    }
+}
+
+fn find_steam_grid_artwork_path(grid_directory: &Path, stem: &str) -> Option<PathBuf> {
+    if stem.trim().is_empty() {
+        return None;
+    }
+
+    let mut best_match: Option<(usize, PathBuf)> = None;
+    let normalized_stem = stem.trim().to_ascii_lowercase();
+    let Ok(entries) = fs::read_dir(grid_directory) else {
+        return None;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+
+        let extension = path
+            .extension()
+            .map(|value| value.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        let rank = extension_priority_rank(&extension);
+        if rank == usize::MAX {
+            continue;
+        }
+
+        let file_stem = path
+            .file_stem()
+            .map(|value| value.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        if file_stem != normalized_stem {
+            continue;
+        }
+
+        match &best_match {
+            Some((best_rank, _)) if rank >= *best_rank => {}
+            _ => {
+                best_match = Some((rank, path));
+            }
+        }
+    }
+
+    best_match.map(|(_, path)| path)
+}
+
+fn resolve_steam_customization_artwork(
+    steam_root_override: Option<&str>,
+    steam_id: &str,
+    app_id: &str,
+) -> GameCustomizationArtworkResponse {
+    let Some(steam_root) = resolve_steam_root_path(steam_root_override) else {
+        return empty_game_customization_artwork_response();
+    };
+    let Ok(userdata_directory) = resolve_steam_userdata_directory(&steam_root, steam_id) else {
+        return empty_game_customization_artwork_response();
+    };
+    let grid_directory = userdata_directory.join("config").join("grid");
+    if !grid_directory.is_dir() {
+        return empty_game_customization_artwork_response();
+    }
+
+    let to_path_string = |path: Option<PathBuf>| {
+        path.map(|resolved| resolved.to_string_lossy().to_string())
+    };
+    GameCustomizationArtworkResponse {
+        cover: to_path_string(find_steam_grid_artwork_path(&grid_directory, &format!("{app_id}p"))),
+        background: to_path_string(find_steam_grid_artwork_path(
+            &grid_directory,
+            &format!("{app_id}_hero"),
+        )),
+        logo: to_path_string(find_steam_grid_artwork_path(
+            &grid_directory,
+            &format!("{app_id}_logo"),
+        )),
+        wide_cover: to_path_string(find_steam_grid_artwork_path(&grid_directory, app_id)),
+    }
 }
 
 fn steam_userdata_candidate_directory_names(steam_id: &str) -> Result<Vec<String>, String> {
@@ -5600,6 +5752,12 @@ fn open_provider_game_uri(
     }
 }
 
+fn default_game_customization_settings_payload() -> GameCustomizationSettingsPayload {
+    GameCustomizationSettingsPayload {
+        custom_sort_name: String::new(),
+    }
+}
+
 fn default_game_properties_settings_payload() -> GamePropertiesSettingsPayload {
     GamePropertiesSettingsPayload {
         general: GameGeneralSettingsPayload {
@@ -5618,6 +5776,7 @@ fn default_game_properties_settings_payload() -> GamePropertiesSettingsPayload {
         controller: GameControllerSettingsPayload {
             steam_input_override: String::from("use-default-settings"),
         },
+        customization: default_game_customization_settings_payload(),
         game_versions_betas: GameVersionsBetasSettingsPayload {
             private_access_code: String::new(),
             selected_version_id: String::from("public"),
@@ -5700,6 +5859,9 @@ fn normalize_game_properties_settings_payload(
                 ],
                 &defaults.controller.steam_input_override,
             ),
+        },
+        customization: GameCustomizationSettingsPayload {
+            custom_sort_name: settings.customization.custom_sort_name.trim().to_owned(),
         },
         game_versions_betas: GameVersionsBetasSettingsPayload {
             private_access_code: private_access_code.to_owned(),
@@ -6880,6 +7042,7 @@ pub fn run() {
             clear_game_overlay_data,
             get_game_properties_settings,
             set_game_properties_settings,
+            get_game_customization_artwork,
             get_game_installation_details,
             get_game_install_size_estimate,
             list_game_install_locations,

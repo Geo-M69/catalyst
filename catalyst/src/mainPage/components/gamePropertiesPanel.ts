@@ -1,4 +1,6 @@
+import { convertFileSrc } from "@tauri-apps/api/core";
 import type { GameResponse } from "../types";
+import { getSteamArtworkCandidates, type SteamLibraryArtworkKind } from "../steamArtwork";
 
 export interface GamePropertiesInput {
   game: GameResponse;
@@ -10,6 +12,7 @@ export interface GamePropertiesInput {
   persistedSettings?: GamePropertiesPersistedSettings;
   saveSettings?: (settings: GamePropertiesPersistedSettings) => Promise<void>;
   installationDetails?: GameInstallationDetails;
+  customizationArtworkPaths?: GameCustomizationArtworkPaths;
   browseInstalledFiles?: () => Promise<void>;
   backupInstalledFiles?: () => Promise<void>;
   verifyInstalledFiles?: () => Promise<void>;
@@ -51,6 +54,13 @@ export interface GameInstallationDetails {
   sizeOnDiskBytes?: number;
 }
 
+export interface GameCustomizationArtworkPaths {
+  cover?: string;
+  background?: string;
+  logo?: string;
+  wideCover?: string;
+}
+
 type GamePropertiesTabId =
   | "general"
   | "compatibility"
@@ -58,7 +68,9 @@ type GamePropertiesTabId =
   | "installed-files"
   | "game-versions-betas"
   | "controller"
-  | "privacy";
+  | "game-recording"
+  | "privacy"
+  | "customization";
 
 interface GamePropertiesTab {
   id: GamePropertiesTabId;
@@ -111,8 +123,13 @@ export interface GameVersionsBetasSettings {
   selectedVersionId: GameVersionBetaId;
 }
 
+export interface GameCustomizationSettings {
+  customSortName: string;
+}
+
 export interface GamePropertiesPersistedSettings {
   compatibility: GameCompatibilitySettings;
+  customization: GameCustomizationSettings;
   controller: GameControllerSettings;
   gameVersionsBetas: GameVersionsBetasSettings;
   general: GameGeneralSettings;
@@ -156,7 +173,9 @@ const GAME_PROPERTIES_TABS: readonly GamePropertiesTab[] = [
   { id: "installed-files", label: "Installed Files" },
   { id: "game-versions-betas", label: "Game Versions & Betas" },
   { id: "controller", label: "Controller" },
+  { id: "game-recording", label: "Game Recording" },
   { id: "privacy", label: "Privacy" },
+  { id: "customization", label: "Customization" },
 ];
 const DEFAULT_LANGUAGE_OPTIONS = ["English", "French", "German", "Spanish", "Japanese"];
 const DEFAULT_COMPATIBILITY_TOOL_OPTIONS: readonly GameCompatibilityToolOption[] = [
@@ -263,6 +282,9 @@ const DEFAULT_GAME_VERSIONS_BETAS_SETTINGS: GameVersionsBetasSettings = {
   privateAccessCode: "",
   selectedVersionId: "public",
 };
+const DEFAULT_CUSTOMIZATION_SETTINGS: GameCustomizationSettings = {
+  customSortName: "",
+};
 
 const cloneGeneralSettings = (settings: GameGeneralSettings): GameGeneralSettings => {
   return { ...settings };
@@ -285,6 +307,10 @@ const clonePrivacySettings = (settings: GamePrivacySettings): GamePrivacySetting
 };
 
 const cloneGameVersionsBetasSettings = (settings: GameVersionsBetasSettings): GameVersionsBetasSettings => {
+  return { ...settings };
+};
+
+const cloneCustomizationSettings = (settings: GameCustomizationSettings): GameCustomizationSettings => {
   return { ...settings };
 };
 
@@ -381,9 +407,18 @@ const parseGameVersionsBetasSettings = (record: Record<string, unknown>): GameVe
   };
 };
 
+const parseCustomizationSettings = (record: Record<string, unknown>): GameCustomizationSettings => {
+  return {
+    customSortName: typeof record.customSortName === "string"
+      ? record.customSortName
+      : DEFAULT_CUSTOMIZATION_SETTINGS.customSortName,
+  };
+};
+
 const createDefaultGamePropertiesPersistedSettings = (): GamePropertiesPersistedSettings => {
   return {
     compatibility: cloneCompatibilitySettings(DEFAULT_COMPATIBILITY_SETTINGS),
+    customization: cloneCustomizationSettings(DEFAULT_CUSTOMIZATION_SETTINGS),
     controller: cloneControllerSettings(DEFAULT_CONTROLLER_SETTINGS),
     gameVersionsBetas: cloneGameVersionsBetasSettings(DEFAULT_GAME_VERSIONS_BETAS_SETTINGS),
     general: cloneGeneralSettings(DEFAULT_GENERAL_SETTINGS),
@@ -401,12 +436,14 @@ const parseGamePropertiesPersistedSettings = (
   const inputRecord = toRecord(input) ?? {};
   const generalRecord = toRecord(inputRecord.general) ?? inputRecord;
   const compatibilityRecord = toRecord(inputRecord.compatibility) ?? inputRecord;
+  const customizationRecord = toRecord(inputRecord.customization) ?? inputRecord;
   const controllerRecord = toRecord(inputRecord.controller) ?? inputRecord;
   const gameVersionsBetasRecord = toRecord(inputRecord.gameVersionsBetas) ?? inputRecord;
   const updatesRecord = toRecord(inputRecord.updates) ?? inputRecord;
 
   return {
     compatibility: parseCompatibilitySettings(compatibilityRecord),
+    customization: parseCustomizationSettings(customizationRecord),
     controller: parseControllerSettings(controllerRecord),
     gameVersionsBetas: parseGameVersionsBetasSettings(gameVersionsBetasRecord),
     general: parseGeneralSettings(generalRecord),
@@ -697,9 +734,11 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
   let currentAvailableVersionOptions = cloneGameVersionOptions(DEFAULT_GAME_VERSION_BETA_OPTIONS);
   let currentAvailableVersionOptionsWarning = "";
   let currentInstallationDetails: GameInstallationDetails | null = null;
+  let currentCustomizationArtworkPaths: GameCustomizationArtworkPaths = {};
   let currentTab: GamePropertiesTabId = "general";
   let currentGeneralSettings = cloneGeneralSettings(DEFAULT_GENERAL_SETTINGS);
   let currentCompatibilitySettings = cloneCompatibilitySettings(DEFAULT_COMPATIBILITY_SETTINGS);
+  let currentCustomizationSettings = cloneCustomizationSettings(DEFAULT_CUSTOMIZATION_SETTINGS);
   let currentControllerSettings = cloneControllerSettings(DEFAULT_CONTROLLER_SETTINGS);
   let currentPrivacySettings = clonePrivacySettings(DEFAULT_PRIVACY_SETTINGS);
   let currentGameVersionsBetasSettings = cloneGameVersionsBetasSettings(DEFAULT_GAME_VERSIONS_BETAS_SETTINGS);
@@ -749,6 +788,7 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
 
     const settingsSnapshot: GamePropertiesPersistedSettings = {
       compatibility: cloneCompatibilitySettings(currentCompatibilitySettings),
+      customization: cloneCustomizationSettings(currentCustomizationSettings),
       controller: cloneControllerSettings(currentControllerSettings),
       gameVersionsBetas: cloneGameVersionsBetasSettings(currentGameVersionsBetasSettings),
       general: cloneGeneralSettings(currentGeneralSettings),
@@ -2392,6 +2432,63 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
     tabPanel.append(heading, description, configuratorCopy, overrideSection, statusPanel);
   };
 
+  const renderGameRecordingTab = (): void => {
+    const heading = document.createElement("h3");
+    heading.className = "game-properties-section-title";
+    heading.textContent = "Game Recording";
+
+    const section = document.createElement("div");
+    section.className = "game-properties-recording";
+
+    const recordingRow = document.createElement("section");
+    recordingRow.className = "game-properties-recording-row";
+
+    const recordingCopy = document.createElement("div");
+    recordingCopy.className = "game-properties-recording-copy";
+
+    const recordingDescription = document.createElement("p");
+    recordingDescription.className = "game-properties-recording-description";
+    recordingDescription.textContent = "Steam Game Recording is currently disabled for all games.";
+
+    const recordingHint = document.createElement("p");
+    recordingHint.className = "game-properties-recording-description is-secondary";
+    recordingHint.textContent = "View Game Recording Settings to learn more about recording and customization.";
+
+    const manageButton = document.createElement("button");
+    manageButton.type = "button";
+    manageButton.className = "game-properties-recording-action";
+    manageButton.textContent = "Manage Game Recording";
+
+    recordingCopy.append(recordingDescription, recordingHint);
+    recordingRow.append(recordingCopy, manageButton);
+
+    const backgroundRow = document.createElement("section");
+    backgroundRow.className = "game-properties-recording-row";
+
+    const backgroundCopy = document.createElement("div");
+    backgroundCopy.className = "game-properties-recording-copy";
+
+    const backgroundLabel = document.createElement("p");
+    backgroundLabel.className = "game-properties-recording-label";
+    backgroundLabel.textContent = "Background Recording";
+
+    const backgroundDescription = document.createElement("p");
+    backgroundDescription.className = "game-properties-recording-description";
+    backgroundDescription.textContent = "Steam will not record gameplay for this game.";
+
+    const disabledButton = document.createElement("button");
+    disabledButton.type = "button";
+    disabledButton.className = "game-properties-recording-action is-disabled";
+    disabledButton.textContent = "Disabled";
+    disabledButton.disabled = true;
+
+    backgroundCopy.append(backgroundLabel, backgroundDescription);
+    backgroundRow.append(backgroundCopy, disabledButton);
+
+    section.append(recordingRow, backgroundRow);
+    tabPanel.append(heading, section);
+  };
+
   const renderPrivacyTab = (): void => {
     const heading = document.createElement("h3");
     heading.className = "game-properties-section-title";
@@ -2625,6 +2722,211 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
     });
   };
 
+  const renderCustomizationTab = (): void => {
+    if (!currentGame) {
+      return;
+    }
+    const renderedGame = currentGame;
+
+    const heading = document.createElement("h3");
+    heading.className = "game-properties-section-title game-properties-section-title-customization";
+    heading.textContent = "Customization";
+
+    const section = document.createElement("div");
+    section.className = "game-properties-customization";
+
+    const artworkTitle = document.createElement("p");
+    artworkTitle.className = "game-properties-customization-group-title is-artwork";
+    artworkTitle.textContent = "Artwork";
+
+    const createArtworkPreview = (kind: SteamLibraryArtworkKind): HTMLElement => {
+      const preview = document.createElement("div");
+      preview.className = `game-properties-customization-preview is-${kind}`;
+      const artworkCandidates: string[] = [];
+      const seenArtworkCandidates = new Set<string>();
+      const addArtworkCandidate = (candidate: string | undefined): void => {
+        const trimmed = candidate?.trim();
+        if (!trimmed || seenArtworkCandidates.has(trimmed)) {
+          return;
+        }
+
+        seenArtworkCandidates.add(trimmed);
+        artworkCandidates.push(trimmed);
+      };
+      const localArtworkPathByKind: Record<SteamLibraryArtworkKind, string | undefined> = {
+        cover: currentCustomizationArtworkPaths.cover,
+        background: currentCustomizationArtworkPaths.background,
+        logo: currentCustomizationArtworkPaths.logo,
+        "wide-cover": currentCustomizationArtworkPaths.wideCover,
+      };
+
+      const localArtworkPath = localArtworkPathByKind[kind];
+      if (localArtworkPath) {
+        try {
+          addArtworkCandidate(convertFileSrc(localArtworkPath));
+        } catch (error) {
+          console.warn("Could not resolve local Steam artwork path", error);
+        }
+      }
+
+      for (const candidate of getSteamArtworkCandidates(renderedGame, kind)) {
+        addArtworkCandidate(candidate);
+      }
+
+      const appendLogoTextFallback = (): void => {
+        const logoText = document.createElement("span");
+        logoText.className = "game-properties-customization-logo-text";
+        logoText.textContent = renderedGame.name.toUpperCase();
+        preview.append(logoText);
+      };
+
+      const appendEmptyArtworkFallback = (): void => {
+        if (kind === "logo") {
+          appendLogoTextFallback();
+          return;
+        }
+
+        const emptyLabel = document.createElement("span");
+        emptyLabel.className = "game-properties-customization-empty-label";
+        emptyLabel.textContent = "No artwork";
+        preview.classList.add("is-empty");
+        preview.append(emptyLabel);
+      };
+
+      if (artworkCandidates.length === 0) {
+        appendEmptyArtworkFallback();
+        return preview;
+      }
+
+      const image = document.createElement("img");
+      image.className = "game-properties-customization-image";
+      image.alt = `${renderedGame.name} ${kind.replace("-", " ")} artwork`;
+      image.loading = "lazy";
+
+      let candidateIndex = 0;
+      image.addEventListener("error", () => {
+        candidateIndex += 1;
+        if (candidateIndex < artworkCandidates.length) {
+          image.src = artworkCandidates[candidateIndex];
+          return;
+        }
+
+        image.remove();
+        appendEmptyArtworkFallback();
+      });
+
+      image.src = artworkCandidates[candidateIndex];
+      preview.append(image);
+      return preview;
+    };
+
+    const createArtworkRow = (args: {
+      description: string;
+      kind: "cover" | "background" | "logo" | "wide-cover";
+      title: string;
+    }): HTMLElement => {
+      const row = document.createElement("section");
+      row.className = "game-properties-customization-row";
+      row.classList.add(`is-${args.kind}`);
+
+      const rowHeader = document.createElement("div");
+      rowHeader.className = "game-properties-customization-header";
+
+      const rowTitle = document.createElement("p");
+      rowTitle.className = "game-properties-customization-item-title";
+      rowTitle.textContent = args.title;
+
+      const actions = document.createElement("div");
+      actions.className = "game-properties-customization-actions";
+
+      const changeButton = document.createElement("button");
+      changeButton.type = "button";
+      changeButton.className = "game-properties-customization-action";
+      changeButton.textContent = "Change";
+
+      const resetButton = document.createElement("button");
+      resetButton.type = "button";
+      resetButton.className = "game-properties-customization-action is-disabled";
+      resetButton.textContent = "Reset";
+      resetButton.disabled = true;
+
+      actions.append(changeButton, resetButton);
+      rowHeader.append(rowTitle, actions);
+
+      const rowBody = document.createElement("div");
+      rowBody.className = "game-properties-customization-body";
+
+      const description = document.createElement("p");
+      description.className = "game-properties-customization-description";
+      description.textContent = args.description;
+
+      rowBody.append(createArtworkPreview(args.kind), description);
+      row.append(rowHeader, rowBody);
+      return row;
+    };
+
+    const coverRow = createArtworkRow({
+      title: "Cover",
+      kind: "cover",
+      description: "Cover images are displayed in collection views and shelves. Ideal size is 600x900 pixels.",
+    });
+    const backgroundRow = createArtworkRow({
+      title: "Background",
+      kind: "background",
+      description: "Background images are displayed at the top of game detail pages. Ideal size is 3840x1240 pixels.",
+    });
+    const logoRow = createArtworkRow({
+      title: "Logo",
+      kind: "logo",
+      description: "Logo images are displayed on top of the background image on game details page. They can be repositioned by visiting that page and right-clicking on the background image. Ideal size is either 1280 pixels wide or 720 pixels tall.",
+    });
+    const wideCoverRow = createArtworkRow({
+      title: "Wide Cover",
+      kind: "wide-cover",
+      description: "Wide cover images are displayed at the front of certain carousels (like Recent Games) and in some other locations in Big Picture Mode. Ideal size is 920x430 pixels.",
+    });
+
+    const miscTitle = document.createElement("p");
+    miscTitle.className = "game-properties-customization-group-title";
+    miscTitle.textContent = "Miscellaneous";
+
+    const miscRow = document.createElement("section");
+    miscRow.className = "game-properties-customization-row is-misc";
+
+    const miscHeader = document.createElement("div");
+    miscHeader.className = "game-properties-customization-header";
+
+    const sortNameTitle = document.createElement("p");
+    sortNameTitle.className = "game-properties-customization-item-title";
+    sortNameTitle.textContent = "Custom Sort Name";
+
+    const sortNameInput = document.createElement("input");
+    sortNameInput.type = "text";
+    sortNameInput.className = "text-input game-properties-customization-sort-input";
+    sortNameInput.id = "game-properties-custom-sort-name";
+    sortNameInput.placeholder = "Optional";
+    sortNameInput.value = currentCustomizationSettings.customSortName;
+    sortNameInput.setAttribute("aria-label", "Custom sort name");
+
+    miscHeader.append(sortNameTitle, sortNameInput);
+
+    const miscDescription = document.createElement("p");
+    miscDescription.className = "game-properties-customization-description";
+    miscDescription.textContent = "This name will not be displayed, but will be used instead of the displayed name when sorting games in your library. Use this to control the sort order of this game relative to other games.";
+
+    sortNameInput.addEventListener("input", () => {
+      currentCustomizationSettings = {
+        ...currentCustomizationSettings,
+        customSortName: sortNameInput.value,
+      };
+      persistCurrentSettings();
+    });
+
+    miscRow.append(miscHeader, miscDescription);
+    section.append(artworkTitle, coverRow, backgroundRow, logoRow, wideCoverRow, miscTitle, miscRow);
+    tabPanel.append(heading, section);
+  };
+
   const renderPlaceholderTab = (tabId: GamePropertiesTabId): void => {
     const heading = document.createElement("h3");
     heading.className = "game-properties-section-title";
@@ -2688,8 +2990,18 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
       return;
     }
 
+    if (currentTab === "game-recording") {
+      renderGameRecordingTab();
+      return;
+    }
+
     if (currentTab === "privacy") {
       renderPrivacyTab();
+      return;
+    }
+
+    if (currentTab === "customization") {
+      renderCustomizationTab();
       return;
     }
 
@@ -2756,8 +3068,10 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
     currentAvailableVersionOptions = cloneGameVersionOptions(DEFAULT_GAME_VERSION_BETA_OPTIONS);
     currentAvailableVersionOptionsWarning = "";
     currentInstallationDetails = null;
+    currentCustomizationArtworkPaths = {};
     currentGeneralSettings = cloneGeneralSettings(DEFAULT_GENERAL_SETTINGS);
     currentCompatibilitySettings = cloneCompatibilitySettings(DEFAULT_COMPATIBILITY_SETTINGS);
+    currentCustomizationSettings = cloneCustomizationSettings(DEFAULT_CUSTOMIZATION_SETTINGS);
     currentControllerSettings = cloneControllerSettings(DEFAULT_CONTROLLER_SETTINGS);
     currentPrivacySettings = clonePrivacySettings(DEFAULT_PRIVACY_SETTINGS);
     currentGameVersionsBetasSettings = cloneGameVersionsBetasSettings(DEFAULT_GAME_VERSIONS_BETAS_SETTINGS);
@@ -2815,6 +3129,12 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
           : undefined,
       }
       : null;
+    currentCustomizationArtworkPaths = {
+      cover: input.customizationArtworkPaths?.cover?.trim() || undefined,
+      background: input.customizationArtworkPaths?.background?.trim() || undefined,
+      logo: input.customizationArtworkPaths?.logo?.trim() || undefined,
+      wideCover: input.customizationArtworkPaths?.wideCover?.trim() || undefined,
+    };
     currentBrowseInstalledFiles = input.browseInstalledFiles ?? null;
     currentBackupInstalledFiles = input.backupInstalledFiles ?? null;
     currentVerifyInstalledFiles = input.verifyInstalledFiles ?? null;
@@ -2824,6 +3144,7 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
     const persistedSettings = parseGamePropertiesPersistedSettings(input.persistedSettings);
     currentGeneralSettings = cloneGeneralSettings(persistedSettings.general);
     currentCompatibilitySettings = cloneCompatibilitySettings(persistedSettings.compatibility);
+    currentCustomizationSettings = cloneCustomizationSettings(persistedSettings.customization);
     currentControllerSettings = cloneControllerSettings(persistedSettings.controller);
     currentPrivacySettings = input.privacySettings
       ? clonePrivacySettings(input.privacySettings)

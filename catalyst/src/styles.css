@@ -1744,8 +1744,8 @@ button:disabled {
 }
 
 .game-properties-panel {
-  width: min(940px, calc(100vw - 2rem));
-  height: min(520px, calc(100vh - 3.2rem));
+  width: min(840px, calc(100vw - 2rem));
+  height: min(600px, calc(100vh - 3.2rem));
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 14px;
   background: #121212;
@@ -1873,6 +1873,11 @@ button:disabled {
   font-size: 0.96rem;
   font-weight: 600;
   color: rgba(255, 255, 255, 0.96);
+}
+
+.game-properties-section-title-customization {
+  font-size: 1.56rem;
+  line-height: 1.15;
 }
 
 .game-properties-section-description {
@@ -2296,6 +2301,344 @@ button:disabled {
   visibility: hidden;
 }
 
+.game-properties-recording {
+  display: grid;
+}
+
+.game-properties-recording-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1rem;
+  align-items: start;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 0.1rem 0 0.92rem;
+}
+
+.game-properties-recording-row + .game-properties-recording-row {
+  padding-top: 1.08rem;
+}
+
+.game-properties-recording-row + .game-properties-recording-row .game-properties-recording-copy {
+  gap: 0.3rem;
+}
+
+.game-properties-recording-copy {
+  min-width: 0;
+  display: grid;
+  gap: 0.24rem;
+}
+
+.game-properties-recording-label {
+  margin: 0;
+  font-size: 0.93rem;
+  font-weight: 520;
+  line-height: 1.3;
+  color: rgba(255, 255, 255, 0.74);
+}
+
+.game-properties-recording-description {
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.36;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.game-properties-recording-description.is-secondary {
+  margin-top: 0.32rem;
+}
+
+.game-properties-recording-action {
+  width: auto;
+  min-width: 182px;
+  min-height: 2.04rem;
+  border-radius: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 0.46rem 0.84rem;
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 0.87rem;
+  font-weight: 520;
+  box-shadow: none;
+  justify-self: end;
+  align-self: start;
+  transform: translateY(-0.24rem);
+}
+
+.game-properties-recording-row:first-child .game-properties-recording-action {
+  transform: translateY(-1.8rem);
+}
+
+.game-properties-recording-row + .game-properties-recording-row .game-properties-recording-action {
+  transform: translateY(-0.2rem);
+}
+
+@media (hover: hover) {
+  .game-properties-recording-action:not(:disabled):hover {
+    background: rgba(255, 255, 255, 0.14);
+    color: rgba(255, 255, 255, 0.96);
+  }
+}
+
+.game-properties-recording-action:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.24);
+  outline-offset: 1px;
+}
+
+.game-properties-recording-action.is-disabled {
+  min-width: 94px;
+  color: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.game-properties-customization {
+  display: grid;
+}
+
+.game-properties-customization-group-title {
+  margin: 0.22rem 0 0.5rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.56);
+}
+
+.game-properties-customization-group-title.is-artwork {
+  font-weight: 500;
+}
+
+.game-properties-customization-row + .game-properties-customization-group-title {
+  margin-top: 1.12rem;
+}
+
+.game-properties-customization-row {
+  display: grid;
+  gap: 0.48rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 0.04rem 0 0.74rem;
+}
+
+.game-properties-customization-row + .game-properties-customization-row {
+  padding-top: 0.62rem;
+}
+
+.game-properties-customization-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.82rem;
+  align-items: center;
+}
+
+.game-properties-customization-item-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 520;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.game-properties-customization-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.34rem;
+}
+
+.game-properties-customization-action {
+  width: auto;
+  min-width: 74px;
+  min-height: 2.08rem;
+  border-radius: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 0.45rem 0.78rem;
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 0.88rem;
+  font-weight: 520;
+  box-shadow: none;
+}
+
+@media (hover: hover) {
+  .game-properties-customization-action:not(:disabled):hover {
+    background: rgba(255, 255, 255, 0.14);
+    color: rgba(255, 255, 255, 0.96);
+  }
+}
+
+.game-properties-customization-action:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.24);
+  outline-offset: 1px;
+}
+
+.game-properties-customization-action.is-disabled {
+  color: rgba(255, 255, 255, 0.42);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.game-properties-customization-body {
+  display: grid;
+  grid-template-columns: minmax(186px, 212px) minmax(0, 1fr);
+  gap: 0.58rem;
+  align-items: center;
+}
+
+.game-properties-customization-row.is-cover .game-properties-customization-body {
+  padding: 1.2rem 1.35rem;
+}
+
+.game-properties-customization-row.is-logo {
+  gap: 0.36rem;
+  padding-bottom: 0.56rem;
+}
+
+.game-properties-customization-row.is-logo .game-properties-customization-body {
+  grid-template-columns: max-content minmax(0, 1fr);
+  min-height: 0;
+  padding: 0.18rem 0 0;
+  gap: 1rem;
+}
+
+.game-properties-customization-row.is-wide-cover {
+  gap: 0.36rem;
+  padding-bottom: 0.56rem;
+}
+
+.game-properties-customization-row.is-background {
+  gap: 0.36rem;
+  padding-bottom: 0.56rem;
+}
+
+.game-properties-customization-row.is-wide-cover .game-properties-customization-body {
+  grid-template-columns: max-content minmax(0, 1fr);
+  min-height: 0;
+  padding: 0.18rem 0 0;
+  gap: 1rem;
+}
+
+.game-properties-customization-row.is-background .game-properties-customization-body {
+  grid-template-columns: max-content minmax(0, 1fr);
+  min-height: 0;
+  padding: 0.18rem 0 0;
+  gap: 1rem;
+}
+
+.game-properties-customization-preview {
+  position: relative;
+  width: 212px;
+  max-width: 100%;
+  border-radius: 0;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.game-properties-customization-preview.is-cover {
+  width: 124px;
+  height: 186px;
+  background: rgba(25, 28, 42, 0.8);
+}
+
+.game-properties-customization-preview.is-background {
+  height: 68px;
+}
+
+.game-properties-customization-preview.is-logo {
+  height: 76px;
+  background: transparent;
+}
+
+.game-properties-customization-row.is-logo .game-properties-customization-preview.is-logo {
+  width: 250px;
+  height: 122px;
+  justify-self: start;
+}
+
+.game-properties-customization-preview.is-wide-cover {
+  height: 103px;
+  border: 1px solid rgba(236, 226, 167, 0.85);
+}
+
+.game-properties-customization-row.is-wide-cover .game-properties-customization-preview.is-wide-cover {
+  width: 250px;
+  height: 122px;
+  justify-self: start;
+}
+
+.game-properties-customization-row.is-background .game-properties-customization-preview.is-background {
+  width: 250px;
+  height: 80px;
+  justify-self: start;
+}
+
+.game-properties-customization-image {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.game-properties-customization-row.is-logo .game-properties-customization-preview.is-logo .game-properties-customization-image {
+  object-fit: cover;
+  object-position: left center;
+}
+
+.game-properties-customization-row.is-wide-cover .game-properties-customization-preview.is-wide-cover .game-properties-customization-image {
+  object-fit: cover;
+  object-position: left center;
+}
+
+.game-properties-customization-row.is-background .game-properties-customization-preview.is-background .game-properties-customization-image {
+  object-fit: cover;
+  object-position: left center;
+}
+
+.game-properties-customization-logo-text {
+  display: block;
+  max-width: 100%;
+  font-size: 1.02rem;
+  line-height: 0.94;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: #ff5475;
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+}
+
+.game-properties-customization-row.is-logo .game-properties-customization-logo-text {
+  font-size: 1.68rem;
+}
+
+.game-properties-customization-empty-label {
+  font-size: 0.84rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.game-properties-customization-preview.is-empty {
+  display: grid;
+  place-items: center;
+}
+
+.game-properties-customization-description {
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.38;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.game-properties-customization-row.is-misc {
+  gap: 0.54rem;
+}
+
+.game-properties-customization-row.is-misc .game-properties-customization-header {
+  grid-template-columns: minmax(0, 1fr) minmax(0, clamp(220px, 40%, 300px));
+  align-items: center;
+}
+
+.game-properties-customization-sort-input {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 2.1rem;
+  box-sizing: border-box;
+}
+
 .game-properties-privacy {
   display: grid;
 }
@@ -2699,6 +3042,42 @@ button:disabled {
     justify-self: start;
     width: min(320px, 100%);
   }
+
+  .game-properties-customization-body {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .game-properties-customization-row.is-logo .game-properties-customization-body {
+    grid-template-columns: 1fr;
+    min-height: 0;
+    padding: 0.18rem 0 0.06rem;
+  }
+
+  .game-properties-customization-row.is-wide-cover .game-properties-customization-body {
+    grid-template-columns: 1fr;
+    min-height: 0;
+    padding: 0.18rem 0 0.06rem;
+  }
+
+  .game-properties-customization-row.is-background .game-properties-customization-body {
+    grid-template-columns: 1fr;
+    min-height: 0;
+    padding: 0.18rem 0 0.06rem;
+  }
+
+  .game-properties-customization-header {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .game-properties-customization-actions {
+    justify-self: start;
+  }
+
+  .game-properties-customization-sort-input {
+    width: 100%;
+  }
 }
 
 @media (max-width: 560px) {
@@ -2732,7 +3111,51 @@ button:disabled {
     align-items: start;
   }
 
+  .game-properties-recording-row {
+    grid-template-columns: 1fr;
+  }
+
   .game-properties-installed-action {
+    min-width: 0;
+  }
+
+  .game-properties-recording-action {
+    min-width: 0;
+    justify-self: start;
+    transform: none;
+  }
+
+  .game-properties-customization-preview {
+    width: 100%;
+  }
+
+  .game-properties-customization-preview.is-cover {
+    width: min(132px, 100%);
+  }
+
+  .game-properties-customization-row.is-logo .game-properties-customization-preview.is-logo {
+    width: 100%;
+    max-width: 320px;
+    height: 108px;
+  }
+
+  .game-properties-customization-row.is-wide-cover .game-properties-customization-preview.is-wide-cover {
+    width: 100%;
+    max-width: 320px;
+    height: 108px;
+  }
+
+  .game-properties-customization-row.is-background .game-properties-customization-preview.is-background {
+    width: 100%;
+    max-width: 320px;
+    height: 102px;
+  }
+
+  .game-properties-customization-group-title {
+    font-size: 0.9rem;
+  }
+
+  .game-properties-customization-action {
     min-width: 0;
   }
 

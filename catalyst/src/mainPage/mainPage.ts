@@ -162,6 +162,13 @@ interface GameInstallationDetailsPayload {
   sizeOnDiskBytes?: number;
 }
 
+interface GameCustomizationArtworkPayload {
+  cover?: string;
+  background?: string;
+  logo?: string;
+  wideCover?: string;
+}
+
 interface GameInstallLocationPayload {
   path: string;
   freeSpaceBytes?: number;
@@ -1290,6 +1297,19 @@ const getGameInstallationDetailsForGame = async (game: GameResponse): Promise<Ga
   }
 };
 
+const getGameCustomizationArtworkForGame = async (
+  game: GameResponse
+): Promise<GameCustomizationArtworkPayload | null> => {
+  try {
+    return await invoke<GameCustomizationArtworkPayload>("get_game_customization_artwork", {
+      provider: game.provider,
+      externalId: game.externalId,
+    });
+  } catch {
+    return null;
+  }
+};
+
 const listGameInstallLocationsForGame = async (game: GameResponse): Promise<GameInstallLocationPayload[]> => {
   try {
     return await invoke<GameInstallLocationPayload[]>("list_game_install_locations", {
@@ -1501,6 +1521,7 @@ const openGameProperties = async (game: GameResponse): Promise<void> => {
     versionBetasPayload,
     privacySettings,
     installationDetails,
+    customizationArtwork,
     persistedSettings,
   ] = await Promise.all([
     listCollectionsForGame(game),
@@ -1509,6 +1530,7 @@ const openGameProperties = async (game: GameResponse): Promise<void> => {
     listGameVersionBetasForGame(game),
     getGamePrivacySettingsForGame(game),
     getGameInstallationDetailsForGame(game),
+    getGameCustomizationArtworkForGame(game),
     getGamePropertiesSettingsForGame(game),
   ]);
   gamePropertiesPanel.open({
@@ -1525,6 +1547,7 @@ const openGameProperties = async (game: GameResponse): Promise<void> => {
       await setGamePropertiesSettingsForGame(game, settings);
     },
     installationDetails: installationDetails ?? undefined,
+    customizationArtworkPaths: customizationArtwork ?? undefined,
     browseInstalledFiles: async () => {
       await browseGameInstalledFilesForGame(game);
     },
