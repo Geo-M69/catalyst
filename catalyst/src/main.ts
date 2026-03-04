@@ -125,6 +125,13 @@ const initialize = async (): Promise<void> => {
     return;
   }
 
+  // Unhide the document now that we've confirmed the user is not redirected
+  try {
+    document.documentElement.style.visibility = "visible";
+  } catch {
+    // ignore if DOM access fails for some reason
+  }
+
   revealAuthPanel();
 };
 
