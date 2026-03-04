@@ -1846,11 +1846,22 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
         : "Unknown size";
       sizeText.append(sizeValue);
       if (installPath.length > 0) {
+        // Display the folder that contains SteamLibrary rather than including SteamLibrary itself.
+        let displayedInstallPath = installPath;
+        const usesBackslash = installPath.indexOf("\\") !== -1;
+        const sep = usesBackslash ? "\\" : "/";
+        const parts = installPath.split(sep).filter(Boolean);
+        const steamIndex = parts.findIndex((p) => p.toLowerCase() === "steamlibrary");
+        if (steamIndex > 0) {
+          const prefix = installPath.startsWith(sep) ? sep : "";
+          displayedInstallPath = prefix + parts.slice(0, steamIndex).join(sep);
+        }
+
         sizeText.append(" on ");
         installPathButton = document.createElement("button");
         installPathButton.type = "button";
         installPathButton.className = "game-properties-installed-path-link";
-        installPathButton.textContent = installPath;
+        installPathButton.textContent = displayedInstallPath;
         installPathButton.setAttribute("aria-label", `Open install path ${installPath}`);
         sizeText.append(installPathButton);
       }

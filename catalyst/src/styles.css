@@ -29,7 +29,7 @@
   --font-inter-regular: 400;
   --font-inter-medium: 500;
   --font-inter-bold: 700;
-  --color-background: #121212;
+  --color-background: #080808;
   --color-text: #ffffff;
   --color-accent: #f487b6;
   --color-card-bg: rgba(255, 255, 255, 0.06);
@@ -260,7 +260,7 @@ button {
 .text-input {
   border: 1px solid var(--color-card-border);
   border-radius: 10px;
-  background: var(--color-input-bg);
+  background: var(--color-background);
   color: var(--color-text);
   padding: 0.68rem 0.75rem;
   font: inherit;
@@ -349,7 +349,7 @@ button:disabled {
   height: var(--library-aspect-height);
   padding: 0;
   box-sizing: border-box;
-  background: #080808;
+  background: var(--color-background);
 }
 
 .library-column {
@@ -1748,7 +1748,7 @@ button:disabled {
   height: min(600px, calc(100vh - 3.2rem));
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 14px;
-  background: #121212;
+  background: #080808;
   color-scheme: dark;
   box-sizing: border-box;
   overflow: hidden;
@@ -1804,7 +1804,7 @@ button:disabled {
 
 .game-properties-sidebar {
   border-right: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.02);
+  background: #080808;
   overflow: auto;
   padding: 0.62rem;
   box-sizing: border-box;
@@ -1903,7 +1903,7 @@ button:disabled {
   padding: 0.68rem 0.76rem;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.03);
+  background: #161616;
 }
 
 .game-properties-field-label {
@@ -2046,7 +2046,7 @@ button:disabled {
   gap: 0.65rem;
   text-align: left;
   border-color: rgba(255, 255, 255, 0.14);
-  background: rgba(255, 255, 255, 0.03);
+  background: #080808;
 }
 
 .game-properties-language-trigger-text {
@@ -2084,7 +2084,7 @@ button:disabled {
   padding: 0.3rem;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 12px;
-  background: #121212;
+  background: #080808;
   box-shadow: none;
 }
 
