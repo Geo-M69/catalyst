@@ -1,4 +1,5 @@
 import type { GameResponse } from "../types";
+import { getSteamArtworkCandidates } from "../steamArtwork";
 
 export interface InstallDialogLocation {
   path: string;
@@ -57,26 +58,7 @@ const initialsFromName = (name: string): string => {
 };
 
 const getArtworkCandidates = (game: GameResponse): string[] => {
-  const candidates: string[] = [];
-  const seen = new Set<string>();
-
-  const pushCandidate = (value: string | undefined): void => {
-    const trimmed = value?.trim();
-    if (!trimmed || seen.has(trimmed)) {
-      return;
-    }
-    seen.add(trimmed);
-    candidates.push(trimmed);
-  };
-
-  if (game.provider.toLowerCase() === "steam" && /^\d+$/.test(game.externalId)) {
-    const appId = game.externalId;
-    pushCandidate(`https://cdn.cloudflare.steamstatic.com/steam/apps/${appId}/capsule_616x353.jpg`);
-    pushCandidate(`https://cdn.cloudflare.steamstatic.com/steam/apps/${appId}/header.jpg`);
-  }
-
-  pushCandidate(game.artworkUrl);
-  return candidates;
+  return getSteamArtworkCandidates(game, "wide-cover");
 };
 
 const dedupeLocations = (locations: InstallDialogLocation[]): InstallDialogLocation[] => {

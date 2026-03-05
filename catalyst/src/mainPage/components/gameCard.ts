@@ -1,4 +1,5 @@
 import type { GameResponse } from "../types";
+import { getSteamArtworkCandidates } from "../steamArtwork";
 
 const dateFormatter = new Intl.DateTimeFormat(undefined, {
   year: "numeric",
@@ -56,24 +57,18 @@ const appendPlaceholder = (container: HTMLElement, gameName: string): void => {
 const getArtworkCandidates = (game: GameResponse): string[] => {
   const candidates: string[] = [];
   const seen = new Set<string>();
-
-  const pushCandidate = (value: string | undefined): void => {
-    const trimmed = value?.trim();
-    if (!trimmed || seen.has(trimmed)) {
-      return;
+  const addCandidates = (values: string[]): void => {
+    for (const value of values) {
+      if (seen.has(value)) {
+        continue;
+      }
+      seen.add(value);
+      candidates.push(value);
     }
-    seen.add(trimmed);
-    candidates.push(trimmed);
   };
 
-  if (game.provider.toLowerCase() === "steam" && /^\d+$/.test(game.externalId)) {
-    const appId = game.externalId;
-    pushCandidate(`https://cdn.cloudflare.steamstatic.com/steam/apps/${appId}/capsule_616x353.jpg`);
-    pushCandidate(`https://cdn.cloudflare.steamstatic.com/steam/apps/${appId}/header.jpg`);
-    pushCandidate(`https://cdn.cloudflare.steamstatic.com/steam/apps/${appId}/library_600x900_2x.jpg`);
-  }
-
-  pushCandidate(game.artworkUrl);
+  addCandidates(getSteamArtworkCandidates(game, "wide-cover"));
+  addCandidates(getSteamArtworkCandidates(game, "cover"));
   return candidates;
 };
 
