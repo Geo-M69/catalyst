@@ -48,46 +48,41 @@
       </section>
 
       <section class="library-column panel-middle" aria-label="Library games grid">
-        <header class="panel-heading">
-          <div class="panel-heading-stack">
-            <div id="library-view-picker" class="library-view-picker">
+        <header class="panel-heading-library">
+          <div class="library-heading-main">
+            <div id="library-view-picker" class="library-view-picker" role="tablist" aria-label="Library view">
               <button
-                id="library-view-picker-button"
-                class="library-view-picker-button"
                 type="button"
-                aria-haspopup="listbox"
-                aria-expanded="false"
-                aria-controls="library-view-picker-menu"
+                class="library-view-picker-option is-selected"
+                role="tab"
+                aria-selected="true"
+                aria-controls="library-grid"
+                tabindex="0"
+                data-library-view="games"
               >
-                <span id="library-view-picker-label" class="library-view-picker-label">Game Library</span>
-                <span class="library-view-picker-caret" aria-hidden="true"></span>
+                Library
               </button>
-              <div id="library-view-picker-menu" class="library-view-picker-menu" role="listbox" hidden>
-                <button
-                  type="button"
-                  class="library-view-picker-option is-selected"
-                  role="option"
-                  aria-selected="true"
-                  data-library-view="games"
-                >
-                  Game Library
-                </button>
-                <button
-                  type="button"
-                  class="library-view-picker-option"
-                  role="option"
-                  aria-selected="false"
-                  data-library-view="collections"
-                >
-                  Collections
-                </button>
-              </div>
+              <button
+                type="button"
+                class="library-view-picker-option"
+                role="tab"
+                aria-selected="false"
+                aria-controls="library-grid"
+                tabindex="-1"
+                data-library-view="collections"
+              >
+                Collections
+              </button>
             </div>
-            <p id="library-summary" class="status-message">Loading library...</p>
+            <div class="library-heading-actions">
+              <p id="library-last-updated" class="library-last-updated">Not synced yet</p>
+              <button id="refresh-library-button" class="secondary-button refresh-button" type="button">
+                <span class="refresh-button-icon" aria-hidden="true"></span>
+                <span id="refresh-library-label" class="refresh-button-label">Refresh</span>
+              </button>
+            </div>
           </div>
-          <div class="library-heading-actions">
-            <button id="refresh-library-button" class="secondary-button refresh-button" type="button">Refresh</button>
-          </div>
+          <p id="library-summary" class="status-message library-heading-summary">Loading library...</p>
         </header>
 
         <div id="library-grid" class="library-grid-scroll" aria-live="polite"></div>

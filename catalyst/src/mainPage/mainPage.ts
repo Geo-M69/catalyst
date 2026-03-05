@@ -32,11 +32,10 @@ const sessionAccountMenuElement = document.getElementById("session-account-menu"
 const sessionAccountManageButton = document.getElementById("session-account-manage");
 const sessionAccountSignOutButton = document.getElementById("session-account-signout");
 const libraryViewPickerElement = document.getElementById("library-view-picker");
-const libraryViewPickerButton = document.getElementById("library-view-picker-button");
-const libraryViewPickerLabelElement = document.getElementById("library-view-picker-label");
-const libraryViewPickerMenuElement = document.getElementById("library-view-picker-menu");
 const librarySummaryElement = document.getElementById("library-summary");
+const libraryLastUpdatedElement = document.getElementById("library-last-updated");
 const refreshLibraryButton = document.getElementById("refresh-library-button");
+const refreshLibraryLabelElement = document.getElementById("refresh-library-label");
 const downloadActivityElement = document.getElementById("download-activity");
 const downloadActivityCountElement = document.getElementById("download-activity-count");
 const downloadActivityListElement = document.getElementById("download-activity-list");
@@ -52,11 +51,10 @@ if (
   || !(sessionAccountManageButton instanceof HTMLButtonElement)
   || !(sessionAccountSignOutButton instanceof HTMLButtonElement)
   || !(libraryViewPickerElement instanceof HTMLElement)
-  || !(libraryViewPickerButton instanceof HTMLButtonElement)
-  || !(libraryViewPickerLabelElement instanceof HTMLElement)
-  || !(libraryViewPickerMenuElement instanceof HTMLElement)
   || !(librarySummaryElement instanceof HTMLElement)
+  || !(libraryLastUpdatedElement instanceof HTMLElement)
   || !(refreshLibraryButton instanceof HTMLButtonElement)
+  || !(refreshLibraryLabelElement instanceof HTMLElement)
   || !(downloadActivityElement instanceof HTMLElement)
   || !(downloadActivityCountElement instanceof HTMLElement)
   || !(downloadActivityListElement instanceof HTMLElement)
@@ -105,13 +103,11 @@ let previousActiveDownloadsByKey = new Map<string, SteamDownloadProgressPayload>
 let downloadCompletionRefreshTimer: number | null = null;
 const downloadEtaByKey = new Map<string, DownloadEtaSnapshot>();
 let allCollections: CollectionResponse[] = [];
+let lastLibraryRefreshAtMs: number | null = null;
+let libraryLastUpdatedTimer: number | null = null;
 
 type LibraryViewMode = "games" | "collections";
 type RuntimePlatform = "windows" | "macos" | "linux" | "other";
-const LIBRARY_VIEW_LABELS: Record<LibraryViewMode, string> = {
-  games: "Game Library",
-  collections: "Collections",
-};
 let activeLibraryViewMode: LibraryViewMode = "games";
 
 const resolveToastRegion = (): HTMLElement => {
@@ -237,12 +233,72 @@ const setSessionStatus = (steamConnected: boolean, isError = false): void => {
     renderDownloadActivity();
     startDownloadPolling();
   }
+  renderLibraryLastUpdated();
   closeSessionAccountMenu();
 };
 
 const setLibrarySummary = (message: string): void => {
   librarySummaryElement.textContent = message;
   librarySummaryElement.classList.remove("status-error");
+};
+
+const formatLibraryRefreshAgeLabel = (elapsedMs: number): string => {
+  const elapsedSeconds = Math.floor(elapsedMs / 1000);
+  if (elapsedSeconds < 15) {
+    return "Synced just now";
+  }
+
+  if (elapsedSeconds < 60) {
+    return `Synced ${elapsedSeconds}s ago`;
+  }
+
+  const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+  if (elapsedMinutes < 60) {
+    return `Synced ${elapsedMinutes}m ago`;
+  }
+
+  const elapsedHours = Math.floor(elapsedMinutes / 60);
+  if (elapsedHours < 24) {
+    return `Synced ${elapsedHours}h ago`;
+  }
+
+  const elapsedDays = Math.floor(elapsedHours / 24);
+  return `Synced ${elapsedDays}d ago`;
+};
+
+const renderLibraryLastUpdated = (): void => {
+  if (isLoadingLibrary) {
+    libraryLastUpdatedElement.textContent = "Syncing...";
+    return;
+  }
+
+  if (lastLibraryRefreshAtMs === null) {
+    libraryLastUpdatedElement.textContent = "Not synced yet";
+    return;
+  }
+
+  libraryLastUpdatedElement.textContent = formatLibraryRefreshAgeLabel(Date.now() - lastLibraryRefreshAtMs);
+};
+
+const markLibraryAsUpdatedNow = (): void => {
+  lastLibraryRefreshAtMs = Date.now();
+  renderLibraryLastUpdated();
+  if (libraryLastUpdatedTimer !== null) {
+    return;
+  }
+
+  libraryLastUpdatedTimer = window.setInterval(() => {
+    renderLibraryLastUpdated();
+  }, 15000);
+};
+
+const stopLibraryLastUpdatedTimer = (): void => {
+  if (libraryLastUpdatedTimer === null) {
+    return;
+  }
+
+  window.clearInterval(libraryLastUpdatedTimer);
+  libraryLastUpdatedTimer = null;
 };
 
 const showLauncherToast = (message: string, variant: "info" | "error" = "info"): void => {
@@ -508,6 +564,10 @@ const toErrorMessage = (error: unknown, fallbackMessage: string): string => {
 const setLibraryLoadingState = (isLoading: boolean): void => {
   isLoadingLibrary = isLoading;
   refreshLibraryButton.disabled = isLoading;
+  refreshLibraryButton.classList.toggle("is-loading", isLoading);
+  refreshLibraryButton.setAttribute("aria-busy", `${isLoading}`);
+  refreshLibraryLabelElement.textContent = isLoading ? "Syncing" : "Refresh";
+  renderLibraryLastUpdated();
 };
 
 const readGridCardWidthPx = (): number => {
@@ -1245,20 +1305,8 @@ const renderActiveLibraryView = (): void => {
   renderGameLibrary();
 };
 
-const closeLibraryViewPicker = (): void => {
-  libraryViewPickerMenuElement.hidden = true;
-  libraryViewPickerElement.classList.remove("is-open");
-  libraryViewPickerButton.setAttribute("aria-expanded", "false");
-};
-
-const openLibraryViewPicker = (): void => {
-  libraryViewPickerMenuElement.hidden = false;
-  libraryViewPickerElement.classList.add("is-open");
-  libraryViewPickerButton.setAttribute("aria-expanded", "true");
-};
-
 const libraryViewOptionButtons = Array.from(
-  libraryViewPickerMenuElement.querySelectorAll(".library-view-picker-option")
+  libraryViewPickerElement.querySelectorAll(".library-view-picker-option")
 ).filter((option): option is HTMLButtonElement => option instanceof HTMLButtonElement);
 if (libraryViewOptionButtons.length === 0) {
   throw new Error("Library view picker is missing options");
@@ -1266,13 +1314,13 @@ if (libraryViewOptionButtons.length === 0) {
 
 const setLibraryViewMode = (viewMode: LibraryViewMode, render = true): void => {
   activeLibraryViewMode = viewMode;
-  libraryViewPickerLabelElement.textContent = LIBRARY_VIEW_LABELS[viewMode];
 
   for (const optionButton of libraryViewOptionButtons) {
     const optionViewMode = optionButton.dataset.libraryView;
     const isSelected = optionViewMode === viewMode;
     optionButton.classList.toggle("is-selected", isSelected);
     optionButton.setAttribute("aria-selected", `${isSelected}`);
+    optionButton.tabIndex = isSelected ? 0 : -1;
   }
 
   if (render) {
@@ -1280,20 +1328,14 @@ const setLibraryViewMode = (viewMode: LibraryViewMode, render = true): void => {
   }
 };
 
-const focusLibraryViewOptionByIndex = (index: number): void => {
-  if (libraryViewOptionButtons.length === 0) {
+const setLibraryViewModeFromOptionButton = (optionButton: HTMLButtonElement): void => {
+  const optionViewMode = optionButton.dataset.libraryView;
+  if (optionViewMode !== "games" && optionViewMode !== "collections") {
     return;
   }
 
-  const boundedIndex = Math.max(0, Math.min(index, libraryViewOptionButtons.length - 1));
-  libraryViewOptionButtons[boundedIndex]?.focus();
-};
-
-const focusSelectedLibraryViewOption = (): void => {
-  const selectedIndex = libraryViewOptionButtons.findIndex((optionButton) =>
-    optionButton.dataset.libraryView === activeLibraryViewMode
-  );
-  focusLibraryViewOptionByIndex(selectedIndex >= 0 ? selectedIndex : 0);
+  setLibraryViewMode(optionViewMode);
+  optionButton.focus();
 };
 
 const filterPanel = createFilterPanel(filterPanelElement, () => {
@@ -1894,7 +1936,6 @@ closeGameContextMenu = gameContextMenu.closeMenu;
 
 sessionAccountButton.addEventListener("click", () => {
   if (sessionAccountMenuElement.hidden) {
-    closeLibraryViewPicker();
     openSessionAccountMenu();
     return;
   }
@@ -1910,7 +1951,6 @@ sessionAccountButton.addEventListener("keydown", (event) => {
 
   if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") {
     event.preventDefault();
-    closeLibraryViewPicker();
     openSessionAccountMenu();
     const firstActionItem = getSessionMenuActionItems()[0];
     firstActionItem?.focus();
@@ -1971,86 +2011,43 @@ sessionAccountMenuElement.addEventListener("keydown", (event) => {
   }
 });
 
-libraryViewPickerButton.addEventListener("click", () => {
-  if (libraryViewPickerMenuElement.hidden) {
-    closeSessionAccountMenu();
-    openLibraryViewPicker();
-    focusSelectedLibraryViewOption();
-    return;
-  }
-
-  closeLibraryViewPicker();
-});
-
-libraryViewPickerButton.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") {
-    closeLibraryViewPicker();
-    return;
-  }
-
-  if (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Enter" || event.key === " ") {
-    event.preventDefault();
-    closeSessionAccountMenu();
-    openLibraryViewPicker();
-    focusSelectedLibraryViewOption();
-  }
-});
-
 for (const optionButton of libraryViewOptionButtons) {
   optionButton.addEventListener("click", () => {
-    const optionViewMode = optionButton.dataset.libraryView;
-    if (optionViewMode !== "games" && optionViewMode !== "collections") {
-      return;
-    }
-
-    setLibraryViewMode(optionViewMode);
-    closeLibraryViewPicker();
-    libraryViewPickerButton.focus();
+    closeSessionAccountMenu();
+    setLibraryViewModeFromOptionButton(optionButton);
   });
 }
 
-libraryViewPickerMenuElement.addEventListener("keydown", (event) => {
+libraryViewPickerElement.addEventListener("keydown", (event) => {
   const activeElement = document.activeElement;
   const focusedIndex = activeElement instanceof HTMLButtonElement
     ? libraryViewOptionButtons.indexOf(activeElement)
     : -1;
-
-  if (event.key === "Escape") {
-    event.preventDefault();
-    closeLibraryViewPicker();
-    libraryViewPickerButton.focus();
+  if (focusedIndex < 0) {
     return;
   }
 
-  if (event.key === "ArrowDown") {
+  let nextIndex = focusedIndex;
+  if (event.key === "ArrowRight" || event.key === "ArrowDown") {
     event.preventDefault();
-    focusLibraryViewOptionByIndex(Math.min(focusedIndex + 1, libraryViewOptionButtons.length - 1));
+    nextIndex = focusedIndex + 1;
+  } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+    event.preventDefault();
+    nextIndex = focusedIndex - 1;
+  } else if (event.key === "Home") {
+    event.preventDefault();
+    nextIndex = 0;
+  } else if (event.key === "End") {
+    event.preventDefault();
+    nextIndex = libraryViewOptionButtons.length - 1;
+  } else {
     return;
   }
 
-  if (event.key === "ArrowUp") {
-    event.preventDefault();
-    focusLibraryViewOptionByIndex(Math.max(focusedIndex - 1, 0));
-    return;
-  }
-
-  if (event.key === "Home") {
-    event.preventDefault();
-    focusLibraryViewOptionByIndex(0);
-    return;
-  }
-
-  if (event.key === "End") {
-    event.preventDefault();
-    focusLibraryViewOptionByIndex(libraryViewOptionButtons.length - 1);
-    return;
-  }
-
-  if (event.key === "Enter" || event.key === " ") {
-    if (activeElement instanceof HTMLButtonElement && focusedIndex >= 0) {
-      event.preventDefault();
-      activeElement.click();
-    }
+  closeSessionAccountMenu();
+  const nextButton = libraryViewOptionButtons[(nextIndex + libraryViewOptionButtons.length) % libraryViewOptionButtons.length];
+  if (nextButton) {
+    setLibraryViewModeFromOptionButton(nextButton);
   }
 });
 
@@ -2062,16 +2059,6 @@ document.addEventListener("pointerdown", (event) => {
 
   if (!sessionAccountElement.contains(target)) {
     closeSessionAccountMenu();
-  }
-
-  if (!libraryViewPickerElement.contains(target)) {
-    closeLibraryViewPicker();
-  }
-});
-
-window.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") {
-    closeLibraryViewPicker();
   }
 });
 
@@ -2122,6 +2109,7 @@ const refreshLibrary = async (syncBeforeLoad = false, importSteamCollections = f
     setAllGames(library.games);
     setAllCollections(collections);
     renderActiveLibraryView();
+    markLibraryAsUpdatedNow();
   } catch (error) {
     setAllGames([]);
     setAllCollections([]);
@@ -2166,6 +2154,7 @@ refreshLibraryButton.addEventListener("click", () => {
 
 window.addEventListener("resize", applyLibraryAspectSoftLock);
 window.addEventListener("beforeunload", stopDownloadPolling);
+window.addEventListener("beforeunload", stopLibraryLastUpdatedTimer);
 
 const initialize = async (): Promise<void> => {
   applyLibraryAspectSoftLock();
@@ -2173,8 +2162,8 @@ const initialize = async (): Promise<void> => {
   const cleanupGridWheelSmoothing = registerLinuxGridWheelSmoothing();
   window.addEventListener("beforeunload", cleanupGridWheelSmoothing, { once: true });
   setLibraryViewMode("games", false);
-  closeLibraryViewPicker();
   setLibrarySummary("Loading library...");
+  renderLibraryLastUpdated();
   renderDownloadActivity();
 
   const hasSession = await refreshSession();
