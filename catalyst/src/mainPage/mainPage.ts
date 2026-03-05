@@ -106,9 +106,21 @@ let allCollections: CollectionResponse[] = [];
 let lastLibraryRefreshAtMs: number | null = null;
 let libraryLastUpdatedTimer: number | null = null;
 
-type LibraryViewMode = "games" | "collections";
+type LibraryViewMode = "games" | "installed" | "favorites" | "collections";
 type RuntimePlatform = "windows" | "macos" | "linux" | "other";
 let activeLibraryViewMode: LibraryViewMode = "games";
+
+const isLibraryViewMode = (value: string | undefined): value is LibraryViewMode => {
+  return value === "games" || value === "installed" || value === "favorites" || value === "collections";
+};
+
+const isCollectionLibraryViewMode = (viewMode: LibraryViewMode): viewMode is "collections" => {
+  return viewMode === "collections";
+};
+
+const isGameLibraryViewMode = (viewMode: LibraryViewMode): viewMode is Exclude<LibraryViewMode, "collections"> => {
+  return viewMode !== "collections";
+};
 
 const resolveToastRegion = (): HTMLElement => {
   const existingRegion = document.getElementById("launcher-toast-region");
@@ -733,7 +745,7 @@ const registerLinuxGridWheelSmoothing = (): (() => void) => {
   };
 
   const handleWheel = (event: WheelEvent): void => {
-    if (activeLibraryViewMode !== "games" || event.ctrlKey || event.metaKey) {
+    if (!isGameLibraryViewMode(activeLibraryViewMode) || event.ctrlKey || event.metaKey) {
       return;
     }
     if (reducedMotionMediaQuery.matches || isLikelyTrackpadWheelEvent(event)) {
@@ -886,6 +898,25 @@ const normalizeCollectionNameForMatch = (collectionName: string): string => {
 
 const isHiddenGamesCollectionFilter = (collectionName: string): boolean => {
   return normalizeCollectionNameForMatch(collectionName) === normalizeCollectionNameForMatch(HIDDEN_GAMES_COLLECTION_NAME);
+};
+
+const isInstalledGame = (game: GameResponse): boolean => {
+  return typeof game.installed === "boolean" ? game.installed : game.playtimeMinutes > 0;
+};
+
+const getGamesForLibraryViewMode = (
+  games: GameResponse[],
+  viewMode: LibraryViewMode
+): GameResponse[] => {
+  if (viewMode === "installed") {
+    return games.filter((game) => isInstalledGame(game));
+  }
+
+  if (viewMode === "favorites") {
+    return games.filter((game) => game.favorite);
+  }
+
+  return games;
 };
 
 const countHiddenGames = (): number => {
@@ -1095,18 +1126,35 @@ const renderGameLibrary = (): void => {
   collectionGridCleanupTarget.__collectionGridCleanup?.();
   collectionGridCleanupTarget.__collectionGridCleanup = undefined;
   const filters = filterPanel.getFilters();
+  const viewScopedGames = getGamesForLibraryViewMode(allGames, activeLibraryViewMode);
   const showOnlyHiddenGames = isHiddenGamesCollectionFilter(filters.collection);
-  const eligibleGameCount = allGames.filter((game) =>
+  const eligibleGameCount = viewScopedGames.filter((game) =>
     showOnlyHiddenGames ? game.hideInLibrary === true : game.hideInLibrary !== true
   ).length;
-  const filteredGames = applyLibraryFilters(allGames, filters);
+  const filteredGames = applyLibraryFilters(viewScopedGames, filters);
   const emptyMessage = allGames.length === 0
     ? "No games synced yet."
     : showOnlyHiddenGames
-      ? "No hidden games."
+      ? activeLibraryViewMode === "installed"
+        ? "No hidden installed games."
+        : activeLibraryViewMode === "favorites"
+          ? "No hidden favorite games."
+          : "No hidden games."
       : eligibleGameCount === 0
-        ? "All games are hidden. Select \"Hidden Games\" in the Collection filter to view them."
-        : "No games match your current filters.";
+        ? activeLibraryViewMode === "installed"
+          ? viewScopedGames.length === 0
+            ? "No installed games yet."
+            : "All installed games are hidden. Select \"Hidden Games\" in the Collection filter to view them."
+          : activeLibraryViewMode === "favorites"
+            ? viewScopedGames.length === 0
+              ? "No favorite games yet."
+              : "All favorite games are hidden. Select \"Hidden Games\" in the Collection filter to view them."
+            : "All games are hidden. Select \"Hidden Games\" in the Collection filter to view them."
+        : activeLibraryViewMode === "installed"
+          ? "No installed games match your current filters."
+          : activeLibraryViewMode === "favorites"
+            ? "No favorite games match your current filters."
+            : "No games match your current filters.";
   const canRenderCollectionSections = allCollections.length > 0 && filters.collection.trim().length === 0;
   const sections = canRenderCollectionSections
     ? buildCollectionSectionsForGames(filteredGames, allCollections)
@@ -1118,6 +1166,16 @@ const renderGameLibrary = (): void => {
     emptyMessage,
     sections,
   });
+  if (activeLibraryViewMode === "installed") {
+    setLibrarySummary(`${filteredGames.length} of ${eligibleGameCount} installed games shown.`);
+    return;
+  }
+
+  if (activeLibraryViewMode === "favorites") {
+    setLibrarySummary(`${filteredGames.length} of ${eligibleGameCount} favorite games shown.`);
+    return;
+  }
+
   setLibrarySummary(`${filteredGames.length} of ${eligibleGameCount} games shown.`);
 };
 
@@ -1147,10 +1205,10 @@ const syncCollectionStateForGame = async (game: GameResponse): Promise<void> => 
       .map((collection) => collection.name),
   }));
 
-  if (activeLibraryViewMode === "games") {
-    renderGameLibrary();
-  } else {
+  if (isCollectionLibraryViewMode(activeLibraryViewMode)) {
     renderCollectionLibrary();
+  } else {
+    renderGameLibrary();
   }
 };
 
@@ -1267,9 +1325,9 @@ const renderCollectionLibrary = (): void => {
       void deleteCollectionFromGrid(collection);
     },
     onSelectFavorites: () => {
-      setLibraryViewMode("games", false);
+      setLibraryViewMode("favorites", false);
       filterPanel.setCollectionFilter("", false);
-      filterPanel.setFilterBy("favorites", false);
+      filterPanel.setFilterBy("all", false);
       renderGameLibrary();
     },
     onSelectHidden: () => {
@@ -1297,7 +1355,7 @@ const renderCollectionLibrary = (): void => {
 };
 
 const renderActiveLibraryView = (): void => {
-  if (activeLibraryViewMode === "collections") {
+  if (isCollectionLibraryViewMode(activeLibraryViewMode)) {
     renderCollectionLibrary();
     return;
   }
@@ -1330,7 +1388,7 @@ const setLibraryViewMode = (viewMode: LibraryViewMode, render = true): void => {
 
 const setLibraryViewModeFromOptionButton = (optionButton: HTMLButtonElement): void => {
   const optionViewMode = optionButton.dataset.libraryView;
-  if (optionViewMode !== "games" && optionViewMode !== "collections") {
+  if (!isLibraryViewMode(optionViewMode)) {
     return;
   }
 
@@ -1339,7 +1397,7 @@ const setLibraryViewModeFromOptionButton = (optionButton: HTMLButtonElement): vo
 };
 
 const filterPanel = createFilterPanel(filterPanelElement, () => {
-  if (activeLibraryViewMode === "games") {
+  if (isGameLibraryViewMode(activeLibraryViewMode)) {
     renderGameLibrary();
   }
 });

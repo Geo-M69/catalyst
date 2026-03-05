@@ -371,9 +371,28 @@ button:disabled {
   align-items: stretch;
   gap: 1rem;
   overflow: hidden;
+  overflow-x: hidden;
   border-right: 1px solid rgba(255, 255, 255, 0.12);
   background: #080808;
   box-shadow: none;
+}
+
+.panel-left > * {
+  min-width: 0;
+}
+
+.panel-left .panel-heading-stack,
+.panel-left #filter-panel,
+.panel-left .download-activity {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.panel-left button,
+.panel-left input {
+  box-sizing: border-box;
 }
 
 .panel-right {
@@ -624,6 +643,7 @@ button:disabled {
   margin-top: 0;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   padding-right: 0.08rem;
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
@@ -644,13 +664,13 @@ button:disabled {
 
 .library-view-picker-option {
   width: auto;
-  min-width: clamp(94px, 10vw, 122px);
+  min-width: clamp(78px, 8vw, 108px);
   min-height: 1.82rem;
   border: 1px solid transparent;
   border-radius: 7px;
   background: transparent;
   color: rgba(255, 255, 255, 0.68);
-  padding: 0.24rem 0.62rem;
+  padding: 0.24rem 0.54rem;
   text-align: center;
   font-size: 0.78rem;
   font-weight: 600;
@@ -891,7 +911,7 @@ button:disabled {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding-right: 0.2rem;
+  padding: 0.24rem 0.36rem 0.36rem 0.24rem;
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.35) transparent;
   --game-grid-card-min-width: 180px;
@@ -1134,6 +1154,21 @@ button:disabled {
   display: flex;
   flex-direction: column;
   position: relative;
+  transition: transform 180ms ease;
+}
+
+@media (hover: hover) {
+  .game-card:hover,
+  .game-card:focus-within {
+    transform: scale(1.03);
+  }
+
+  .game-card:hover .game-card-image,
+  .game-card:focus-within .game-card-image,
+  .game-card:hover .game-card-placeholder,
+  .game-card:focus-within .game-card-placeholder {
+    transform: scale(1.03);
+  }
 }
 
 .game-card:focus-visible {
@@ -1145,6 +1180,7 @@ button:disabled {
   width: 100%;
   aspect-ratio: 16 / 9;
   background: rgba(0, 0, 0, 0.28);
+  overflow: hidden;
 }
 
 .game-card-image {
@@ -1152,6 +1188,7 @@ button:disabled {
   height: 100%;
   object-fit: cover;
   display: block;
+  transition: transform 180ms ease;
 }
 
 .game-card-placeholder {
@@ -1163,6 +1200,7 @@ button:disabled {
   font-weight: var(--font-inter-bold);
   color: rgba(255, 255, 255, 0.92);
   background: linear-gradient(160deg, rgba(244, 135, 182, 0.55), rgba(88, 116, 212, 0.45));
+  transition: transform 180ms ease;
 }
 
 .game-card-body {
@@ -1263,10 +1301,14 @@ button:disabled {
   --filter-surface: #080808;
   gap: 0.86rem;
   padding-bottom: 0.64rem;
+  min-width: 0;
 }
 
 .filter-section {
   margin: 0;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 14px;
   background: var(--filter-surface);
@@ -1274,6 +1316,7 @@ button:disabled {
   gap: 0.64rem;
   padding: 0.76rem 0.78rem;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  box-sizing: border-box;
 }
 
 .filter-form-panel > * {
@@ -1320,6 +1363,12 @@ button:disabled {
   background: #080808;
 }
 
+.filter-quick-section .filter-input {
+  width: calc(100% - 0.28rem);
+  margin-inline: 0.14rem;
+  box-sizing: border-box;
+}
+
 .filter-section-header {
   display: flex;
   align-items: center;
@@ -1354,13 +1403,45 @@ button:disabled {
   gap: 0.34rem;
 }
 
+.filter-search-field {
+  position: relative;
+}
+
+.filter-search-field::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 0.78rem;
+  width: 0.9rem;
+  height: 0.9rem;
+  transform: translateY(-50%);
+  background: rgba(255, 255, 255, 0.52);
+  pointer-events: none;
+  z-index: 1;
+  -webkit-mask: url("./assets/search.svg") center / contain no-repeat;
+  mask: url("./assets/search.svg") center / contain no-repeat;
+}
+
+.filter-quick-section .filter-search-field::before {
+  right: calc(0.78rem + 0.14rem);
+}
+
+.filter-search-field:focus-within::before {
+  background: rgba(255, 255, 255, 0.76);
+}
+
 .filter-advanced-dropdown {
   display: grid;
   gap: 0.86rem;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .filter-advanced-toggle {
   width: 100%;
+  max-width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 14px;
   background: var(--filter-surface);
@@ -1372,6 +1453,7 @@ button:disabled {
   gap: 0.5rem;
   text-align: left;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  box-sizing: border-box;
 }
 
 .filter-advanced-toggle .filter-section-kicker {
@@ -1399,6 +1481,10 @@ button:disabled {
 .filter-advanced-content {
   display: grid;
   gap: 0.86rem;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .filter-input {
@@ -1417,6 +1503,10 @@ button:disabled {
     box-shadow 160ms ease,
     background-color 160ms ease,
     transform 120ms ease;
+}
+
+.filter-input-search {
+  padding-right: 2.2rem;
 }
 
 .filter-input::placeholder {
@@ -1449,6 +1539,11 @@ button:disabled {
 
 .filter-select-field {
   position: relative;
+}
+
+.filter-advanced-content .filter-select-field {
+  padding-inline: 0.14rem;
+  box-sizing: border-box;
 }
 
 .filter-select-field.is-open {
@@ -3926,14 +4021,16 @@ button:disabled {
     display: flex;
     flex-direction: column;
     gap: 1rem;
-    overflow: visible;
+    overflow-x: hidden;
+    overflow-y: visible;
     border: none;
   }
 
   .panel-left #filter-panel {
     flex: none;
     min-height: auto;
-    overflow: visible;
+    overflow-x: hidden;
+    overflow-y: visible;
     padding-right: 0;
   }
 

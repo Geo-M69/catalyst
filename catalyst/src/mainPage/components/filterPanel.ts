@@ -51,7 +51,7 @@ const FILTER_TEMPLATE = `
       </div>
 
       <div class="filter-section-content">
-        <div class="filter-field">
+        <div class="filter-field filter-search-field">
           <input
             id="filter-search"
             class="text-input filter-input filter-input-search"

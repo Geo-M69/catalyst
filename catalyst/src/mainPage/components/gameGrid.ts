@@ -43,11 +43,13 @@ const setSectionInteractivity = (sectionGrid: HTMLElement, isCollapsed: boolean)
 const setSectionContentExpanded = (sectionContent: HTMLElement): void => {
   sectionContent.style.maxHeight = "none";
   sectionContent.style.opacity = "1";
+  sectionContent.style.overflow = "visible";
 };
 
 const setSectionContentCollapsed = (sectionContent: HTMLElement): void => {
   sectionContent.style.maxHeight = "0px";
   sectionContent.style.opacity = "0";
+  sectionContent.style.overflow = "hidden";
 };
 
 const animateSectionContent = (
@@ -60,6 +62,7 @@ const animateSectionContent = (
 
   if (isCollapsed) {
     setSectionInteractivity(sectionGrid, true);
+    sectionContent.style.overflow = "hidden";
     sectionContent.style.maxHeight = `${sectionContent.scrollHeight}px`;
     sectionContent.style.opacity = "1";
     window.requestAnimationFrame(() => {
@@ -69,6 +72,7 @@ const animateSectionContent = (
   }
 
   setSectionInteractivity(sectionGrid, false);
+  sectionContent.style.overflow = "hidden";
   setSectionContentCollapsed(sectionContent);
   const targetHeight = sectionContent.scrollHeight;
   window.requestAnimationFrame(() => {
