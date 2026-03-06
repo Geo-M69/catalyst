@@ -1,4 +1,5 @@
 use crate::*;
+use crate::application::error::{AppError, AppResult};
 use tauri::State;
 
 #[tauri::command]
@@ -6,7 +7,7 @@ pub(crate) fn list_collections(
     provider: Option<String>,
     external_id: Option<String>,
     state: State<'_, AppState>,
-) -> Result<Vec<CollectionResponse>, String> {
+) -> AppResult<Vec<CollectionResponse>> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
@@ -25,7 +26,8 @@ pub(crate) fn list_collections(
             Some((normalized_provider, normalized_external_id))
         }
         _ => {
-            return Err(String::from(
+            return Err(AppError::validation(
+                "missing_identity_pair",
                 "provider and external_id must be supplied together",
             ))
         }
@@ -46,11 +48,11 @@ pub(crate) fn list_collections(
 }
 
 #[tauri::command]
-pub(crate) fn create_collection(name: String, state: State<'_, AppState>) -> Result<CollectionResponse, String> {
+pub(crate) fn create_collection(name: String, state: State<'_, AppState>) -> AppResult<CollectionResponse> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
-    create_user_collection(&connection, &user.id, &name)
+    Ok(create_user_collection(&connection, &user.id, &name)?)
 }
 
 #[tauri::command]
@@ -58,29 +60,35 @@ pub(crate) fn rename_collection(
     collection_id: String,
     name: String,
     state: State<'_, AppState>,
-) -> Result<CollectionResponse, String> {
+) -> AppResult<CollectionResponse> {
     let trimmed_collection_id = collection_id.trim();
     if trimmed_collection_id.is_empty() {
-        return Err(String::from("Collection ID is required"));
+        return Err(AppError::validation(
+            "collection_id_required",
+            "Collection ID is required",
+        ));
     }
 
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
-    rename_user_collection(&connection, &user.id, trimmed_collection_id, &name)
+    Ok(rename_user_collection(&connection, &user.id, trimmed_collection_id, &name)?)
 }
 
 #[tauri::command]
-pub(crate) fn delete_collection(collection_id: String, state: State<'_, AppState>) -> Result<(), String> {
+pub(crate) fn delete_collection(collection_id: String, state: State<'_, AppState>) -> AppResult<()> {
     let trimmed_collection_id = collection_id.trim();
     if trimmed_collection_id.is_empty() {
-        return Err(String::from("Collection ID is required"));
+        return Err(AppError::validation(
+            "collection_id_required",
+            "Collection ID is required",
+        ));
     }
 
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
-    delete_user_collection(&connection, &user.id, trimmed_collection_id)
+    Ok(delete_user_collection(&connection, &user.id, trimmed_collection_id)?)
 }
 
 #[tauri::command]
@@ -89,10 +97,13 @@ pub(crate) fn add_game_to_collection(
     external_id: String,
     collection_id: String,
     state: State<'_, AppState>,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let trimmed_collection_id = collection_id.trim();
     if trimmed_collection_id.is_empty() {
-        return Err(String::from("Collection ID is required"));
+        return Err(AppError::validation(
+            "collection_id_required",
+            "Collection ID is required",
+        ));
     }
 
     let connection = open_connection(&state.db_path)?;

@@ -1,4 +1,6 @@
 import { ipcService } from "./shared/ipc/client";
+import { normalizeAppError } from "./shared/ipc/errors";
+import type { AppErrorPayload } from "./shared/ipc/contracts";
 
 export {};
 
@@ -28,6 +30,17 @@ const setStatusMessage = (message: string, isError = false): void => {
   }
 };
 
+const setStatusErrorMetadata = (appError: AppErrorPayload | null): void => {
+  if (!appError) {
+    delete statusMessageElement.dataset.errorKind;
+    delete statusMessageElement.dataset.errorCode;
+    return;
+  }
+
+  statusMessageElement.dataset.errorKind = appError.kind;
+  statusMessageElement.dataset.errorCode = appError.code;
+};
+
 const setPendingState = (isPending: boolean): void => {
   steamButtonElement.disabled = isPending;
 };
@@ -54,23 +67,12 @@ const revealAuthPanel = (): void => {
   }, SPLASH_DURATION_MS);
 };
 
-const toErrorMessage = (error: unknown, fallbackMessage: string): string => {
-  if (typeof error === "string" && error.trim().length > 0) {
-    return error;
-  }
-
-  if (error instanceof Error && error.message.trim().length > 0) {
-    return error.message;
-  }
-
-  return fallbackMessage;
-};
-
 const refreshSession = async (): Promise<boolean> => {
   try {
     const user = await ipcService.getSession();
 
     if (!user) {
+      setStatusErrorMetadata(null);
       setStatusMessage("Not logged in. Click below to sign in with Steam.");
       steamButtonElement.textContent = "Login with Steam";
       return false;
@@ -79,7 +81,10 @@ const refreshSession = async (): Promise<boolean> => {
     window.location.replace(MAIN_PAGE_PATH);
     return true;
   } catch (error) {
-    setStatusMessage(toErrorMessage(error, "Could not read current app session."), true);
+    const appError = normalizeAppError(error, "Could not read current app session.");
+    setStatusErrorMetadata(appError);
+    setStatusMessage(appError.message, true);
+    console.error(`[auth/session] ${appError.kind}:${appError.code} ${appError.message}`);
     steamButtonElement.textContent = "Login with Steam";
     return false;
   }
@@ -98,7 +103,10 @@ const startSteamLogin = async (): Promise<void> => {
     );
     window.location.replace(MAIN_PAGE_PATH);
   } catch (error) {
-    setStatusMessage(toErrorMessage(error, "Could not start Steam login"), true);
+    const appError = normalizeAppError(error, "Could not start Steam login");
+    setStatusErrorMetadata(appError);
+    setStatusMessage(appError.message, true);
+    console.error(`[auth/start_steam_auth] ${appError.kind}:${appError.code} ${appError.message}`);
     setPendingState(false);
   }
 };

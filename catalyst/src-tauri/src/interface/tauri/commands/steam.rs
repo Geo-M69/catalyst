@@ -1,4 +1,5 @@
 use crate::*;
+use crate::application::error::{AppError, AppResult};
 use tauri::State;
 
 #[tauri::command]
@@ -6,7 +7,7 @@ pub(crate) fn list_game_versions_betas(
     provider: String,
     external_id: String,
     state: State<'_, AppState>,
-) -> Result<GameVersionBetasResponse, String> {
+) -> AppResult<GameVersionBetasResponse> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
@@ -143,7 +144,7 @@ pub(crate) fn validate_game_beta_access_code(
     external_id: String,
     access_code: String,
     state: State<'_, AppState>,
-) -> Result<GameBetaAccessCodeValidationResponse, String> {
+) -> AppResult<GameBetaAccessCodeValidationResponse> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
@@ -224,16 +225,16 @@ pub(crate) fn validate_game_beta_access_code(
 }
 
 #[tauri::command]
-pub(crate) fn import_steam_collections(state: State<'_, AppState>) -> Result<SteamCollectionsImportResponse, String> {
+pub(crate) fn import_steam_collections(state: State<'_, AppState>) -> AppResult<SteamCollectionsImportResponse> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
     let steam_id = user
         .steam_id
         .as_deref()
-        .ok_or_else(|| String::from("Steam is not linked for this account"))?;
+        .ok_or_else(|| AppError::unauthorized("steam_not_linked", "Steam is not linked for this account"))?;
     let steam_root = resolve_steam_root_path(state.steam_root_override.as_deref())
-        .ok_or_else(|| String::from("Could not locate local Steam installation"))?;
+        .ok_or_else(|| AppError::not_found("steam_install_not_found", "Could not locate local Steam installation"))?;
     let userdata_directory = resolve_steam_userdata_directory(&steam_root, steam_id)?;
     let config_paths = [
         userdata_directory.join("7").join("remote").join("sharedconfig.vdf"),
@@ -262,9 +263,12 @@ pub(crate) fn import_steam_collections(state: State<'_, AppState>) -> Result<Ste
     }
 
     if !loaded_any_config_file {
-        return Err(format!(
-            "Could not locate Steam collection config files for account {steam_id} in {}",
-            userdata_directory.display()
+        return Err(AppError::not_found(
+            "steam_collection_config_not_found",
+            format!(
+                "Could not locate Steam collection config files for account {steam_id} in {}",
+                userdata_directory.display()
+            ),
         ));
     }
 
@@ -274,10 +278,17 @@ pub(crate) fn import_steam_collections(state: State<'_, AppState>) -> Result<Ste
         } else {
             loaded_config_paths.join(", ")
         };
-        return Err(format!(
-            "No Steam collections were found in local Steam configuration. Checked files: {files_label}"
+        return Err(AppError::validation(
+            "steam_collections_empty",
+            format!(
+                "No Steam collections were found in local Steam configuration. Checked files: {files_label}"
+            ),
         ));
     }
 
-    import_steam_collections_for_user(&connection, &user.id, combined_collections_by_app_id)
+    Ok(import_steam_collections_for_user(
+        &connection,
+        &user.id,
+        combined_collections_by_app_id,
+    )?)
 }

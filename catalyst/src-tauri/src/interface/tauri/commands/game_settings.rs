@@ -1,4 +1,5 @@
 use crate::*;
+use crate::application::error::{AppError, AppResult};
 use tauri::State;
 
 #[tauri::command]
@@ -6,7 +7,7 @@ pub(crate) fn list_game_languages(
     provider: String,
     external_id: String,
     state: State<'_, AppState>,
-) -> Result<Vec<String>, String> {
+) -> AppResult<Vec<String>> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
@@ -47,7 +48,7 @@ pub(crate) fn list_game_languages(
                 return Ok(cached_languages);
             }
 
-            Err(fetch_error)
+            Err(fetch_error.into())
         }
     }
 }
@@ -57,7 +58,7 @@ pub(crate) fn list_game_compatibility_tools(
     provider: String,
     external_id: String,
     state: State<'_, AppState>,
-) -> Result<Vec<GameCompatibilityToolResponse>, String> {
+) -> AppResult<Vec<GameCompatibilityToolResponse>> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
@@ -92,10 +93,10 @@ pub(crate) fn list_game_compatibility_tools(
         }
     };
 
-    resolve_steam_compatibility_tools(
+    Ok(resolve_steam_compatibility_tools(
         state.steam_root_override.as_deref(),
         include_linux_runtime_tools,
-    )
+    )?)
 }
 
 #[tauri::command]
@@ -103,7 +104,7 @@ pub(crate) fn get_game_privacy_settings(
     provider: String,
     external_id: String,
     state: State<'_, AppState>,
-) -> Result<GamePrivacySettingsResponse, String> {
+) -> AppResult<GamePrivacySettingsResponse> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
@@ -116,12 +117,12 @@ pub(crate) fn get_game_privacy_settings(
         &normalized_external_id,
     )?;
 
-    load_game_privacy_settings(
+    Ok(load_game_privacy_settings(
         &connection,
         &user.id,
         &normalized_provider,
         &normalized_external_id,
-    )
+    )?)
 }
 
 #[tauri::command]
@@ -131,7 +132,7 @@ pub(crate) fn set_game_privacy_settings(
     hide_in_library: bool,
     mark_as_private: bool,
     state: State<'_, AppState>,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
@@ -156,17 +157,17 @@ pub(crate) fn set_game_privacy_settings(
     if normalized_provider == "steam" {
         let app_id = normalized_external_id
             .parse::<u64>()
-            .map_err(|_| String::from("Steam external_id must be a numeric app ID"))?;
+            .map_err(|_| AppError::validation("invalid_external_id", "Steam external_id must be a numeric app ID"))?;
         apply_steam_game_privacy_settings(state.inner(), &user, app_id, &settings)?;
     }
 
-    save_game_privacy_settings(
+    Ok(save_game_privacy_settings(
         &connection,
         &user.id,
         &normalized_provider,
         &normalized_external_id,
         settings,
-    )
+    )?)
 }
 
 #[tauri::command]
@@ -174,7 +175,7 @@ pub(crate) fn clear_game_overlay_data(
     provider: String,
     external_id: String,
     state: State<'_, AppState>,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
@@ -190,7 +191,7 @@ pub(crate) fn clear_game_overlay_data(
     if normalized_provider == "steam" {
         let app_id = normalized_external_id
             .parse::<u64>()
-            .map_err(|_| String::from("Steam external_id must be a numeric app ID"))?;
+            .map_err(|_| AppError::validation("invalid_external_id", "Steam external_id must be a numeric app ID"))?;
         clear_steam_game_overlay_data(state.inner(), &user, app_id)?;
     }
 
@@ -201,13 +202,13 @@ pub(crate) fn clear_game_overlay_data(
         &normalized_external_id,
     )?;
     settings.overlay_data_deleted = true;
-    save_game_privacy_settings(
+    Ok(save_game_privacy_settings(
         &connection,
         &user.id,
         &normalized_provider,
         &normalized_external_id,
         settings,
-    )
+    )?)
 }
 
 #[tauri::command]
@@ -215,7 +216,7 @@ pub(crate) fn get_game_properties_settings(
     provider: String,
     external_id: String,
     state: State<'_, AppState>,
-) -> Result<GamePropertiesSettingsPayload, String> {
+) -> AppResult<GamePropertiesSettingsPayload> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
@@ -228,12 +229,12 @@ pub(crate) fn get_game_properties_settings(
         &normalized_external_id,
     )?;
 
-    load_game_properties_settings(
+    Ok(load_game_properties_settings(
         &connection,
         &user.id,
         &normalized_provider,
         &normalized_external_id,
-    )
+    )?)
 }
 
 #[tauri::command]
@@ -242,7 +243,7 @@ pub(crate) fn set_game_properties_settings(
     external_id: String,
     settings: GamePropertiesSettingsPayload,
     state: State<'_, AppState>,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
@@ -267,7 +268,7 @@ pub(crate) fn set_game_properties_settings(
     if normalized_provider == "steam" {
         let app_id = normalized_external_id
             .parse::<u64>()
-            .map_err(|_| String::from("Steam external_id must be a numeric app ID"))?;
+            .map_err(|_| AppError::validation("invalid_external_id", "Steam external_id must be a numeric app ID"))?;
         if let Err(error) = apply_steam_game_properties_settings(
             state.inner(),
             &user,
@@ -289,7 +290,7 @@ pub(crate) fn get_game_customization_artwork(
     provider: String,
     external_id: String,
     state: State<'_, AppState>,
-) -> Result<GameCustomizationArtworkResponse, String> {
+) -> AppResult<GameCustomizationArtworkResponse> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
@@ -327,7 +328,7 @@ pub(crate) fn get_game_installation_details(
     provider: String,
     external_id: String,
     state: State<'_, AppState>,
-) -> Result<GameInstallationDetailsResponse, String> {
+) -> AppResult<GameInstallationDetailsResponse> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
@@ -392,7 +393,7 @@ pub(crate) fn get_game_install_size_estimate(
     provider: String,
     external_id: String,
     state: State<'_, AppState>,
-) -> Result<Option<u64>, String> {
+) -> AppResult<Option<u64>> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
@@ -426,7 +427,7 @@ pub(crate) fn get_game_install_size_estimate(
     }
 
     let client = build_http_client()?;
-    fetch_steam_install_size_estimate_from_store(&client, app_id)
+    Ok(fetch_steam_install_size_estimate_from_store(&client, app_id)?)
 }
 
 #[tauri::command]
@@ -434,7 +435,7 @@ pub(crate) fn list_game_install_locations(
     provider: String,
     external_id: String,
     state: State<'_, AppState>,
-) -> Result<Vec<GameInstallLocationResponse>, String> {
+) -> AppResult<Vec<GameInstallLocationResponse>> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;

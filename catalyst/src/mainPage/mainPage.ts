@@ -19,6 +19,7 @@ import {
   type GameResponse,
 } from "./types";
 import { ipcService } from "../shared/ipc/client";
+import { normalizeAppError } from "../shared/ipc/errors";
 import type {
   GameCustomizationArtworkPayload,
   GameInstallLocationPayload,
@@ -522,18 +523,6 @@ const renderDownloadActivity = (): void => {
     row.append(meta);
     downloadActivityListElement.append(row);
   }
-};
-
-const toErrorMessage = (error: unknown, fallbackMessage: string): string => {
-  if (typeof error === "string" && error.trim().length > 0) {
-    return error;
-  }
-
-  if (error instanceof Error && error.message.trim().length > 0) {
-    return error.message;
-  }
-
-  return fallbackMessage;
 };
 
 const setLibraryLoadingState = (isLoading: boolean): void => {
@@ -1196,7 +1185,9 @@ const createCollectionFromGrid = async (): Promise<void> => {
     renderActiveLibraryView();
     void refreshLibrary(false);
   } catch (error) {
-    showLauncherToast(toErrorMessage(error, "Could not create collection."), "error");
+    const appError = normalizeAppError(error, "Could not create collection.");
+    showLauncherToast(appError.message, "error");
+    console.error(`[collections/create] ${appError.kind}:${appError.code} ${appError.message}`);
   }
 };
 
@@ -1229,7 +1220,9 @@ const renameCollectionFromGrid = async (collection: CollectionGridItem): Promise
     renderActiveLibraryView();
     void refreshLibrary(false);
   } catch (error) {
-    showLauncherToast(toErrorMessage(error, "Could not rename collection."), "error");
+    const appError = normalizeAppError(error, "Could not rename collection.");
+    showLauncherToast(appError.message, "error");
+    console.error(`[collections/rename] ${appError.kind}:${appError.code} ${appError.message}`);
   }
 };
 
@@ -1259,7 +1252,9 @@ const deleteCollectionFromGrid = async (collection: CollectionGridItem): Promise
     renderActiveLibraryView();
     void refreshLibrary(false);
   } catch (error) {
-    showLauncherToast(toErrorMessage(error, "Could not delete collection."), "error");
+    const appError = normalizeAppError(error, "Could not delete collection.");
+    showLauncherToast(appError.message, "error");
+    console.error(`[collections/delete] ${appError.kind}:${appError.code} ${appError.message}`);
   }
 };
 
@@ -2094,7 +2089,8 @@ sessionAccountSignOutButton.addEventListener("click", () => {
       await ipcService.logout();
       window.location.replace("/index.html");
     } catch (error) {
-      console.error(toErrorMessage(error, "Could not sign out."));
+      const appError = normalizeAppError(error, "Could not sign out.");
+      console.error(`[auth/logout] ${appError.kind}:${appError.code} ${appError.message}`);
     }
   })();
 });
@@ -2111,14 +2107,16 @@ const refreshLibrary = async (syncBeforeLoad = false, importSteamCollections = f
       try {
         await ipcService.syncSteamLibrary();
       } catch (error) {
-        console.error(toErrorMessage(error, "Steam sync failed. Loading cached library."));
+        const appError = normalizeAppError(error, "Steam sync failed. Loading cached library.");
+        console.error(`[library/sync] ${appError.kind}:${appError.code} ${appError.message}`);
       }
 
       if (importSteamCollections) {
         try {
           await ipcService.importSteamCollections();
         } catch (error) {
-          console.error(toErrorMessage(error, "Steam collection import failed."));
+          const appError = normalizeAppError(error, "Steam collection import failed.");
+          console.error(`[collections/import_steam] ${appError.kind}:${appError.code} ${appError.message}`);
         }
       }
     }
@@ -2146,7 +2144,8 @@ const refreshLibrary = async (syncBeforeLoad = false, importSteamCollections = f
       setLibrarySummary("Could not load your library.");
     }
     librarySummaryElement.classList.add("status-error");
-    console.error(toErrorMessage(error, "Could not load library."));
+    const appError = normalizeAppError(error, "Could not load library.");
+    console.error(`[library/load] ${appError.kind}:${appError.code} ${appError.message}`);
   } finally {
     setLibraryLoadingState(false);
   }
@@ -2163,7 +2162,8 @@ const refreshSession = async (): Promise<boolean> => {
     setSessionStatus(session.steamLinked);
     return true;
   } catch (error) {
-    console.error(toErrorMessage(error, "Could not load session data."));
+    const appError = normalizeAppError(error, "Could not load session data.");
+    console.error(`[session/load] ${appError.kind}:${appError.code} ${appError.message}`);
     setSessionStatus(false, true);
     return false;
   }

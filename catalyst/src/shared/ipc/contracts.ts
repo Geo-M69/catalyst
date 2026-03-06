@@ -6,6 +6,14 @@ import type {
 } from "../../mainPage/components/gamePropertiesPanel";
 import type { CollectionResponse, LibraryResponse, PublicUser } from "../../mainPage/types";
 
+export type AppErrorKind = "validation" | "unauthorized" | "not_found" | "conflict" | "external" | "internal";
+
+export interface AppErrorPayload {
+  kind: AppErrorKind;
+  code: string;
+  message: string;
+}
+
 export interface SteamAuthResponse {
   user: PublicUser;
   syncedGames: number;

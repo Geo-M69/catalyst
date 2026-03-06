@@ -1,5 +1,6 @@
 import { createCollectionNameDialog } from "./collectionNameDialog";
 import type { CollectionResponse, GameResponse } from "../types";
+import { toErrorMessage } from "../../shared/ipc/errors";
 
 interface GameContextMenuActions {
   addGameToCollection: (game: GameResponse, collectionId: string) => Promise<void>;
@@ -32,18 +33,6 @@ export interface GameContextMenuController {
 
 const VIEWPORT_PADDING_PX = 8;
 const SUBMENU_GAP_PX = 8;
-
-const toErrorMessage = (error: unknown, fallbackMessage: string): string => {
-  if (typeof error === "string" && error.trim().length > 0) {
-    return error;
-  }
-
-  if (error instanceof Error && error.message.trim().length > 0) {
-    return error.message;
-  }
-
-  return fallbackMessage;
-};
 
 const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(value, max));
 

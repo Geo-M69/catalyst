@@ -1,8 +1,9 @@
 use crate::*;
+use crate::application::error::AppResult;
 use tauri::State;
 
 #[tauri::command]
-pub(crate) fn get_library(state: State<'_, AppState>) -> Result<LibraryResponse, String> {
+pub(crate) fn get_library(state: State<'_, AppState>) -> AppResult<LibraryResponse> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
@@ -16,7 +17,7 @@ pub(crate) fn get_library(state: State<'_, AppState>) -> Result<LibraryResponse,
 }
 
 #[tauri::command]
-pub(crate) fn get_steam_status(state: State<'_, AppState>) -> Result<SteamStatusResponse, String> {
+pub(crate) fn get_steam_status(state: State<'_, AppState>) -> AppResult<SteamStatusResponse> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
@@ -30,7 +31,7 @@ pub(crate) fn get_steam_status(state: State<'_, AppState>) -> Result<SteamStatus
 }
 
 #[tauri::command]
-pub(crate) fn sync_steam_library(state: State<'_, AppState>) -> Result<SteamSyncResponse, String> {
+pub(crate) fn sync_steam_library(state: State<'_, AppState>) -> AppResult<SteamSyncResponse> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
@@ -57,7 +58,7 @@ pub(crate) fn set_game_favorite(
     external_id: String,
     favorite: bool,
     state: State<'_, AppState>,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
@@ -74,7 +75,7 @@ pub(crate) fn set_game_favorite(
 }
 
 #[tauri::command]
-pub(crate) fn list_steam_downloads(state: State<'_, AppState>) -> Result<Vec<SteamDownloadProgressResponse>, String> {
+pub(crate) fn list_steam_downloads(state: State<'_, AppState>) -> AppResult<Vec<SteamDownloadProgressResponse>> {
     let owned_games_by_app_id = match open_connection(&state.db_path) {
         Ok(connection) => {
             if let Err(error) = cleanup_expired_sessions(&connection) {

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { IpcError, normalizeAppError } from "./errors";
 import type {
   AddGameToCollectionRequest,
   CreateCollectionRequest,
@@ -22,10 +23,17 @@ export const callCommand = async <K extends IpcCommandName>(
   command: K,
   payload?: RequestFor<K>
 ): Promise<ResponseFor<K>> => {
-  if (payload === undefined) {
-    return invoke<ResponseFor<K>>(command);
+  try {
+    if (payload === undefined) {
+      return await invoke<ResponseFor<K>>(command);
+    }
+    return await invoke<ResponseFor<K>>(command, payload as unknown as Record<string, unknown>);
+  } catch (error) {
+    throw new IpcError(
+      normalizeAppError(error, `Command '${command}' failed`),
+      { cause: error }
+    );
   }
-  return invoke<ResponseFor<K>>(command, payload as unknown as Record<string, unknown>);
 };
 
 export const ipcService = {

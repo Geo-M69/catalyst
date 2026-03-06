@@ -1,4 +1,5 @@
 use crate::*;
+use crate::application::error::{AppError, AppResult};
 use rusqlite::params;
 use tauri::State;
 
@@ -8,7 +9,7 @@ pub(crate) fn play_game(
     external_id: String,
     launch_options: Option<String>,
     state: State<'_, AppState>,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
@@ -31,12 +32,12 @@ pub(crate) fn play_game(
                 }
             }),
     };
-    open_provider_game_uri(
+    Ok(open_provider_game_uri(
         &provider,
         &external_id,
         "play",
         resolved_launch_options.as_deref(),
-    )
+    )?)
 }
 
 #[tauri::command]
@@ -47,7 +48,7 @@ pub(crate) fn install_game(
     create_desktop_shortcut: Option<bool>,
     create_application_shortcut: Option<bool>,
     state: State<'_, AppState>,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
@@ -60,7 +61,7 @@ pub(crate) fn install_game(
         create_desktop_shortcut,
         create_application_shortcut,
     );
-    open_provider_game_uri(&provider, &external_id, "install", None)
+    Ok(open_provider_game_uri(&provider, &external_id, "install", None)?)
 }
 
 #[tauri::command]
@@ -68,13 +69,13 @@ pub(crate) fn uninstall_game(
     provider: String,
     external_id: String,
     state: State<'_, AppState>,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
     let (provider, external_id) = normalize_game_identity_input(&provider, &external_id)?;
     ensure_owned_game_exists(&connection, &user.id, &provider, &external_id)?;
-    open_provider_game_uri(&provider, &external_id, "uninstall", None)
+    Ok(open_provider_game_uri(&provider, &external_id, "uninstall", None)?)
 }
 
 #[tauri::command]
@@ -82,7 +83,7 @@ pub(crate) fn browse_game_installed_files(
     provider: String,
     external_id: String,
     state: State<'_, AppState>,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
@@ -90,24 +91,25 @@ pub(crate) fn browse_game_installed_files(
     ensure_owned_game_exists(&connection, &user.id, &provider, &external_id)?;
 
     if provider != "steam" {
-        return Err(String::from(
+        return Err(AppError::validation(
+            "unsupported_provider",
             "Browsing installed files is only supported for Steam games.",
         ));
     }
 
     let app_id = external_id
         .parse::<u64>()
-        .map_err(|_| String::from("Steam external_id must be a numeric app ID"))?;
+        .map_err(|_| AppError::validation("invalid_external_id", "Steam external_id must be a numeric app ID"))?;
     let install_directory =
         resolve_steam_install_directory_for_app_id(state.steam_root_override.as_deref(), app_id)?;
     if !install_directory.is_dir() {
-        return Err(format!(
-            "Install directory is unavailable: {}",
-            install_directory.display()
+        return Err(AppError::not_found(
+            "install_directory_missing",
+            format!("Install directory is unavailable: {}", install_directory.display()),
         ));
     }
 
-    open_path_in_file_manager(&install_directory)
+    Ok(open_path_in_file_manager(&install_directory)?)
 }
 
 #[tauri::command]
@@ -115,13 +117,13 @@ pub(crate) fn backup_game_files(
     provider: String,
     external_id: String,
     state: State<'_, AppState>,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
     let (provider, external_id) = normalize_game_identity_input(&provider, &external_id)?;
     ensure_owned_game_exists(&connection, &user.id, &provider, &external_id)?;
-    open_provider_game_uri(&provider, &external_id, "backup", None)
+    Ok(open_provider_game_uri(&provider, &external_id, "backup", None)?)
 }
 
 #[tauri::command]
@@ -129,13 +131,13 @@ pub(crate) fn verify_game_files(
     provider: String,
     external_id: String,
     state: State<'_, AppState>,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
     let (provider, external_id) = normalize_game_identity_input(&provider, &external_id)?;
     ensure_owned_game_exists(&connection, &user.id, &provider, &external_id)?;
-    open_provider_game_uri(&provider, &external_id, "validate", None)
+    Ok(open_provider_game_uri(&provider, &external_id, "validate", None)?)
 }
 
 #[tauri::command]
@@ -143,7 +145,7 @@ pub(crate) fn add_game_desktop_shortcut(
     provider: String,
     external_id: String,
     state: State<'_, AppState>,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
@@ -165,7 +167,7 @@ pub(crate) fn add_game_desktop_shortcut(
         .map_err(|error| format!("Failed to query game name for desktop shortcut: {error}"))?
         .unwrap_or(fallback_name);
 
-    create_provider_game_desktop_shortcut(&provider, &external_id, &game_name)
+    Ok(create_provider_game_desktop_shortcut(&provider, &external_id, &game_name)?)
 }
 
 #[tauri::command]
@@ -173,7 +175,7 @@ pub(crate) fn open_game_recording_settings(
     provider: String,
     external_id: String,
     state: State<'_, AppState>,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state.inner(), &connection)?;
@@ -181,10 +183,11 @@ pub(crate) fn open_game_recording_settings(
     ensure_owned_game_exists(&connection, &user.id, &provider, &external_id)?;
 
     if provider != "steam" {
-        return Err(String::from(
+        return Err(AppError::validation(
+            "unsupported_provider",
             "Game recording settings are currently only available for Steam games.",
         ));
     }
 
-    open_steam_game_recording_settings()
+    Ok(open_steam_game_recording_settings()?)
 }
