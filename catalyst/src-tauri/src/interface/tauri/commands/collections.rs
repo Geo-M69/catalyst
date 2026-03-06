@@ -1,5 +1,5 @@
 use crate::*;
-use crate::application::error::{AppError, AppResult};
+use crate::application::error::AppResult;
 use tauri::State;
 
 #[tauri::command]
@@ -8,51 +8,16 @@ pub(crate) fn list_collections(
     external_id: Option<String>,
     state: State<'_, AppState>,
 ) -> AppResult<Vec<CollectionResponse>> {
-    let connection = open_connection(&state.db_path)?;
-    cleanup_expired_sessions(&connection)?;
-    let user = get_authenticated_user(state.inner(), &connection)?;
-
-    let target = match (provider.as_deref(), external_id.as_deref()) {
-        (None, None) => None,
-        (Some(target_provider), Some(target_external_id)) => {
-            let (normalized_provider, normalized_external_id) =
-                normalize_game_identity_input(target_provider, target_external_id)?;
-            ensure_owned_game_exists(
-                &connection,
-                &user.id,
-                &normalized_provider,
-                &normalized_external_id,
-            )?;
-            Some((normalized_provider, normalized_external_id))
-        }
-        _ => {
-            return Err(AppError::validation(
-                "missing_identity_pair",
-                "provider and external_id must be supplied together",
-            ))
-        }
-    };
-
-    let list = if let Some((target_provider, target_external_id)) = target {
-        list_collections_by_user(
-            &connection,
-            &user.id,
-            Some(target_provider.as_str()),
-            Some(target_external_id.as_str()),
-        )?
-    } else {
-        list_collections_by_user(&connection, &user.id, None, None)?
-    };
-
-    Ok(list)
+    crate::application::services::collection_service::list_collections(
+        state.inner(),
+        provider,
+        external_id,
+    )
 }
 
 #[tauri::command]
 pub(crate) fn create_collection(name: String, state: State<'_, AppState>) -> AppResult<CollectionResponse> {
-    let connection = open_connection(&state.db_path)?;
-    cleanup_expired_sessions(&connection)?;
-    let user = get_authenticated_user(state.inner(), &connection)?;
-    Ok(create_user_collection(&connection, &user.id, &name)?)
+    crate::application::services::collection_service::create_collection(state.inner(), name)
 }
 
 #[tauri::command]
@@ -61,34 +26,16 @@ pub(crate) fn rename_collection(
     name: String,
     state: State<'_, AppState>,
 ) -> AppResult<CollectionResponse> {
-    let trimmed_collection_id = collection_id.trim();
-    if trimmed_collection_id.is_empty() {
-        return Err(AppError::validation(
-            "collection_id_required",
-            "Collection ID is required",
-        ));
-    }
-
-    let connection = open_connection(&state.db_path)?;
-    cleanup_expired_sessions(&connection)?;
-    let user = get_authenticated_user(state.inner(), &connection)?;
-    Ok(rename_user_collection(&connection, &user.id, trimmed_collection_id, &name)?)
+    crate::application::services::collection_service::rename_collection(
+        state.inner(),
+        collection_id,
+        name,
+    )
 }
 
 #[tauri::command]
 pub(crate) fn delete_collection(collection_id: String, state: State<'_, AppState>) -> AppResult<()> {
-    let trimmed_collection_id = collection_id.trim();
-    if trimmed_collection_id.is_empty() {
-        return Err(AppError::validation(
-            "collection_id_required",
-            "Collection ID is required",
-        ));
-    }
-
-    let connection = open_connection(&state.db_path)?;
-    cleanup_expired_sessions(&connection)?;
-    let user = get_authenticated_user(state.inner(), &connection)?;
-    Ok(delete_user_collection(&connection, &user.id, trimmed_collection_id)?)
+    crate::application::services::collection_service::delete_collection(state.inner(), collection_id)
 }
 
 #[tauri::command]
@@ -98,26 +45,10 @@ pub(crate) fn add_game_to_collection(
     collection_id: String,
     state: State<'_, AppState>,
 ) -> AppResult<()> {
-    let trimmed_collection_id = collection_id.trim();
-    if trimmed_collection_id.is_empty() {
-        return Err(AppError::validation(
-            "collection_id_required",
-            "Collection ID is required",
-        ));
-    }
-
-    let connection = open_connection(&state.db_path)?;
-    cleanup_expired_sessions(&connection)?;
-    let user = get_authenticated_user(state.inner(), &connection)?;
-    let (provider, external_id) = normalize_game_identity_input(&provider, &external_id)?;
-    ensure_owned_game_exists(&connection, &user.id, &provider, &external_id)?;
-    ensure_owned_collection_exists(&connection, &user.id, trimmed_collection_id)?;
-    add_game_to_collection_membership(
-        &connection,
-        &user.id,
-        trimmed_collection_id,
-        &provider,
-        &external_id,
-    )?;
-    Ok(())
+    crate::application::services::collection_service::add_game_to_collection(
+        state.inner(),
+        provider,
+        external_id,
+        collection_id,
+    )
 }
