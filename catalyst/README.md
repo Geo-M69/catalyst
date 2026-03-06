@@ -91,6 +91,20 @@ npm run tauri dev
 npm run tauri build
 ```
 
+## Phase 0 Guardrails
+
+Use these commands to keep baseline architecture checks reproducible during migration:
+
+```bash
+npm run inventory:commands
+npm run typecheck:new
+npm run smoke
+```
+
+- `inventory:commands` regenerates `docs/command-inventory.md` from Rust command annotations and handler registration.
+- `typecheck:new` applies stricter TypeScript checks to new modular folders (`src/app`, `src/features`, `src/shared`).
+- `smoke` runs frontend build and backend `cargo check`.
+
 On Windows, this produces an MSI installer by default (see `src-tauri/tauri.conf.json` bundle settings).
 
 ## Steam Login Note (Windows)

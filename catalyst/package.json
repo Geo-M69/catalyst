@@ -6,6 +6,12 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "typecheck:new": "tsc -p tsconfig.new-files.json",
+    "inventory:commands": "node scripts/inventory-tauri-commands.mjs",
+    "smoke:frontend": "npm run build",
+    "smoke:backend": "cargo check --manifest-path src-tauri/Cargo.toml",
+    "smoke": "npm run smoke:frontend && npm run smoke:backend",
+    "phase0:guardrails": "npm run inventory:commands && npm run typecheck:new && npm run smoke",
     "preview": "vite preview",
     "tauri": "set -a; [ -f .env ] && . ./.env; set +a; tauri"
   },
