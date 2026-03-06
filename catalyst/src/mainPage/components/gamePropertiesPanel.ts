@@ -1,6 +1,6 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { GameResponse } from "../types";
-import { getSteamArtworkCandidates, type SteamLibraryArtworkKind } from "../steamArtwork";
+import { getSteamArtworkCandidates, addUniqueCandidate, type SteamLibraryArtworkKind } from "../../shared/utils/artwork";
 
 export interface GamePropertiesInput {
   game: GameResponse;
@@ -2806,15 +2806,6 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
       preview.className = `game-properties-customization-preview is-${kind}`;
       const artworkCandidates: string[] = [];
       const seenArtworkCandidates = new Set<string>();
-      const addArtworkCandidate = (candidate: string | undefined): void => {
-        const trimmed = candidate?.trim();
-        if (!trimmed || seenArtworkCandidates.has(trimmed)) {
-          return;
-        }
-
-        seenArtworkCandidates.add(trimmed);
-        artworkCandidates.push(trimmed);
-      };
       const localArtworkPathByKind: Record<SteamLibraryArtworkKind, string | undefined> = {
         cover: currentCustomizationArtworkPaths.cover,
         background: currentCustomizationArtworkPaths.background,
@@ -2825,14 +2816,14 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
       const localArtworkPath = localArtworkPathByKind[kind];
       if (localArtworkPath) {
         try {
-          addArtworkCandidate(convertFileSrc(localArtworkPath));
+          addUniqueCandidate(convertFileSrc(localArtworkPath), seenArtworkCandidates, artworkCandidates);
         } catch (error) {
           console.warn("Could not resolve local Steam artwork path", error);
         }
       }
 
       for (const candidate of getSteamArtworkCandidates(renderedGame, kind)) {
-        addArtworkCandidate(candidate);
+        addUniqueCandidate(candidate, seenArtworkCandidates, artworkCandidates);
       }
 
       const appendLogoTextFallback = (): void => {

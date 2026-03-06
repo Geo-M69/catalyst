@@ -1,5 +1,6 @@
 import type { GameResponse } from "../types";
-import { getSteamArtworkCandidates } from "../steamArtwork";
+import { getSteamArtworkCandidates } from "../../shared/utils/artwork";
+import { formatBytes } from "../../shared/utils/format";
 
 export interface InstallDialogLocation {
   path: string;
@@ -25,23 +26,7 @@ export interface InstallDialogController {
 
 const DEFAULT_INSTALL_PATH = "Steam default install location";
 const DEFAULT_INSTALL_SIZE_LABEL = "Size unavailable";
-const BYTE_UNITS = ["B", "KB", "MB", "GB", "TB"];
 
-const formatBytes = (sizeInBytes: number): string => {
-  if (!Number.isFinite(sizeInBytes) || sizeInBytes <= 0) {
-    return "Unknown";
-  }
-
-  let unitIndex = 0;
-  let value = sizeInBytes;
-  while (value >= 1024 && unitIndex < BYTE_UNITS.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-
-  const fractionDigits = value >= 100 ? 0 : value >= 10 ? 1 : 2;
-  return `${value.toFixed(fractionDigits)} ${BYTE_UNITS[unitIndex]}`;
-};
 
 const formatFreeSpaceLabel = (location: InstallDialogLocation): string => {
   const freeSpaceBytes = location.freeSpaceBytes;

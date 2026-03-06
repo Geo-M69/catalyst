@@ -72,6 +72,7 @@ if (
 }
 
 import { store, isLibraryViewMode, isCollectionLibraryViewMode, isGameLibraryViewMode, type LibraryViewMode } from "./libraryStore";
+import { formatBytes, isFiniteNonNegativeNumber } from "../shared/utils/format";
 const GRID_CARD_WIDTH_CSS_VAR = "--game-grid-card-min-width";
 const GRID_CARD_WIDTH_DEFAULT_PX = 180;
 const GRID_CARD_WIDTH_MIN_PX = 140;
@@ -90,7 +91,6 @@ const DOWNLOAD_ETA_SMOOTHING_FACTOR = 0.35;
 const DOWNLOAD_ETA_SAMPLE_MIN_SECONDS = 0.5;
 const DOWNLOAD_ETA_STALE_MS = 15000;
 const TOAST_DURATION_MS = 3200;
-const BYTE_UNITS = ["B", "KB", "MB", "GB", "TB"];
 const LIBRARY_SOFT_LOCK_ASPECTS: ReadonlyArray<{ label: string; ratio: number }> = [
   { label: "16:9", ratio: 16 / 9 },
   { label: "21:9", ratio: 21 / 9 },
@@ -268,29 +268,7 @@ const showLauncherToast = (message: string, variant: "info" | "error" = "info"):
   }, TOAST_DURATION_MS);
 };
 
-const formatBytes = (sizeInBytes?: number): string | null => {
-  if (typeof sizeInBytes !== "number" || !Number.isFinite(sizeInBytes) || sizeInBytes < 0) {
-    return null;
-  }
 
-  let unitIndex = 0;
-  let value = sizeInBytes;
-  while (value >= 1024 && unitIndex < BYTE_UNITS.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-
-  if (unitIndex === 0) {
-    return `${Math.round(value)} ${BYTE_UNITS[unitIndex]}`;
-  }
-
-  const fractionDigits = value >= 100 ? 0 : value >= 10 ? 1 : 2;
-  return `${value.toFixed(fractionDigits)} ${BYTE_UNITS[unitIndex]}`;
-};
-
-const isFiniteNonNegativeNumber = (value: unknown): value is number => {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0;
-};
 
 const getDownloadEtaKey = (download: SteamDownloadProgressPayload): string => {
   return `${download.provider}:${download.externalId}`;

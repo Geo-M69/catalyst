@@ -1,5 +1,5 @@
 import type { GameResponse } from "../types";
-import { getSteamArtworkCandidates } from "../steamArtwork";
+import { getSteamArtworkCandidates, addCandidates } from "../../shared/utils/artwork";
 
 const dateFormatter = new Intl.DateTimeFormat(undefined, {
   year: "numeric",
@@ -57,18 +57,8 @@ const appendPlaceholder = (container: HTMLElement, gameName: string): void => {
 const getArtworkCandidates = (game: GameResponse): string[] => {
   const candidates: string[] = [];
   const seen = new Set<string>();
-  const addCandidates = (values: string[]): void => {
-    for (const value of values) {
-      if (seen.has(value)) {
-        continue;
-      }
-      seen.add(value);
-      candidates.push(value);
-    }
-  };
-
-  addCandidates(getSteamArtworkCandidates(game, "wide-cover"));
-  addCandidates(getSteamArtworkCandidates(game, "cover"));
+  addCandidates(getSteamArtworkCandidates(game, "wide-cover"), seen, candidates);
+  addCandidates(getSteamArtworkCandidates(game, "cover"), seen, candidates);
   return candidates;
 };
 
