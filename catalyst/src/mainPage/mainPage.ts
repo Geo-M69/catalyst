@@ -71,10 +71,7 @@ if (
   throw new Error("Main page is missing required DOM elements");
 }
 
-let allGames: GameResponse[] = [];
-let gameById = new Map<string, GameResponse>();
-let isLoadingLibrary = false;
-let steamLinked = false;
+import { store, isLibraryViewMode, isCollectionLibraryViewMode, isGameLibraryViewMode, type LibraryViewMode } from "./libraryStore";
 const GRID_CARD_WIDTH_CSS_VAR = "--game-grid-card-min-width";
 const GRID_CARD_WIDTH_DEFAULT_PX = 180;
 const GRID_CARD_WIDTH_MIN_PX = 140;
@@ -101,32 +98,8 @@ const LIBRARY_SOFT_LOCK_ASPECTS: ReadonlyArray<{ label: string; ratio: number }>
 ];
 
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
-let closeGameContextMenu: (() => void) | null = null;
-let downloadPollTimer: number | null = null;
-let isDownloadPollInFlight = false;
-let activeDownloads: SteamDownloadProgressPayload[] = [];
-let previousActiveDownloadsByKey = new Map<string, SteamDownloadProgressPayload>();
-let downloadCompletionRefreshTimer: number | null = null;
-const downloadEtaByKey = new Map<string, DownloadEtaSnapshot>();
-let allCollections: CollectionResponse[] = [];
-let lastLibraryRefreshAtMs: number | null = null;
-let libraryLastUpdatedTimer: number | null = null;
-
-type LibraryViewMode = "games" | "installed" | "favorites" | "collections";
+// runtime platform alias used below
 type RuntimePlatform = "windows" | "macos" | "linux" | "other";
-let activeLibraryViewMode: LibraryViewMode = "games";
-
-const isLibraryViewMode = (value: string | undefined): value is LibraryViewMode => {
-  return value === "games" || value === "installed" || value === "favorites" || value === "collections";
-};
-
-const isCollectionLibraryViewMode = (viewMode: LibraryViewMode): viewMode is "collections" => {
-  return viewMode === "collections";
-};
-
-const isGameLibraryViewMode = (viewMode: LibraryViewMode): viewMode is Exclude<LibraryViewMode, "collections"> => {
-  return viewMode !== "collections";
-};
 
 const resolveToastRegion = (): HTMLElement => {
   const existingRegion = document.getElementById("launcher-toast-region");
@@ -166,11 +139,7 @@ const collectSteamTagSuggestions = (games: GameResponse[]): string[] => {
   );
 };
 
-interface DownloadEtaSnapshot {
-  lastBytesDownloaded: number;
-  lastSampleAtMs: number;
-  smoothedBytesPerSecond: number;
-}
+// Download snapshot type moved to `libraryStore` and imported as `DownloadEtaSnapshot`.
 
 const closeSessionAccountMenu = (): void => {
   sessionAccountMenuElement.hidden = true;
@@ -189,21 +158,21 @@ const getSessionMenuActionItems = (): HTMLButtonElement[] => {
 };
 
 const setSessionStatus = (steamConnected: boolean, isError = false): void => {
-  steamLinked = steamConnected && !isError;
+  store.steamLinked = steamConnected && !isError;
   sessionAccountLabelElement.textContent = APP_NAME;
   sessionAccountButton.classList.toggle("is-error", isError);
   sessionAccountManageButton.disabled = isError;
   sessionAccountSignOutButton.disabled = false;
-  downloadActivityElement.classList.toggle("is-disabled", isError || !steamLinked);
-  if (!steamLinked) {
+  downloadActivityElement.classList.toggle("is-disabled", isError || !store.steamLinked);
+  if (!store.steamLinked) {
     stopDownloadPolling();
-    activeDownloads = [];
-    previousActiveDownloadsByKey.clear();
-    if (downloadCompletionRefreshTimer !== null) {
-      window.clearTimeout(downloadCompletionRefreshTimer);
-      downloadCompletionRefreshTimer = null;
+    store.activeDownloads = [];
+    store.previousActiveDownloadsByKey.clear();
+    if (store.downloadCompletionRefreshTimer !== null) {
+      window.clearTimeout(store.downloadCompletionRefreshTimer);
+      store.downloadCompletionRefreshTimer = null;
     }
-    downloadEtaByKey.clear();
+    store.downloadEtaByKey.clear();
     renderDownloadActivity();
   } else {
     renderDownloadActivity();
@@ -243,38 +212,38 @@ const formatLibraryRefreshAgeLabel = (elapsedMs: number): string => {
 };
 
 const renderLibraryLastUpdated = (): void => {
-  if (isLoadingLibrary) {
+  if (store.isLoadingLibrary) {
     libraryLastUpdatedElement.textContent = "Syncing...";
     return;
   }
 
-  if (lastLibraryRefreshAtMs === null) {
+  if (store.lastLibraryRefreshAtMs === null) {
     libraryLastUpdatedElement.textContent = "Not synced yet";
     return;
   }
 
-  libraryLastUpdatedElement.textContent = formatLibraryRefreshAgeLabel(Date.now() - lastLibraryRefreshAtMs);
+  libraryLastUpdatedElement.textContent = formatLibraryRefreshAgeLabel(Date.now() - store.lastLibraryRefreshAtMs);
 };
 
 const markLibraryAsUpdatedNow = (): void => {
-  lastLibraryRefreshAtMs = Date.now();
+  store.lastLibraryRefreshAtMs = Date.now();
   renderLibraryLastUpdated();
-  if (libraryLastUpdatedTimer !== null) {
+  if (store.libraryLastUpdatedTimer !== null) {
     return;
   }
 
-  libraryLastUpdatedTimer = window.setInterval(() => {
+  store.libraryLastUpdatedTimer = window.setInterval(() => {
     renderLibraryLastUpdated();
   }, 15000);
 };
 
 const stopLibraryLastUpdatedTimer = (): void => {
-  if (libraryLastUpdatedTimer === null) {
+  if (store.libraryLastUpdatedTimer === null) {
     return;
   }
 
-  window.clearInterval(libraryLastUpdatedTimer);
-  libraryLastUpdatedTimer = null;
+  window.clearInterval(store.libraryLastUpdatedTimer);
+  store.libraryLastUpdatedTimer = null;
 };
 
 const showLauncherToast = (message: string, variant: "info" | "error" = "info"): void => {
@@ -336,18 +305,18 @@ const updateDownloadEtaSnapshots = (downloads: SteamDownloadProgressPayload[]): 
     activeKeys.add(key);
 
     if (!isFiniteNonNegativeNumber(download.bytesDownloaded)) {
-      downloadEtaByKey.delete(key);
+      store.downloadEtaByKey.delete(key);
       continue;
     }
 
     const currentBytesDownloaded = download.bytesDownloaded;
-    const previousSnapshot = downloadEtaByKey.get(key);
+    const previousSnapshot = store.downloadEtaByKey.get(key);
     if (
       !previousSnapshot
       || currentBytesDownloaded < previousSnapshot.lastBytesDownloaded
       || nowMs <= previousSnapshot.lastSampleAtMs
     ) {
-      downloadEtaByKey.set(key, {
+      store.downloadEtaByKey.set(key, {
         lastBytesDownloaded: currentBytesDownloaded,
         lastSampleAtMs: nowMs,
         smoothedBytesPerSecond: previousSnapshot?.smoothedBytesPerSecond ?? 0,
@@ -372,16 +341,16 @@ const updateDownloadEtaSnapshots = (downloads: SteamDownloadProgressPayload[]): 
       }
     }
 
-    downloadEtaByKey.set(key, {
+    store.downloadEtaByKey.set(key, {
       lastBytesDownloaded: currentBytesDownloaded,
       lastSampleAtMs: nowMs,
       smoothedBytesPerSecond,
     });
   }
 
-  for (const key of [...downloadEtaByKey.keys()]) {
+  for (const key of [...store.downloadEtaByKey.keys()]) {
     if (!activeKeys.has(key)) {
-      downloadEtaByKey.delete(key);
+      store.downloadEtaByKey.delete(key);
     }
   }
 };
@@ -395,7 +364,7 @@ const getDownloadTransferRateLabel = (download: SteamDownloadProgressPayload): s
     return null;
   }
 
-  const etaSnapshot = downloadEtaByKey.get(getDownloadEtaKey(download));
+  const etaSnapshot = store.downloadEtaByKey.get(getDownloadEtaKey(download));
   if (!etaSnapshot || etaSnapshot.smoothedBytesPerSecond <= 0) {
     return null;
   }
@@ -436,7 +405,7 @@ const normalizeDownloadPercent = (download: SteamDownloadProgressPayload): numbe
 };
 
 const renderDownloadActivity = (): void => {
-  const activeCount = activeDownloads.length;
+  const activeCount = store.activeDownloads.length;
   downloadActivityCountElement.hidden = activeCount <= 0;
   downloadActivityCountElement.textContent = `${activeCount}`;
   downloadActivityElement.setAttribute(
@@ -448,14 +417,14 @@ const renderDownloadActivity = (): void => {
   if (activeCount === 0) {
     const emptyMessage = document.createElement("p");
     emptyMessage.className = "download-activity-empty";
-    emptyMessage.textContent = steamLinked
+    emptyMessage.textContent = store.steamLinked
       ? "No active downloads"
       : "Connect Steam to view download activity";
     downloadActivityListElement.append(emptyMessage);
     return;
   }
 
-  for (const download of activeDownloads) {
+  for (const download of store.activeDownloads) {
     const row = document.createElement("article");
     row.className = "download-activity-item";
 
@@ -526,7 +495,7 @@ const renderDownloadActivity = (): void => {
 };
 
 const setLibraryLoadingState = (isLoading: boolean): void => {
-  isLoadingLibrary = isLoading;
+  store.isLoadingLibrary = isLoading;
   refreshLibraryButton.disabled = isLoading;
   refreshLibraryButton.classList.toggle("is-loading", isLoading);
   refreshLibraryButton.setAttribute("aria-busy", `${isLoading}`);
@@ -697,7 +666,7 @@ const registerLinuxGridWheelSmoothing = (): (() => void) => {
   };
 
   const handleWheel = (event: WheelEvent): void => {
-    if (!isGameLibraryViewMode(activeLibraryViewMode) || event.ctrlKey || event.metaKey) {
+    if (!isGameLibraryViewMode(store.activeLibraryViewMode) || event.ctrlKey || event.metaKey) {
       return;
     }
     if (reducedMotionMediaQuery.matches || isLikelyTrackpadWheelEvent(event)) {
@@ -802,8 +771,8 @@ const registerGridZoomShortcut = (): void => {
 };
 
 const setAllGames = (games: GameResponse[]): void => {
-  allGames = games;
-  gameById = new Map(games.map((game) => [game.id, game]));
+  store.allGames = games;
+  store.gameById = new Map(games.map((game) => [game.id, game]));
   filterPanel.setSteamTagSuggestions(collectSteamTagSuggestions(games));
   updateCollectionSuggestions();
 };
@@ -823,7 +792,7 @@ const buildCollectionSuggestionList = (): string[] => {
   };
 
   registerSuggestion(HIDDEN_GAMES_COLLECTION_NAME);
-  for (const collection of allCollections) {
+  for (const collection of store.allCollections) {
     registerSuggestion(collection.name);
   }
 
@@ -840,7 +809,7 @@ const setAllCollections = (collections: CollectionResponse[]): void => {
   const sortedCollections = [...collections].sort((left, right) =>
     left.name.localeCompare(right.name, undefined, { sensitivity: "base" })
   );
-  allCollections = sortedCollections;
+  store.allCollections = sortedCollections;
   updateCollectionSuggestions();
 };
 
@@ -872,17 +841,17 @@ const getGamesForLibraryViewMode = (
 };
 
 const countHiddenGames = (): number => {
-  return allGames.filter((game) => game.hideInLibrary === true).length;
+  return store.allGames.filter((game) => game.hideInLibrary === true).length;
 };
 
 const countVisibleFavoriteGames = (): number => {
-  return allGames.filter((game) => game.favorite && game.hideInLibrary !== true).length;
+  return store.allGames.filter((game) => game.favorite && game.hideInLibrary !== true).length;
 };
 
 const buildVisibleCollectionGameCounts = (): Map<string, number> => {
   const countsByCollection = new Map<string, number>();
 
-  for (const game of allGames) {
+  for (const game of store.allGames) {
     if (game.hideInLibrary === true) {
       continue;
     }
@@ -963,13 +932,13 @@ const buildCollectionSectionsForGames = (
 };
 
 const upsertCollectionInState = (collection: CollectionResponse): void => {
-  const existingIndex = allCollections.findIndex((existingCollection) => existingCollection.id === collection.id);
+  const existingIndex = store.allCollections.findIndex((existingCollection) => existingCollection.id === collection.id);
   if (existingIndex < 0) {
-    setAllCollections([...allCollections, collection]);
+    setAllCollections([...store.allCollections, collection]);
     return;
   }
 
-  const nextCollections = [...allCollections];
+  const nextCollections = [...store.allCollections];
   nextCollections[existingIndex] = {
     ...nextCollections[existingIndex],
     ...collection,
@@ -978,7 +947,7 @@ const upsertCollectionInState = (collection: CollectionResponse): void => {
 };
 
 const removeCollectionFromState = (collectionId: string): void => {
-  setAllCollections(allCollections.filter((collection) => collection.id !== collectionId));
+  setAllCollections(store.allCollections.filter((collection) => collection.id !== collectionId));
 };
 
 const updateCollectionNameInGames = (previousName: string, nextName: string | null): void => {
@@ -990,7 +959,7 @@ const updateCollectionNameInGames = (previousName: string, nextName: string | nu
   const normalizedNextName = nextName === null ? "" : normalizeCollectionNameForMatch(nextName);
   const nextCollectionName = nextName?.trim() ?? "";
   let stateChanged = false;
-  const nextGames = allGames.map((game) => {
+  const nextGames = store.allGames.map((game) => {
     if (!game.collections || game.collections.length === 0) {
       return game;
     }
@@ -1042,8 +1011,8 @@ const updateCollectionNameInGames = (previousName: string, nextName: string | nu
     return;
   }
 
-  allGames = nextGames;
-  gameById = new Map(nextGames.map((game) => [game.id, game]));
+  store.allGames = nextGames;
+  store.gameById = new Map(nextGames.map((game) => [game.id, game]));
 };
 
 const resolveGameFromCard = (card: HTMLElement): GameResponse | null => {
@@ -1052,64 +1021,64 @@ const resolveGameFromCard = (card: HTMLElement): GameResponse | null => {
     return null;
   }
 
-  return gameById.get(gameId) ?? null;
+  return store.gameById.get(gameId) ?? null;
 };
 
 const updateGameInState = (
   gameId: string,
   update: (game: GameResponse) => GameResponse
 ): GameResponse | null => {
-  const gameIndex = allGames.findIndex((game) => game.id === gameId);
+  const gameIndex = store.allGames.findIndex((game) => game.id === gameId);
   if (gameIndex < 0) {
     return null;
   }
 
-  const updatedGame = update(allGames[gameIndex]);
-  allGames[gameIndex] = updatedGame;
-  gameById.set(updatedGame.id, updatedGame);
+  const updatedGame = update(store.allGames[gameIndex]);
+  store.allGames[gameIndex] = updatedGame;
+  store.gameById.set(updatedGame.id, updatedGame);
   return updatedGame;
 };
 
 const renderGameLibrary = (): void => {
-  closeGameContextMenu?.();
+  store.closeGameContextMenu?.();
   const collectionGridCleanupTarget = libraryGridElement as HTMLElement & {
     __collectionGridCleanup?: () => void;
   };
   collectionGridCleanupTarget.__collectionGridCleanup?.();
   collectionGridCleanupTarget.__collectionGridCleanup = undefined;
   const filters = filterPanel.getFilters();
-  const viewScopedGames = getGamesForLibraryViewMode(allGames, activeLibraryViewMode);
+  const viewScopedGames = getGamesForLibraryViewMode(store.allGames, store.activeLibraryViewMode);
   const showOnlyHiddenGames = isHiddenGamesCollectionFilter(filters.collection);
   const eligibleGameCount = viewScopedGames.filter((game) =>
     showOnlyHiddenGames ? game.hideInLibrary === true : game.hideInLibrary !== true
   ).length;
   const filteredGames = applyLibraryFilters(viewScopedGames, filters);
-  const emptyMessage = allGames.length === 0
+  const emptyMessage = store.allGames.length === 0
     ? "No games synced yet."
     : showOnlyHiddenGames
-      ? activeLibraryViewMode === "installed"
+      ? store.activeLibraryViewMode === "installed"
         ? "No hidden installed games."
-        : activeLibraryViewMode === "favorites"
+          : store.activeLibraryViewMode === "favorites"
           ? "No hidden favorite games."
           : "No hidden games."
       : eligibleGameCount === 0
-        ? activeLibraryViewMode === "installed"
+        ? store.activeLibraryViewMode === "installed"
           ? viewScopedGames.length === 0
             ? "No installed games yet."
             : "All installed games are hidden. Select \"Hidden Games\" in the Collection filter to view them."
-          : activeLibraryViewMode === "favorites"
+          : store.activeLibraryViewMode === "favorites"
             ? viewScopedGames.length === 0
               ? "No favorite games yet."
               : "All favorite games are hidden. Select \"Hidden Games\" in the Collection filter to view them."
             : "All games are hidden. Select \"Hidden Games\" in the Collection filter to view them."
-        : activeLibraryViewMode === "installed"
+        : store.activeLibraryViewMode === "installed"
           ? "No installed games match your current filters."
-          : activeLibraryViewMode === "favorites"
+          : store.activeLibraryViewMode === "favorites"
             ? "No favorite games match your current filters."
             : "No games match your current filters.";
-  const canRenderCollectionSections = allCollections.length > 0 && filters.collection.trim().length === 0;
+  const canRenderCollectionSections = store.allCollections.length > 0 && filters.collection.trim().length === 0;
   const sections = canRenderCollectionSections
-    ? buildCollectionSectionsForGames(filteredGames, allCollections)
+    ? buildCollectionSectionsForGames(filteredGames, store.allCollections)
     : undefined;
 
   renderGameGrid({
@@ -1118,12 +1087,12 @@ const renderGameLibrary = (): void => {
     emptyMessage,
     sections,
   });
-  if (activeLibraryViewMode === "installed") {
+  if (store.activeLibraryViewMode === "installed") {
     setLibrarySummary(`${filteredGames.length} of ${eligibleGameCount} installed games shown.`);
     return;
   }
 
-  if (activeLibraryViewMode === "favorites") {
+  if (store.activeLibraryViewMode === "favorites") {
     setLibrarySummary(`${filteredGames.length} of ${eligibleGameCount} favorite games shown.`);
     return;
   }
@@ -1157,7 +1126,7 @@ const syncCollectionStateForGame = async (game: GameResponse): Promise<void> => 
       .map((collection) => collection.name),
   }));
 
-  if (isCollectionLibraryViewMode(activeLibraryViewMode)) {
+  if (isCollectionLibraryViewMode(store.activeLibraryViewMode)) {
     renderCollectionLibrary();
   } else {
     renderGameLibrary();
@@ -1259,11 +1228,11 @@ const deleteCollectionFromGrid = async (collection: CollectionGridItem): Promise
 };
 
 const renderCollectionLibrary = (): void => {
-  closeGameContextMenu?.();
+  store.closeGameContextMenu?.();
   const favoritesCount = countVisibleFavoriteGames();
   const hiddenCount = countHiddenGames();
   const visibleCollectionCounts = buildVisibleCollectionGameCounts();
-  const collectionItems: CollectionGridItem[] = allCollections.map((collection) => ({
+  const collectionItems: CollectionGridItem[] = store.allCollections.map((collection) => ({
     ...collection,
     gameCount: visibleCollectionCounts.get(normalizeCollectionNameForMatch(collection.name)) ?? 0,
   }));
@@ -1308,12 +1277,12 @@ const renderCollectionLibrary = (): void => {
     },
   });
 
-  const collectionCount = allCollections.length + (hiddenCount > 0 ? 1 : 0);
+  const collectionCount = store.allCollections.length + (hiddenCount > 0 ? 1 : 0);
   setLibrarySummary(`${collectionCount} collection${collectionCount === 1 ? "" : "s"}.`);
 };
 
 const renderActiveLibraryView = (): void => {
-  if (isCollectionLibraryViewMode(activeLibraryViewMode)) {
+  if (isCollectionLibraryViewMode(store.activeLibraryViewMode)) {
     renderCollectionLibrary();
     return;
   }
@@ -1329,7 +1298,7 @@ if (libraryViewOptionButtons.length === 0) {
 }
 
 const setLibraryViewMode = (viewMode: LibraryViewMode, render = true): void => {
-  activeLibraryViewMode = viewMode;
+  store.activeLibraryViewMode = viewMode;
 
   for (const optionButton of libraryViewOptionButtons) {
     const optionViewMode = optionButton.dataset.libraryView;
@@ -1355,7 +1324,7 @@ const setLibraryViewModeFromOptionButton = (optionButton: HTMLButtonElement): vo
 };
 
 const filterPanel = createFilterPanel(filterPanelElement, () => {
-  if (isGameLibraryViewMode(activeLibraryViewMode)) {
+  if (isGameLibraryViewMode(store.activeLibraryViewMode)) {
     renderGameLibrary();
   }
 });
@@ -1540,7 +1509,7 @@ const markCompletedDownloadsAsInstalled = (downloads: SteamDownloadProgressPaylo
     }));
 
     if (!updatedGame) {
-      const fallbackGame = allGames.find((game) =>
+      const fallbackGame = store.allGames.find((game) =>
         game.provider === download.provider
         && game.externalId === download.externalId
       );
@@ -1563,29 +1532,29 @@ const markCompletedDownloadsAsInstalled = (downloads: SteamDownloadProgressPaylo
 };
 
 const scheduleLibraryRefreshAfterDownloadCompletion = (): void => {
-  if (downloadCompletionRefreshTimer !== null) {
+  if (store.downloadCompletionRefreshTimer !== null) {
     return;
   }
 
   const attemptRefresh = (): void => {
-    if (isLoadingLibrary || document.visibilityState !== "visible" || !document.hasFocus()) {
-      downloadCompletionRefreshTimer = window.setTimeout(attemptRefresh, 1200);
+    if (store.isLoadingLibrary || document.visibilityState !== "visible" || !document.hasFocus()) {
+      store.downloadCompletionRefreshTimer = window.setTimeout(attemptRefresh, 1200);
       return;
     }
 
-    downloadCompletionRefreshTimer = null;
+    store.downloadCompletionRefreshTimer = null;
     void refreshLibrary(true);
   };
 
-  downloadCompletionRefreshTimer = window.setTimeout(attemptRefresh, 0);
+  store.downloadCompletionRefreshTimer = window.setTimeout(attemptRefresh, 0);
 };
 
 const refreshSteamDownloads = async (): Promise<void> => {
-  if (!steamLinked || isDownloadPollInFlight) {
+  if (!store.steamLinked || store.isDownloadPollInFlight) {
     return;
   }
 
-  isDownloadPollInFlight = true;
+  store.isDownloadPollInFlight = true;
   try {
     const latestDownloads = await listSteamDownloadsForSession();
     const latestDownloadsByKey = new Map<string, SteamDownloadProgressPayload>();
@@ -1594,7 +1563,7 @@ const refreshSteamDownloads = async (): Promise<void> => {
     }
 
     const completedDownloads: SteamDownloadProgressPayload[] = [];
-    for (const [previousKey, previousDownload] of previousActiveDownloadsByKey) {
+    for (const [previousKey, previousDownload] of store.previousActiveDownloadsByKey) {
       if (latestDownloadsByKey.has(previousKey)) {
         continue;
       }
@@ -1603,31 +1572,31 @@ const refreshSteamDownloads = async (): Promise<void> => {
       }
     }
 
-    activeDownloads = latestDownloads;
-    previousActiveDownloadsByKey = latestDownloadsByKey;
-    updateDownloadEtaSnapshots(activeDownloads);
+    store.activeDownloads = latestDownloads;
+    store.previousActiveDownloadsByKey = latestDownloadsByKey;
+    updateDownloadEtaSnapshots(store.activeDownloads);
     if (completedDownloads.length > 0) {
       markCompletedDownloadsAsInstalled(completedDownloads);
       scheduleLibraryRefreshAfterDownloadCompletion();
     }
   } finally {
-    isDownloadPollInFlight = false;
+    store.isDownloadPollInFlight = false;
     renderDownloadActivity();
   }
 };
 
 const stopDownloadPolling = (): void => {
-  if (downloadPollTimer !== null) {
-    window.clearInterval(downloadPollTimer);
-    downloadPollTimer = null;
+  if (store.downloadPollTimer !== null) {
+    window.clearInterval(store.downloadPollTimer);
+    store.downloadPollTimer = null;
   }
-  isDownloadPollInFlight = false;
+  store.isDownloadPollInFlight = false;
 };
 
 const startDownloadPolling = (): void => {
   stopDownloadPolling();
   void refreshSteamDownloads();
-  downloadPollTimer = window.setInterval(() => {
+  store.downloadPollTimer = window.setInterval(() => {
     void refreshSteamDownloads();
   }, DOWNLOAD_POLL_INTERVAL_MS);
 };
@@ -1773,7 +1742,7 @@ const gameContextMenu = createGameContextMenu({
         externalId: game.externalId,
       });
       await syncCollectionStateForGame(game);
-      const targetCollectionName = allCollections.find((collection) => collection.id === collectionId)?.name;
+      const targetCollectionName = store.allCollections.find((collection) => collection.id === collectionId)?.name;
       if (targetCollectionName) {
         showLauncherToast(`Added "${game.name}" to "${targetCollectionName}".`);
       } else {
@@ -1948,7 +1917,7 @@ const gameContextMenu = createGameContextMenu({
   },
   resolveGameFromCard,
 });
-closeGameContextMenu = gameContextMenu.closeMenu;
+store.closeGameContextMenu = gameContextMenu.closeMenu;
 
 sessionAccountButton.addEventListener("click", () => {
   if (sessionAccountMenuElement.hidden) {
@@ -2096,14 +2065,14 @@ sessionAccountSignOutButton.addEventListener("click", () => {
 });
 
 const refreshLibrary = async (syncBeforeLoad = false, importSteamCollections = false): Promise<void> => {
-  if (isLoadingLibrary) {
+  if (store.isLoadingLibrary) {
     return;
   }
 
   try {
     setLibraryLoadingState(true);
 
-    if (syncBeforeLoad && steamLinked) {
+    if (syncBeforeLoad && store.steamLinked) {
       try {
         await ipcService.syncSteamLibrary();
       } catch (error) {
@@ -2132,7 +2101,7 @@ const refreshLibrary = async (syncBeforeLoad = false, importSteamCollections = f
   } catch (error) {
     setAllGames([]);
     setAllCollections([]);
-    if (activeLibraryViewMode === "collections") {
+    if (store.activeLibraryViewMode === "collections") {
       renderCollectionLibrary();
       setLibrarySummary("Could not load your collections.");
     } else {

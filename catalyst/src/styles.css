@@ -2408,7 +2408,7 @@ button:disabled {
 
 .game-properties-controller-status-table {
   border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.04);
+  background: #080808;
   border-radius: 4px;
   padding: 0.48rem 0.72rem;
   display: grid;
