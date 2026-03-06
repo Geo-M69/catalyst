@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
 import { type CollectionGridItem, renderCollectionGrid } from "./components/collectionGrid";
 import { createConfirmationDialog } from "./components/confirmationDialog";
 import { createFilterPanel } from "./components/filterPanel";
@@ -12,16 +11,22 @@ import {
   type GameBetaAccessCodeValidationResult,
   type GamePropertiesPersistedSettings,
   type GamePrivacySettings,
-  type GameVersionBetaOption,
 } from "./components/gamePropertiesPanel";
 import { applyLibraryFilters } from "./filtering";
 import {
   HIDDEN_GAMES_COLLECTION_NAME,
   type CollectionResponse,
   type GameResponse,
-  type LibraryResponse,
-  type PublicUser,
 } from "./types";
+import { ipcService } from "../shared/ipc/client";
+import type {
+  GameCustomizationArtworkPayload,
+  GameInstallLocationPayload,
+  GameInstallationDetailsPayload,
+  GamePrivacySettingsPayload,
+  GameVersionBetasPayload,
+  SteamDownloadProgressPayload,
+} from "../shared/ipc/contracts";
 
 export {};
 
@@ -160,53 +165,11 @@ const collectSteamTagSuggestions = (games: GameResponse[]): string[] => {
   );
 };
 
-interface GameVersionBetasPayload {
-  options: GameVersionBetaOption[];
-  warning?: string;
-}
-
-interface GamePrivacySettingsPayload {
-  hideInLibrary: boolean;
-  markAsPrivate: boolean;
-  overlayDataDeleted: boolean;
-}
-
-interface GameInstallationDetailsPayload {
-  installPath?: string;
-  sizeOnDiskBytes?: number;
-}
-
-interface GameCustomizationArtworkPayload {
-  cover?: string;
-  background?: string;
-  logo?: string;
-  wideCover?: string;
-}
-
-interface GameInstallLocationPayload {
-  path: string;
-  freeSpaceBytes?: number;
-}
-
-interface SteamDownloadProgressPayload {
-  gameId: string;
-  provider: string;
-  externalId: string;
-  name: string;
-  state: string;
-  bytesDownloaded?: number;
-  bytesTotal?: number;
-  progressPercent?: number;
-  progressSource?: string;
-}
-
 interface DownloadEtaSnapshot {
   lastBytesDownloaded: number;
   lastSampleAtMs: number;
   smoothedBytesPerSecond: number;
 }
-
-type GameInstallSizeEstimatePayload = number | null;
 
 const closeSessionAccountMenu = (): void => {
   sessionAccountMenuElement.hidden = true;
@@ -1185,14 +1148,14 @@ const collectionNameDialog = createCollectionNameDialog();
 const confirmationDialog = createConfirmationDialog();
 
 const listCollectionsForGame = async (game: GameResponse): Promise<CollectionResponse[]> => {
-  return invoke<CollectionResponse[]>("list_collections", {
+  return ipcService.listCollections({
     provider: game.provider,
     externalId: game.externalId,
   });
 };
 
 const listCollectionsForUser = async (): Promise<CollectionResponse[]> => {
-  return invoke<CollectionResponse[]>("list_collections");
+  return ipcService.listCollections();
 };
 
 const syncCollectionStateForGame = async (game: GameResponse): Promise<void> => {
@@ -1224,7 +1187,7 @@ const createCollectionFromGrid = async (): Promise<void> => {
   }
 
   try {
-    const createdCollection = await invoke<CollectionResponse>("create_collection", {
+    const createdCollection = await ipcService.createCollection({
       name: collectionName,
     });
     upsertCollectionInState(createdCollection);
@@ -1250,7 +1213,7 @@ const renameCollectionFromGrid = async (collection: CollectionGridItem): Promise
   }
 
   try {
-    const updatedCollection = await invoke<CollectionResponse>("rename_collection", {
+    const updatedCollection = await ipcService.renameCollection({
       collectionId: collection.id,
       name: renamedCollectionName,
     });
@@ -1282,7 +1245,7 @@ const deleteCollectionFromGrid = async (collection: CollectionGridItem): Promise
   }
 
   try {
-    await invoke("delete_collection", {
+    await ipcService.deleteCollection({
       collectionId: collection.id,
     });
     removeCollectionFromState(collection.id);
@@ -1404,7 +1367,7 @@ const filterPanel = createFilterPanel(filterPanelElement, () => {
 
 const listGameLanguagesForGame = async (game: GameResponse): Promise<string[]> => {
   try {
-    return await invoke<string[]>("list_game_languages", {
+    return await ipcService.listGameLanguages({
       provider: game.provider,
       externalId: game.externalId,
     });
@@ -1417,7 +1380,7 @@ const listGameCompatibilityToolsForGame = async (
   game: GameResponse
 ): Promise<GameCompatibilityToolOption[]> => {
   try {
-    return await invoke<GameCompatibilityToolOption[]>("list_game_compatibility_tools", {
+    return await ipcService.listGameCompatibilityTools({
       provider: game.provider,
       externalId: game.externalId,
     });
@@ -1428,7 +1391,7 @@ const listGameCompatibilityToolsForGame = async (
 
 const listGameVersionBetasForGame = async (game: GameResponse): Promise<GameVersionBetasPayload> => {
   try {
-    return await invoke<GameVersionBetasPayload>("list_game_versions_betas", {
+    return await ipcService.listGameVersionBetas({
       provider: game.provider,
       externalId: game.externalId,
     });
@@ -1445,7 +1408,7 @@ const validateGameBetaAccessCodeForGame = async (
   accessCode: string
 ): Promise<GameBetaAccessCodeValidationResult> => {
   try {
-    return await invoke<GameBetaAccessCodeValidationResult>("validate_game_beta_access_code", {
+    return await ipcService.validateGameBetaAccessCode({
       provider: game.provider,
       externalId: game.externalId,
       accessCode,
@@ -1460,7 +1423,7 @@ const validateGameBetaAccessCodeForGame = async (
 
 const getGamePrivacySettingsForGame = async (game: GameResponse): Promise<GamePrivacySettingsPayload | null> => {
   try {
-    return await invoke<GamePrivacySettingsPayload>("get_game_privacy_settings", {
+    return await ipcService.getGamePrivacySettings({
       provider: game.provider,
       externalId: game.externalId,
     });
@@ -1473,7 +1436,7 @@ const setGamePrivacySettingsForGame = async (
   game: GameResponse,
   settings: Pick<GamePrivacySettings, "hideInLibrary" | "markAsPrivate">
 ): Promise<void> => {
-  await invoke("set_game_privacy_settings", {
+  await ipcService.setGamePrivacySettings({
     provider: game.provider,
     externalId: game.externalId,
     hideInLibrary: settings.hideInLibrary,
@@ -1493,7 +1456,7 @@ const updateGamePrivacySettingsForGame = async (
 };
 
 const clearGameOverlayDataForGame = async (game: GameResponse): Promise<void> => {
-  await invoke("clear_game_overlay_data", {
+  await ipcService.clearGameOverlayData({
     provider: game.provider,
     externalId: game.externalId,
   });
@@ -1501,7 +1464,7 @@ const clearGameOverlayDataForGame = async (game: GameResponse): Promise<void> =>
 
 const getGameInstallationDetailsForGame = async (game: GameResponse): Promise<GameInstallationDetailsPayload | null> => {
   try {
-    return await invoke<GameInstallationDetailsPayload>("get_game_installation_details", {
+    return await ipcService.getGameInstallationDetails({
       provider: game.provider,
       externalId: game.externalId,
     });
@@ -1514,7 +1477,7 @@ const getGameCustomizationArtworkForGame = async (
   game: GameResponse
 ): Promise<GameCustomizationArtworkPayload | null> => {
   try {
-    return await invoke<GameCustomizationArtworkPayload>("get_game_customization_artwork", {
+    return await ipcService.getGameCustomizationArtwork({
       provider: game.provider,
       externalId: game.externalId,
     });
@@ -1525,7 +1488,7 @@ const getGameCustomizationArtworkForGame = async (
 
 const listGameInstallLocationsForGame = async (game: GameResponse): Promise<GameInstallLocationPayload[]> => {
   try {
-    return await invoke<GameInstallLocationPayload[]>("list_game_install_locations", {
+    return await ipcService.listGameInstallLocations({
       provider: game.provider,
       externalId: game.externalId,
     });
@@ -1536,7 +1499,7 @@ const listGameInstallLocationsForGame = async (game: GameResponse): Promise<Game
 
 const getGameInstallSizeEstimateForGame = async (game: GameResponse): Promise<number | null> => {
   try {
-    return await invoke<GameInstallSizeEstimatePayload>("get_game_install_size_estimate", {
+    return await ipcService.getGameInstallSizeEstimate({
       provider: game.provider,
       externalId: game.externalId,
     });
@@ -1547,7 +1510,7 @@ const getGameInstallSizeEstimateForGame = async (game: GameResponse): Promise<nu
 
 const listSteamDownloadsForSession = async (): Promise<SteamDownloadProgressPayload[]> => {
   try {
-    return await invoke<SteamDownloadProgressPayload[]>("list_steam_downloads");
+    return await ipcService.listSteamDownloads();
   } catch (error) {
     console.error("Could not load Steam downloads.", error);
     return [];
@@ -1678,7 +1641,7 @@ const getGamePropertiesSettingsForGame = async (
   game: GameResponse
 ): Promise<GamePropertiesPersistedSettings | null> => {
   try {
-    return await invoke<GamePropertiesPersistedSettings>("get_game_properties_settings", {
+    return await ipcService.getGamePropertiesSettings({
       provider: game.provider,
       externalId: game.externalId,
     });
@@ -1691,7 +1654,7 @@ const setGamePropertiesSettingsForGame = async (
   game: GameResponse,
   settings: GamePropertiesPersistedSettings
 ): Promise<void> => {
-  await invoke("set_game_properties_settings", {
+  await ipcService.setGamePropertiesSettings({
     provider: game.provider,
     externalId: game.externalId,
     settings,
@@ -1699,42 +1662,42 @@ const setGamePropertiesSettingsForGame = async (
 };
 
 const browseGameInstalledFilesForGame = async (game: GameResponse): Promise<void> => {
-  await invoke("browse_game_installed_files", {
+  await ipcService.browseGameInstalledFiles({
     provider: game.provider,
     externalId: game.externalId,
   });
 };
 
 const backupGameFilesForGame = async (game: GameResponse): Promise<void> => {
-  await invoke("backup_game_files", {
+  await ipcService.backupGameFiles({
     provider: game.provider,
     externalId: game.externalId,
   });
 };
 
 const verifyGameFilesForGame = async (game: GameResponse): Promise<void> => {
-  await invoke("verify_game_files", {
+  await ipcService.verifyGameFiles({
     provider: game.provider,
     externalId: game.externalId,
   });
 };
 
 const addGameDesktopShortcutForGame = async (game: GameResponse): Promise<void> => {
-  await invoke("add_game_desktop_shortcut", {
+  await ipcService.addGameDesktopShortcut({
     provider: game.provider,
     externalId: game.externalId,
   });
 };
 
 const openGameRecordingSettingsForGame = async (game: GameResponse): Promise<void> => {
-  await invoke("open_game_recording_settings", {
+  await ipcService.openGameRecordingSettings({
     provider: game.provider,
     externalId: game.externalId,
   });
 };
 
 const uninstallGameForGame = async (game: GameResponse): Promise<void> => {
-  await invoke("uninstall_game", {
+  await ipcService.uninstallGame({
     provider: game.provider,
     externalId: game.externalId,
   });
@@ -1809,7 +1772,7 @@ const openGameProperties = async (game: GameResponse): Promise<void> => {
 const gameContextMenu = createGameContextMenu({
   actions: {
     addGameToCollection: async (game, collectionId) => {
-      await invoke("add_game_to_collection", {
+      await ipcService.addGameToCollection({
         collectionId,
         provider: game.provider,
         externalId: game.externalId,
@@ -1824,8 +1787,8 @@ const gameContextMenu = createGameContextMenu({
       void refreshLibrary(false);
     },
     createCollectionAndAdd: async (game, name) => {
-      const createdCollection = await invoke<CollectionResponse>("create_collection", { name });
-      await invoke("add_game_to_collection", {
+      const createdCollection = await ipcService.createCollection({ name });
+      await ipcService.addGameToCollection({
         collectionId: createdCollection.id,
         provider: game.provider,
         externalId: game.externalId,
@@ -1899,7 +1862,7 @@ const gameContextMenu = createGameContextMenu({
         return;
       }
 
-      await invoke("install_game", {
+      await ipcService.installGame({
         provider: game.provider,
         externalId: game.externalId,
         installPath: installRequest.installPath,
@@ -1921,13 +1884,13 @@ const gameContextMenu = createGameContextMenu({
       await openGameProperties(game);
     },
     playGame: async (game) => {
-      await invoke("play_game", {
+      await ipcService.playGame({
         provider: game.provider,
         externalId: game.externalId,
       });
     },
     setFavorite: async (game, favorite) => {
-      await invoke("set_game_favorite", {
+      await ipcService.setGameFavorite({
         favorite,
         provider: game.provider,
         externalId: game.externalId,
@@ -2128,7 +2091,7 @@ sessionAccountSignOutButton.addEventListener("click", () => {
   closeSessionAccountMenu();
   void (async () => {
     try {
-      await invoke("logout");
+      await ipcService.logout();
       window.location.replace("/index.html");
     } catch (error) {
       console.error(toErrorMessage(error, "Could not sign out."));
@@ -2146,14 +2109,14 @@ const refreshLibrary = async (syncBeforeLoad = false, importSteamCollections = f
 
     if (syncBeforeLoad && steamLinked) {
       try {
-        await invoke("sync_steam_library");
+        await ipcService.syncSteamLibrary();
       } catch (error) {
         console.error(toErrorMessage(error, "Steam sync failed. Loading cached library."));
       }
 
       if (importSteamCollections) {
         try {
-          await invoke("import_steam_collections");
+          await ipcService.importSteamCollections();
         } catch (error) {
           console.error(toErrorMessage(error, "Steam collection import failed."));
         }
@@ -2161,7 +2124,7 @@ const refreshLibrary = async (syncBeforeLoad = false, importSteamCollections = f
     }
 
     const [library, collections] = await Promise.all([
-      invoke<LibraryResponse>("get_library"),
+      ipcService.getLibrary(),
       listCollectionsForUser().catch(() => []),
     ]);
     setAllGames(library.games);
@@ -2191,7 +2154,7 @@ const refreshLibrary = async (syncBeforeLoad = false, importSteamCollections = f
 
 const refreshSession = async (): Promise<boolean> => {
   try {
-    const session = await invoke<PublicUser | null>("get_session");
+    const session = await ipcService.getSession();
     if (!session) {
       window.location.replace("/index.html");
       return false;

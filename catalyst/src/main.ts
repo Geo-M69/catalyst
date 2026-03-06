@@ -1,18 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
+import { ipcService } from "./shared/ipc/client";
 
 export {};
-
-interface PublicUser {
-  id: string;
-  email: string;
-  steamLinked: boolean;
-  steamId?: string;
-}
-
-interface SteamAuthResponse {
-  user: PublicUser;
-  syncedGames: number;
-}
 
 const SPLASH_DURATION_MS = 3000;
 const TITLE_FADE_OUT_MS = 450;
@@ -80,7 +68,7 @@ const toErrorMessage = (error: unknown, fallbackMessage: string): string => {
 
 const refreshSession = async (): Promise<boolean> => {
   try {
-    const user = await invoke<PublicUser | null>("get_session");
+    const user = await ipcService.getSession();
 
     if (!user) {
       setStatusMessage("Not logged in. Click below to sign in with Steam.");
@@ -101,7 +89,7 @@ const startSteamLogin = async (): Promise<void> => {
   try {
     setPendingState(true);
 
-    const result = await invoke<SteamAuthResponse>("start_steam_auth");
+    const result = await ipcService.startSteamAuth();
     const steamId = result.user.steamId ?? "unknown";
     window.history.replaceState(
       {},
