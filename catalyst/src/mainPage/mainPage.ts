@@ -1514,17 +1514,13 @@ const scheduleLibraryRefreshAfterDownloadCompletion = (): void => {
     return;
   }
 
-  const attemptRefresh = (): void => {
-    if (store.isLoadingLibrary || document.visibilityState !== "visible" || !document.hasFocus()) {
-      store.downloadCompletionRefreshTimer = window.setTimeout(attemptRefresh, 1200);
-      return;
-    }
-
+  // Trigger a refresh immediately (don't gate on visibility/focus) so that
+  // completed downloads are reflected in the UI without requiring a manual
+  // library sync. `refreshLibrary` already guards against concurrent loads.
+  store.downloadCompletionRefreshTimer = window.setTimeout(() => {
     store.downloadCompletionRefreshTimer = null;
     void refreshLibrary(true);
-  };
-
-  store.downloadCompletionRefreshTimer = window.setTimeout(attemptRefresh, 0);
+  }, 0);
 };
 
 const refreshSteamDownloads = async (): Promise<void> => {

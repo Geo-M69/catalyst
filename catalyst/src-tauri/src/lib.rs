@@ -154,6 +154,7 @@ struct GameResponse {
     last_synced_at: String,
     favorite: bool,
     steam_tags: Vec<String>,
+    genres: Vec<String>,
     collections: Vec<String>,
     hide_in_library: bool,
 }
@@ -2358,6 +2359,50 @@ fn normalize_steam_store_tags(raw_tags: &[String]) -> Vec<String> {
     normalized_tags
 }
 
+fn map_steam_tags_to_genres(tags: &[String]) -> Vec<String> {
+    use std::collections::HashSet;
+    let mut genres: HashSet<String> = HashSet::new();
+
+    for tag in tags {
+        let key = tag.to_ascii_lowercase();
+
+        if key.contains("action") {
+            genres.insert(String::from("action"));
+        }
+        if key.contains("adventure") {
+            genres.insert(String::from("adventure"));
+        }
+        if key.contains("casual") {
+            genres.insert(String::from("casual"));
+        }
+        if key.contains("indie") {
+            genres.insert(String::from("indie"));
+        }
+        if key.contains("massively multiplayer") || key.contains("mmorpg") || key == "mmo" {
+            genres.insert(String::from("massively-multiplayer"));
+        }
+        if key.contains("racing") {
+            genres.insert(String::from("racing"));
+        }
+        if key.contains("rpg") || key.contains("role-playing") {
+            genres.insert(String::from("rpg"));
+        }
+        if key.contains("simulation") || key.contains("simulator") {
+            genres.insert(String::from("simulation"));
+        }
+        if key.contains("sports") {
+            genres.insert(String::from("sports"));
+        }
+        if key.contains("strategy") || key.contains("tactics") || key.contains("turn-based") || key.contains("real time strategy") || key.contains("real-time strategy") {
+            genres.insert(String::from("strategy"));
+        }
+    }
+
+    let mut result: Vec<String> = genres.into_iter().collect();
+    result.sort();
+    result
+}
+
 fn fetch_steam_supported_languages(
     connection: &Connection,
     client: &Client,
@@ -3482,6 +3527,44 @@ fn replace_provider_games(
                 game.last_synced_at
             ])
             .map_err(|error| format!("Failed to persist synced game: {error}"))?;
+        // Persist derived genres for this game from cached Steam store tags (if any).
+        // Delete existing genre rows for freshness, then insert new ones.
+        let mut delete_stmt = connection
+            .prepare(
+                "DELETE FROM game_genres WHERE user_id = ?1 AND provider = ?2 AND external_id = ?3",
+            )
+            .map_err(|error| format!("Failed to prepare genre delete statement: {error}"))?;
+        delete_stmt
+            .execute(params![user_id, provider, game.external_id])
+            .map_err(|error| format!("Failed to delete old genres: {error}"))?;
+
+        // Look up cached Steam tags (if provider is steam) and map to genres.
+        if provider.eq_ignore_ascii_case("steam") {
+            let mut tags_stmt = connection
+                .prepare("SELECT tags_json FROM steam_app_store_tags WHERE app_id = ?1")
+                .map_err(|error| format!("Failed to prepare steam tags lookup: {error}"))?;
+            let tag_row = tags_stmt
+                .query_row(params![game.external_id], |row| row.get::<_, String>(0))
+                .optional()
+                .map_err(|error| format!("Failed to query steam tags: {error}"))?;
+            if let Some(tags_json) = tag_row {
+                let parsed_tags = serde_json::from_str::<Vec<String>>(&tags_json).unwrap_or_default();
+                let normalized_tags = normalize_steam_store_tags(&parsed_tags);
+                let mapped_genres = map_steam_tags_to_genres(&normalized_tags);
+                if !mapped_genres.is_empty() {
+                    let mut insert_genre = connection
+                        .prepare(
+                            "INSERT INTO game_genres (user_id, provider, external_id, genre) VALUES (?1, ?2, ?3, ?4)",
+                        )
+                        .map_err(|error| format!("Failed to prepare genre insert statement: {error}"))?;
+                    for genre in mapped_genres {
+                        insert_genre
+                            .execute(params![user_id, provider, game.external_id, genre])
+                            .map_err(|error| format!("Failed to persist genre: {error}"))?;
+                    }
+                }
+            }
+        }
     }
 
     Ok(())
@@ -3490,6 +3573,7 @@ fn replace_provider_games(
 fn list_games_by_user(connection: &Connection, user_id: &str) -> Result<Vec<GameResponse>, String> {
     let collections_by_game = load_collection_names_by_game(connection, user_id)?;
     let steam_tags_by_game = load_steam_tags_by_game(connection, user_id)?;
+    let game_genres_by_game = load_game_genres_by_game(connection, user_id)?;
     let mut statement = connection
         .prepare(
             "
@@ -3528,7 +3612,6 @@ fn list_games_by_user(connection: &Connection, user_id: &str) -> Result<Vec<Game
             let installed_raw: i64 = row.get(5)?;
             let favorite_raw: i64 = row.get(8)?;
             let hide_in_library_raw: i64 = row.get(9)?;
-            let game_key = game_membership_key(&provider, &external_id);
             let steam_tags = if provider.eq_ignore_ascii_case("steam") {
                 steam_tags_by_game
                     .get(&external_id)
@@ -3537,6 +3620,11 @@ fn list_games_by_user(connection: &Connection, user_id: &str) -> Result<Vec<Game
             } else {
                 Vec::new()
             };
+            let game_key = game_membership_key(&provider, &external_id);
+            let genres = game_genres_by_game
+                .get(&game_key)
+                .cloned()
+                .unwrap_or_else(|| map_steam_tags_to_genres(&steam_tags));
             let collections = collections_by_game
                 .get(&game_key)
                 .cloned()
@@ -3553,6 +3641,7 @@ fn list_games_by_user(connection: &Connection, user_id: &str) -> Result<Vec<Game
                 last_synced_at: row.get(7)?,
                 favorite: favorite_raw > 0,
                 steam_tags,
+                genres,
                 collections,
                 hide_in_library: hide_in_library_raw > 0,
             })
@@ -3674,6 +3763,42 @@ fn load_steam_tags_by_game(
     }
 
     Ok(steam_tags_by_game)
+}
+
+fn load_game_genres_by_game(
+    connection: &Connection,
+    user_id: &str,
+) -> Result<HashMap<String, Vec<String>>, String> {
+    let mut statement = connection
+        .prepare(
+            "
+            SELECT
+              provider,
+              external_id,
+              genre
+            FROM game_genres
+            WHERE user_id = ?1
+            ORDER BY genre ASC
+            ",
+        )
+        .map_err(|error| format!("Failed to prepare game genres query: {error}"))?;
+
+    let rows = statement
+        .query_map(params![user_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+        })
+        .map_err(|error| format!("Failed to query game genres: {error}"))?;
+
+    let mut genres_by_game: HashMap<String, Vec<String>> = HashMap::new();
+
+    for row in rows {
+        let (provider, external_id, genre) = row
+            .map_err(|error| format!("Failed to decode game genres row: {error}"))?;
+        let key = game_membership_key(&provider, &external_id);
+        genres_by_game.entry(key).or_insert_with(Vec::new).push(genre);
+    }
+
+    Ok(genres_by_game)
 }
 
 fn normalize_game_identity_input(
@@ -6851,6 +6976,17 @@ fn initialize_database(db_path: &Path) -> Result<(), String> {
               tags_json TEXT NOT NULL,
               fetched_at TEXT NOT NULL
             );
+
+                        CREATE TABLE IF NOT EXISTS game_genres (
+                            user_id TEXT NOT NULL,
+                            provider TEXT NOT NULL,
+                            external_id TEXT NOT NULL,
+                            genre TEXT NOT NULL,
+                            PRIMARY KEY (user_id, provider, external_id, genre),
+                            FOREIGN KEY (user_id, provider, external_id) REFERENCES games(user_id, provider, external_id) ON DELETE CASCADE
+                        );
+
+                        CREATE INDEX IF NOT EXISTS idx_game_genres_user_game ON game_genres(user_id, provider, external_id);
 
                         CREATE TABLE IF NOT EXISTS steam_app_details (
                             app_id TEXT PRIMARY KEY,

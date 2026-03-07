@@ -18,31 +18,36 @@ const getSourceFromProvider = (provider: string): "steam" | "epic-games" | "othe
   return "other";
 };
 
+const canonicalizeTag = (s: string): string => normalize(s).replace(/[^a-z0-9]+/g, " ").trim();
+
 const hasTag = (values: string[] | undefined, expected: string): boolean => {
   if (!values || values.length === 0) {
-    return true;
+    return false;
   }
-  return values.some((value) => normalize(value) === expected);
+  const target = canonicalizeTag(expected);
+  return values.some((value) => canonicalizeTag(value) === target);
 };
 
 const hasExactTag = (values: string[] | undefined, expected: string): boolean => {
-  if (expected.length === 0) {
+  if (expected.trim().length === 0) {
     return true;
   }
   if (!values || values.length === 0) {
     return false;
   }
-  return values.some((value) => normalize(value) === expected);
+  const target = canonicalizeTag(expected);
+  return values.some((value) => canonicalizeTag(value) === target);
 };
 
 const includesTagText = (values: string[] | undefined, expected: string): boolean => {
-  if (expected.length === 0) {
+  if (expected.trim().length === 0) {
     return true;
   }
   if (!values || values.length === 0) {
     return false;
   }
-  return values.some((value) => normalize(value).includes(expected));
+  const target = canonicalizeTag(expected);
+  return values.some((value) => canonicalizeTag(value).includes(target));
 };
 
 export const applyLibraryFilters = (

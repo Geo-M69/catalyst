@@ -50,7 +50,18 @@ export type PlatformFilter = "all" | "windows" | "macos" | "linux";
 export type SourceFilter = "all" | "steam" | "epic-games";
 export type GameKind = "game" | "demo" | "dlc" | "unknown";
 export type GameKindFilter = "all" | GameKind;
-export type GenreFilter = "all" | "action" | "rpg" | "strategy" | "simulation" | "fps";
+export type GenreFilter =
+  | "all"
+  | "action"
+  | "adventure"
+  | "casual"
+  | "indie"
+  | "massively-multiplayer"
+  | "racing"
+  | "rpg"
+  | "simulation"
+  | "sports"
+  | "strategy";
 export type SortOption =
   | "alphabetical"
   | "alphabetical-reverse"

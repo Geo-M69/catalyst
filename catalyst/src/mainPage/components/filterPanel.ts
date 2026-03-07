@@ -96,10 +96,15 @@ const FILTER_TEMPLATE = `
           </button>
           <div id="genre-menu" class="filter-select-menu" role="listbox" hidden>
             <button type="button" class="filter-select-option" role="option" data-value="action">Action</button>
+            <button type="button" class="filter-select-option" role="option" data-value="adventure">Adventure</button>
+            <button type="button" class="filter-select-option" role="option" data-value="casual">Casual</button>
+            <button type="button" class="filter-select-option" role="option" data-value="indie">Indie</button>
+            <button type="button" class="filter-select-option" role="option" data-value="massively-multiplayer">Massively Multiplayer</button>
+            <button type="button" class="filter-select-option" role="option" data-value="racing">Racing</button>
             <button type="button" class="filter-select-option" role="option" data-value="rpg">RPG</button>
-            <button type="button" class="filter-select-option" role="option" data-value="strategy">Strategy</button>
             <button type="button" class="filter-select-option" role="option" data-value="simulation">Simulation</button>
-            <button type="button" class="filter-select-option" role="option" data-value="fps">FPS</button>
+            <button type="button" class="filter-select-option" role="option" data-value="sports">Sports</button>
+            <button type="button" class="filter-select-option" role="option" data-value="strategy">Strategy</button>
           </div>
         </div>
 
