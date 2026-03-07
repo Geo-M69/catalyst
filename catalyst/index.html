@@ -27,5 +27,114 @@
         <button id="steam-login" class="login-button" type="button">Login with Steam</button>
       </section>
     </main>
+    
+oscore
+    <!-- Begin merged main page (previously main.html) -->
+    <div id="library-root" hidden>
+      <div id="library-aspect-shell" class="library-aspect-shell" data-aspect-label="16:9">
+        <main class="launcher-library" aria-label="Game launcher library view">
+          <section class="library-column panel-left" aria-label="Library filters">
+            <header class="panel-heading-stack">
+              <div id="session-account" class="session-account">
+                <button
+                  id="session-account-button"
+                  class="session-account-button"
+                  type="button"
+                  aria-haspopup="menu"
+                  aria-expanded="false"
+                  aria-controls="session-account-menu"
+                >
+                  <span id="session-account-label" class="session-account-label">Catalyst</span>
+                  <span class="session-account-caret" aria-hidden="true"></span>
+                </button>
+                <div id="session-account-menu" class="session-account-menu" role="menu" hidden>
+                  <button id="session-account-manage" class="session-account-item" type="button" role="menuitem">
+                    Manage Accounts
+                  </button>
+                  <button id="session-account-signout" class="session-account-item" type="button" role="menuitem">
+                    Sign Out
+                  </button>
+                </div>
+              </div>
+              <div class="session-account-divider" aria-hidden="true"></div>
+            </header>
+
+            <div id="filter-panel"></div>
+            <section id="download-activity" class="download-activity download-activity-sidebar" aria-label="Download activity">
+              <div class="download-activity-header">
+                <p class="download-activity-title">Downloads</p>
+                <span id="download-activity-count" class="download-activity-count" hidden>0</span>
+              </div>
+              <div id="download-activity-list" class="download-activity-list"></div>
+            </section>
+          </section>
+
+          <section class="library-column panel-middle" aria-label="Library games grid">
+            <header class="panel-heading-library">
+              <div class="library-heading-main">
+                <div id="library-view-picker" class="library-view-picker" role="tablist" aria-label="Library view">
+                  <button
+                    type="button"
+                    class="library-view-picker-option is-selected"
+                    role="tab"
+                    aria-selected="true"
+                    aria-controls="library-grid"
+                    tabindex="0"
+                    data-library-view="games"
+                  >
+                    Library
+                  </button>
+                  <button
+                    type="button"
+                    class="library-view-picker-option"
+                    role="tab"
+                    aria-selected="false"
+                    aria-controls="library-grid"
+                    tabindex="-1"
+                    data-library-view="installed"
+                  >
+                    Installed
+                  </button>
+                  <button
+                    type="button"
+                    class="library-view-picker-option"
+                    role="tab"
+                    aria-selected="false"
+                    aria-controls="library-grid"
+                    tabindex="-1"
+                    data-library-view="favorites"
+                  >
+                    Favorites
+                  </button>
+                  <button
+                    type="button"
+                    class="library-view-picker-option"
+                    role="tab"
+                    aria-selected="false"
+                    aria-controls="library-grid"
+                    tabindex="-1"
+                    data-library-view="collections"
+                  >
+                    Collections
+                  </button>
+                </div>
+                <div class="library-heading-actions">
+                  <p id="library-last-updated" class="library-last-updated">Not synced yet</p>
+                  <button id="refresh-library-button" class="secondary-button refresh-button" type="button">
+                    <span class="refresh-button-icon" aria-hidden="true"></span>
+                    <span id="refresh-library-label" class="refresh-button-label">Refresh</span>
+                  </button>
+                </div>
+              </div>
+              <p id="library-summary" class="status-message library-heading-summary">Loading library...</p>
+            </header>
+
+            <div id="library-grid" class="library-grid-scroll" aria-live="polite"></div>
+          </section>
+
+        </main>
+      </div>
+    </div>
+    <!-- End merged main page -->
   </body>
 </html>

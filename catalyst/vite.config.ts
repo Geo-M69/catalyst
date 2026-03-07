@@ -30,10 +30,9 @@ export default defineConfig(async () => ({
   },
   build: {
     rollupOptions: {
-      input: {
-        index: resolve(__dirname, "index.html"),
-        main: resolve(__dirname, "main.html"),
-      }
-    }
-  }
+      // Single HTML entrypoint: `index.html`. The library/main page is merged
+      // into the index to simplify the build and routing.
+      input: resolve(__dirname, "index.html"),
+    },
+  },
 }));

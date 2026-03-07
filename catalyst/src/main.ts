@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 import { ipcService } from "./shared/ipc/client";
 import { normalizeAppError } from "./shared/ipc/errors";
 import type { AppErrorPayload } from "./shared/ipc/contracts";
@@ -28,7 +29,7 @@ export {};
 
 const SPLASH_DURATION_MS = 3000;
 const TITLE_FADE_OUT_MS = 450;
-const MAIN_PAGE_PATH = "/main.html";
+const MAIN_PAGE_PATH = "#/main";
 
 const welcomeTitleElement = document.getElementById("welcome-title");
 const authPanelElement = document.getElementById("auth-panel");
@@ -100,7 +101,19 @@ const refreshSession = async (): Promise<boolean> => {
       return false;
     }
 
-    window.location.replace(MAIN_PAGE_PATH);
+    // Navigate to the main view within the single-page index by setting the hash
+    // and dynamically importing the main page module.
+    window.location.hash = MAIN_PAGE_PATH;
+    try {
+      await import("./mainPage/mainPage");
+      // Unhide merged main page markup
+      const mainRoot = document.getElementById("library-root");
+      if (mainRoot instanceof HTMLElement) {
+        mainRoot.hidden = false;
+      }
+    } catch (e) {
+      console.error("Failed to initialize main page:", e);
+    }
     return true;
   } catch (error) {
     const appError = normalizeAppError(error, "Could not read current app session.");
@@ -118,12 +131,18 @@ const startSteamLogin = async (): Promise<void> => {
 
     const result = await ipcService.startSteamAuth();
     const steamId = result.user.steamId ?? "unknown";
-    window.history.replaceState(
-      {},
-      "",
-      `${window.location.pathname}?status=success&steamId=${encodeURIComponent(steamId)}&syncedGames=${result.syncedGames}`
-    );
-    window.location.replace(MAIN_PAGE_PATH);
+    window.history.replaceState({}, "", `${window.location.pathname}?status=success&steamId=${encodeURIComponent(steamId)}&syncedGames=${result.syncedGames}`);
+    // Switch to main view without a full page reload
+    window.location.hash = MAIN_PAGE_PATH;
+    try {
+      await import("./mainPage/mainPage");
+      const mainRoot = document.getElementById("library-root");
+      if (mainRoot instanceof HTMLElement) {
+        mainRoot.hidden = false;
+      }
+    } catch (e) {
+      console.error("Failed to initialize main page after auth:", e);
+    }
   } catch (error) {
     const appError = normalizeAppError(error, "Could not start Steam login");
     setStatusErrorMetadata(appError);
@@ -154,6 +173,21 @@ const initialize = async (): Promise<void> => {
 };
 
 void initialize();
+
+// If the URL points to the main view on load (e.g., deep link), initialize it.
+if (window.location.hash === MAIN_PAGE_PATH) {
+  void (async () => {
+    try {
+      await import("./mainPage/mainPage");
+      const mainRoot = document.getElementById("library-root");
+      if (mainRoot instanceof HTMLElement) {
+        mainRoot.hidden = false;
+      }
+    } catch (e) {
+      console.error("Failed to initialize main page from hash:", e);
+    }
+  })();
+}
 
 // Frontend listener for background local Steam scan results
 // Emits: `local-scan-complete` (payload: number[]), `local-scan-error` (payload: string)
