@@ -6692,9 +6692,26 @@ fn persist_session_token(session_path: &Path, session_token: &str) -> Result<(),
         fs::create_dir_all(parent)
             .map_err(|error| format!("Failed to create session directory: {error}"))?;
     }
+    // On Unix platforms, prefer creating the file with restrictive permissions (rw-------).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut options = fs::OpenOptions::new();
+        options.create(true).write(true).truncate(true).mode(0o600);
+        let mut file = options
+            .open(session_path)
+            .map_err(|error| format!("Failed to open session token file: {error}"))?;
+        use std::io::Write;
+        file.write_all(session_token.as_bytes())
+            .map_err(|error| format!("Failed to write session token file: {error}"))?;
+        Ok(())
+    }
 
-    fs::write(session_path, session_token)
-        .map_err(|error| format!("Failed to write session token file: {error}"))
+    #[cfg(not(unix))]
+    {
+        fs::write(session_path, session_token)
+            .map_err(|error| format!("Failed to write session token file: {error}"))
+    }
 }
 
 fn clear_session_token_file(session_path: &Path) -> Result<(), String> {

@@ -120,3 +120,39 @@ pub(crate) async fn start_steam_auth(state: State<'_, AppState>) -> AppResult<St
         synced_games: outcome.synced_games,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+    use std::fs;
+
+    #[test]
+    fn persist_session_token_file_has_restrictive_permissions() {
+        #[cfg(unix)]
+        {
+            let dir = tempdir().expect("tempdir");
+            let db_path = dir.path().join("test.db");
+            let session_path = dir.path().join("session.token");
+            let state = AppState::new(
+                db_path,
+                session_path.clone(),
+                None,
+                false,
+                false,
+                None,
+            );
+
+            // Persist a dummy token
+            persist_active_session(&state, "dummy.session.token").expect("persist ok");
+
+            let metadata = fs::metadata(&session_path).expect("session file exists");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = metadata.permissions().mode() & 0o777;
+                assert_eq!(mode, 0o600, "session file should be rw-------");
+            }
+        }
+    }
+}
