@@ -3,9 +3,6 @@ adr: 0005
 title: Phase 8 & 9 — Security Hardening and Contract Cleanup
 status: accepted
 date: 2026-03-06
-authors:
-  - Catalyst dev
-  - (automated assistant)
 ---
 
 Context
