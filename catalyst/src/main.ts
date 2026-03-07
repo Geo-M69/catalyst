@@ -1,6 +1,7 @@
 import { ipcService } from "./shared/ipc/client";
 import { normalizeAppError } from "./shared/ipc/errors";
 import type { AppErrorPayload } from "./shared/ipc/contracts";
+import { listen } from "@tauri-apps/api/event";
 
 export {};
 
@@ -132,3 +133,22 @@ const initialize = async (): Promise<void> => {
 };
 
 void initialize();
+
+// Frontend listener for background local Steam scan results
+// Emits: `local-scan-complete` (payload: number[]), `local-scan-error` (payload: string)
+void (async () => {
+  try {
+    await listen<number[]>("local-scan-complete", event => {
+      console.info("Local Steam scan complete:", event.payload);
+      // Example: store into localCache or trigger UI refresh
+    });
+
+    await listen<string>("local-scan-error", event => {
+      console.error("Local Steam scan error:", event.payload);
+      // Example: show toast or status message
+      setStatusMessage(`Local scan failed: ${event.payload}` , true);
+    });
+  } catch (err) {
+    console.warn("Could not register local-scan listeners (not running in Tauri?):", err);
+  }
+})();

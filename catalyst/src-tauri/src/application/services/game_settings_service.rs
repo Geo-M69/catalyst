@@ -37,7 +37,7 @@ pub(crate) fn list_game_languages(
 	}
 
 	let client = build_http_client()?;
-	match fetch_steam_supported_languages(&client, app_id) {
+	match fetch_steam_supported_languages(&connection, &client, app_id) {
 		Ok(fetched_languages) => {
 			cache_steam_app_languages(&connection, app_id, &fetched_languages)?;
 			Ok(fetched_languages)
@@ -78,7 +78,7 @@ pub(crate) fn list_game_compatibility_tools(
 		Err(_) => return Ok(Vec::new()),
 	};
 	let include_linux_runtime_tools = match build_http_client()
-		.and_then(|client| fetch_steam_app_linux_platform_support_from_store(&client, app_id))
+		.and_then(|client| fetch_steam_app_linux_platform_support_from_store(&connection, &client, app_id))
 	{
 		Ok(Some(supported)) => supported,
 		Ok(None) => false,
@@ -417,7 +417,7 @@ pub(crate) fn get_game_install_size_estimate(
 	}
 
 	let client = build_http_client()?;
-	Ok(fetch_steam_install_size_estimate_from_store(&client, app_id)?)
+	Ok(fetch_steam_install_size_estimate_from_store(&connection, &client, app_id)?)
 }
 
 pub(crate) fn list_game_install_locations(

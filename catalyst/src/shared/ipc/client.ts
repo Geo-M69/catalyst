@@ -39,6 +39,7 @@ export const callCommand = async <K extends IpcCommandName>(
 export const ipcService = {
   getSession: () => callCommand("get_session"),
   startSteamAuth: () => callCommand("start_steam_auth"),
+  startLocalSteamScan: () => callCommand("start_local_steam_scan"),
   logout: () => callCommand("logout"),
   syncSteamLibrary: () => callCommand("sync_steam_library"),
   importSteamCollections: () => callCommand("import_steam_collections"),

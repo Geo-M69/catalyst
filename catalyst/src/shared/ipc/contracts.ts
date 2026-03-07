@@ -110,6 +110,7 @@ export interface IpcContracts {
   get_session: { req: void; res: PublicUser | null };
   start_steam_auth: { req: void; res: SteamAuthResponse };
   logout: { req: void; res: void };
+  start_local_steam_scan: { req: void; res: void };
   sync_steam_library: { req: void; res: void };
   import_steam_collections: { req: void; res: void };
   get_library: { req: void; res: LibraryResponse };

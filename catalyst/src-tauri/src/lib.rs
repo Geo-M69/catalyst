@@ -25,6 +25,7 @@ use std::os::unix::fs::PermissionsExt;
 
 mod application;
 mod interface;
+mod cache;
 
 const STEAM_OPENID_ENDPOINT: &str = "https://steamcommunity.com/openid/login";
 const STEAM_WEB_API_ENDPOINT: &str =
@@ -37,6 +38,7 @@ const STEAM_APP_BETA_CODE_CHECK_ENDPOINT: &str =
     "https://api.steampowered.com/ISteamApps/CheckAppBetaPassword/v1/";
 const STEAM_CALLBACK_TIMEOUT: Duration = Duration::from_secs(180);
 const STEAM_APP_DETAILS_BATCH_SIZE: usize = 75;
+const STEAM_APP_DETAILS_CACHE_TTL_HOURS: i64 = 24 * 7; // 1 week
 const STEAM_APP_METADATA_CACHE_TTL_HOURS: i64 = 24 * 7;
 const STEAM_APP_LANGUAGES_CACHE_TTL_HOURS: i64 = 24 * 7;
 const STEAM_APP_BETAS_CACHE_TTL_HOURS: i64 = 24 * 7;
@@ -860,6 +862,13 @@ fn refresh_provider_installed_flags(
 fn detect_locally_installed_steam_app_ids(
     steam_root_override: Option<&str>,
 ) -> Result<HashSet<u64>, String> {
+    // Fast-path: consult in-memory cache to avoid repeated blocking filesystem scans.
+    const LOCAL_INSTALL_DETECTION_CACHE_TTL_SECS: i64 = 300; // 5 minutes
+    if let Some(cached) = cache::get_cached("local_installed_app_ids", LOCAL_INSTALL_DETECTION_CACHE_TTL_SECS) {
+        if let Ok(vec) = serde_json::from_value::<Vec<u64>>(cached) {
+            return Ok(vec.into_iter().collect());
+        }
+    }
     let steam_roots = resolve_steam_root_paths(steam_root_override);
     if steam_roots.is_empty() {
         return Ok(HashSet::new());
@@ -891,8 +900,14 @@ fn detect_locally_installed_steam_app_ids(
         }
     }
 
+    // cache the computed installed app ids for a short TTL to avoid repeated filesystem scans
+    let _ = serde_json::to_value(&installed_app_ids.iter().cloned().collect::<Vec<u64>>())
+        .map(|value| cache::set_cached("local_installed_app_ids", value));
     Ok(installed_app_ids)
 }
+
+    // Store result in cache for subsequent calls
+    // (we can't return earlier because we need a HashSet to be returned, so cache after computing)
 
 fn resolve_steam_root_paths(steam_root_override: Option<&str>) -> Vec<PathBuf> {
     if let Some(override_path) = steam_root_override
@@ -2192,6 +2207,98 @@ fn cache_steam_store_tags(
     Ok(())
 }
 
+fn find_cached_steam_app_details(
+    connection: &Connection,
+    app_id: u64,
+    stale_before: chrono::DateTime<Utc>,
+) -> Result<Option<serde_json::Value>, String> {
+    let cached = connection
+        .query_row(
+            "SELECT details_json, fetched_at FROM steam_app_details WHERE app_id = ?1",
+            params![app_id.to_string()],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|error| format!("Failed to query cached Steam app details: {error}"))?;
+
+    let Some((details_json, fetched_at)) = cached else {
+        return Ok(None);
+    };
+
+    let is_fresh = chrono::DateTime::parse_from_rfc3339(&fetched_at)
+        .map(|timestamp| timestamp.with_timezone(&Utc) >= stale_before)
+        .unwrap_or(false);
+    if !is_fresh {
+        return Ok(None);
+    }
+
+    let parsed = serde_json::from_str::<serde_json::Value>(&details_json)
+        .map_err(|error| format!("Failed to parse cached Steam app details JSON: {error}"))?;
+    Ok(Some(parsed))
+}
+
+fn cache_steam_app_details(
+    connection: &Connection,
+    app_id: u64,
+    details: &serde_json::Value,
+) -> Result<(), String> {
+    let details_json = serde_json::to_string(details)
+        .map_err(|error| format!("Failed to encode Steam app details for cache: {error}"))?;
+
+    connection
+        .execute(
+            "INSERT INTO steam_app_details (app_id, details_json, fetched_at)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(app_id) DO UPDATE SET
+              details_json = excluded.details_json,
+              fetched_at = excluded.fetched_at",
+            params![app_id.to_string(), details_json, Utc::now().to_rfc3339()],
+        )
+        .map_err(|error| format!("Failed to cache Steam app details: {error}"))?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    #[test]
+    fn cache_and_find_steam_app_details_roundtrip() {
+        let connection = Connection::open_in_memory().expect("open in-memory");
+
+        // create minimal steam_app_details table used by helpers
+        connection
+            .execute(
+                "CREATE TABLE IF NOT EXISTS steam_app_details (
+                    app_id TEXT PRIMARY KEY,
+                    details_json TEXT NOT NULL,
+                    fetched_at TEXT NOT NULL
+                )",
+                (),
+            )
+            .expect("create table");
+
+        let app_id: u64 = 12345;
+        let entry = serde_json::json!({
+            "success": true,
+            "data": { "name": "Test Game" }
+        });
+
+        // cache entry
+        cache_steam_app_details(&connection, app_id, &entry).expect("cache ok");
+
+        let stale_before = Utc::now() - ChronoDuration::hours(24);
+        let cached = find_cached_steam_app_details(&connection, app_id, stale_before)
+            .expect("query ok");
+        assert!(cached.is_some(), "expected cached entry to be present");
+        let cached = cached.unwrap();
+        assert_eq!(cached.get("success").and_then(|v| v.as_bool()), Some(true));
+        assert!(cached.get("data").is_some());
+    }
+}
+
 fn fetch_steam_store_user_tags(client: &Client, app_id: u64) -> Result<Vec<String>, String> {
     let mut request_url = Url::parse(&format!("{STEAM_STORE_APP_ENDPOINT}/{app_id}/"))
         .map_err(|error| format!("Failed to parse Steam Store endpoint: {error}"))?;
@@ -2273,7 +2380,22 @@ fn normalize_steam_store_tags(raw_tags: &[String]) -> Vec<String> {
     normalized_tags
 }
 
-fn fetch_steam_supported_languages(client: &Client, app_id: u64) -> Result<Vec<String>, String> {
+fn fetch_steam_supported_languages(
+    connection: &Connection,
+    client: &Client,
+    app_id: u64,
+) -> Result<Vec<String>, String> {
+    // Check DB cache first
+    let stale_before = Utc::now() - ChronoDuration::hours(STEAM_APP_DETAILS_CACHE_TTL_HOURS);
+    if let Ok(Some(cached)) = find_cached_steam_app_details(connection, app_id, stale_before) {
+        if let Some(data) = cached.get("data") {
+            if let Some(raw_languages) = data.get("supported_languages").and_then(serde_json::Value::as_str) {
+                return Ok(parse_steam_supported_languages(raw_languages));
+            }
+        }
+    }
+
+    // Fetch from store
     let mut request_url = Url::parse(STEAM_APP_DETAILS_ENDPOINT)
         .map_err(|error| format!("Failed to parse Steam app details endpoint: {error}"))?;
     request_url
@@ -2304,6 +2426,9 @@ fn fetch_steam_supported_languages(client: &Client, app_id: u64) -> Result<Vec<S
         return Ok(Vec::new());
     };
 
+    // Best-effort cache of the entry object
+    let _ = cache_steam_app_details(connection, app_id, entry);
+
     let raw_languages = entry
         .get("data")
         .and_then(|value| value.get("supported_languages"))
@@ -2314,9 +2439,29 @@ fn fetch_steam_supported_languages(client: &Client, app_id: u64) -> Result<Vec<S
 }
 
 fn fetch_steam_install_size_estimate_from_store(
+    connection: &Connection,
     client: &Client,
     app_id: u64,
 ) -> Result<Option<u64>, String> {
+    // Check cached appdetails first
+    let stale_before = Utc::now() - ChronoDuration::hours(STEAM_APP_DETAILS_CACHE_TTL_HOURS);
+    if let Ok(Some(cached)) = find_cached_steam_app_details(connection, app_id, stale_before) {
+        if let Some(data) = cached.get("data").and_then(|v| v.as_object()) {
+            let mut max_size_bytes: Option<u64> = None;
+            for requirements_field in ["pc_requirements", "mac_requirements", "linux_requirements"] {
+                if let Some(requirements_value) = data.get(requirements_field) {
+                    if let Some(size_bytes) = parse_steam_install_size_from_requirements_value(requirements_value) {
+                        max_size_bytes = Some(match max_size_bytes {
+                            Some(existing) => existing.max(size_bytes),
+                            None => size_bytes,
+                        });
+                    }
+                }
+            }
+            return Ok(max_size_bytes);
+        }
+    }
+
     let mut request_url = Url::parse(STEAM_APP_DETAILS_ENDPOINT)
         .map_err(|error| format!("Failed to parse Steam app details endpoint: {error}"))?;
     request_url
@@ -2351,6 +2496,9 @@ fn fetch_steam_install_size_estimate_from_store(
         return Ok(None);
     };
 
+    // Best-effort cache
+    let _ = cache_steam_app_details(connection, app_id, entry);
+
     let mut max_size_bytes: Option<u64> = None;
     for requirements_field in ["pc_requirements", "mac_requirements", "linux_requirements"] {
         let Some(requirements_value) = data.get(requirements_field) else {
@@ -2369,9 +2517,20 @@ fn fetch_steam_install_size_estimate_from_store(
 }
 
 fn fetch_steam_app_linux_platform_support_from_store(
+    connection: &Connection,
     client: &Client,
     app_id: u64,
 ) -> Result<Option<bool>, String> {
+    // Consult cached appdetails first
+    let stale_before = Utc::now() - ChronoDuration::hours(STEAM_APP_DETAILS_CACHE_TTL_HOURS);
+    if let Ok(Some(cached)) = find_cached_steam_app_details(connection, app_id, stale_before) {
+        if let Some(data) = cached.get("data") {
+            if let Some(platforms) = data.get("platforms").and_then(serde_json::Value::as_object) {
+                return Ok(platforms.get("linux").and_then(serde_json::Value::as_bool));
+            }
+        }
+    }
+
     let mut request_url = Url::parse(STEAM_APP_DETAILS_ENDPOINT)
         .map_err(|error| format!("Failed to parse Steam app details endpoint: {error}"))?;
     request_url
@@ -2402,6 +2561,9 @@ fn fetch_steam_app_linux_platform_support_from_store(
     let Some(true) = entry.get("success").and_then(serde_json::Value::as_bool) else {
         return Ok(None);
     };
+    // Best-effort cache
+    let _ = cache_steam_app_details(connection, app_id, entry);
+
     let Some(data) = entry.get("data").and_then(serde_json::Value::as_object) else {
         return Ok(None);
     };
@@ -6752,6 +6914,14 @@ fn initialize_database(db_path: &Path) -> Result<(), String> {
               tags_json TEXT NOT NULL,
               fetched_at TEXT NOT NULL
             );
+
+                        CREATE TABLE IF NOT EXISTS steam_app_details (
+                            app_id TEXT PRIMARY KEY,
+                            details_json TEXT NOT NULL,
+                            fetched_at TEXT NOT NULL
+                        );
+
+                        CREATE INDEX IF NOT EXISTS idx_steam_app_details_fetched_at ON steam_app_details(fetched_at);
 
             CREATE INDEX IF NOT EXISTS idx_steam_app_store_tags_fetched_at ON steam_app_store_tags(fetched_at);
             ",

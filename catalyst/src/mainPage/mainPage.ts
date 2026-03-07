@@ -2066,6 +2066,14 @@ const refreshLibrary = async (syncBeforeLoad = false, importSteamCollections = f
           console.error(`[collections/import_steam] ${appError.kind}:${appError.code} ${appError.message}`);
         }
       }
+
+      // Kick off a non-blocking local Steam install scan in the background
+      try {
+        void ipcService.startLocalSteamScan();
+      } catch (error) {
+        const appError = normalizeAppError(error, "Could not start local Steam install scan.");
+        console.warn(`[local-scan/start] ${appError.kind}:${appError.code} ${appError.message}`);
+      }
     }
 
     const [library, collections] = await Promise.all([
