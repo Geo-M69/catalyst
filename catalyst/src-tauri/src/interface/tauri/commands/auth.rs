@@ -2,66 +2,9 @@ use crate::*;
 use crate::application::error::{AppError, AppResult};
 use tauri::State;
 
-#[tauri::command]
-pub(crate) fn register(
-    email: String,
-    password: String,
-    state: State<'_, AppState>,
-) -> AppResult<AuthResponse> {
-    let normalized_email = normalize_email(&email)?;
-    validate_password(&password)?;
 
-    let connection = open_connection(&state.db_path)?;
-    cleanup_expired_sessions(&connection)?;
-
-    if find_auth_user_by_email(&connection, &normalized_email)?.is_some() {
-        return Err(AppError::conflict(
-            "email_in_use",
-            "Email is already in use",
-        ));
-    }
-
-    let password_hash = hash(password, DEFAULT_COST)
-        .map_err(|error| format!("Failed to hash password: {error}"))?;
-    let user = create_user(&connection, &normalized_email, &password_hash, None)?;
-    let session_token = create_session(&connection, &user.id)?;
-    persist_active_session(state.inner(), &session_token)?;
-
-    Ok(AuthResponse {
-        user: public_user_from_row(&user),
-    })
-}
-
-#[tauri::command]
-pub(crate) fn login(
-    email: String,
-    password: String,
-    state: State<'_, AppState>,
-) -> AppResult<AuthResponse> {
-    let normalized_email = normalize_email(&email)?;
-    validate_password(&password)?;
-
-    let connection = open_connection(&state.db_path)?;
-    cleanup_expired_sessions(&connection)?;
-
-    let auth_user = find_auth_user_by_email(&connection, &normalized_email)?
-        .ok_or_else(|| AppError::unauthorized("invalid_credentials", "Invalid email or password"))?;
-    let valid_password = verify(password, auth_user.password_hash.as_str())
-        .map_err(|error| format!("Failed to verify password: {error}"))?;
-    if !valid_password {
-        return Err(AppError::unauthorized(
-            "invalid_credentials",
-            "Invalid email or password",
-        ));
-    }
-
-    let session_token = create_session(&connection, &auth_user.user.id)?;
-    persist_active_session(state.inner(), &session_token)?;
-
-    Ok(AuthResponse {
-        user: public_user_from_row(&auth_user.user),
-    })
-}
+// `register` and `login` local credential commands removed. Authentication
+// is performed via Steam SSO (`start_steam_auth`).
 
 #[tauri::command]
 pub(crate) fn logout(state: State<'_, AppState>) -> AppResult<()> {

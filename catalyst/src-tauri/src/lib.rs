@@ -107,13 +107,6 @@ struct UserRow {
     email: String,
     steam_id: Option<String>,
 }
-
-#[derive(Debug)]
-struct AuthUserRow {
-    user: UserRow,
-    password_hash: String,
-}
-
 #[derive(Debug)]
 struct LibraryGameInput {
     external_id: String,
@@ -132,12 +125,6 @@ struct PublicUser {
     email: String,
     steam_linked: bool,
     steam_id: Option<String>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AuthResponse {
-    user: PublicUser,
 }
 
 #[derive(Serialize)]
@@ -177,15 +164,6 @@ struct LibraryResponse {
     user_id: String,
     total: usize,
     games: Vec<GameResponse>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SteamStatusResponse {
-    user_id: String,
-    provider: String,
-    linked: bool,
-    steam_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -6426,28 +6404,7 @@ fn get_authenticated_user(state: &AppState, connection: &Connection) -> Result<U
     }
 }
 
-fn find_auth_user_by_email(
-    connection: &Connection,
-    email: &str,
-) -> Result<Option<AuthUserRow>, String> {
-    connection
-        .query_row(
-            "SELECT id, email, password_hash, steam_id FROM users WHERE email = ?1",
-            params![email],
-            |row| {
-                Ok(AuthUserRow {
-                    user: UserRow {
-                        id: row.get(0)?,
-                        email: row.get(1)?,
-                        steam_id: row.get(3)?,
-                    },
-                    password_hash: row.get(2)?,
-                })
-            },
-        )
-        .optional()
-        .map_err(|error| format!("Failed to query user by email: {error}"))
-}
+// `find_auth_user_by_email` removed: local credential flows were deleted.
 
 fn find_user_by_id(connection: &Connection, user_id: &str) -> Result<Option<UserRow>, String> {
     connection
@@ -6729,44 +6686,7 @@ fn build_http_client() -> Result<Client, String> {
         .map_err(|error| format!("Failed to initialize HTTP client: {error}"))
 }
 
-fn normalize_email(email: &str) -> Result<String, String> {
-    let normalized = email.trim().to_lowercase();
-    if !is_email_like(&normalized) {
-        return Err(String::from("Invalid email format"));
-    }
-    Ok(normalized)
-}
-
-fn validate_password(password: &str) -> Result<(), String> {
-    let length = password.chars().count();
-    if !(8..=128).contains(&length) {
-        return Err(String::from(
-            "Password must be between 8 and 128 characters",
-        ));
-    }
-    Ok(())
-}
-
-fn is_email_like(value: &str) -> bool {
-    if value.is_empty() || value.contains(char::is_whitespace) {
-        return false;
-    }
-
-    let Some((local, domain)) = value.split_once('@') else {
-        return false;
-    };
-
-    if local.is_empty()
-        || domain.is_empty()
-        || domain.starts_with('.')
-        || domain.ends_with('.')
-        || !domain.contains('.')
-    {
-        return false;
-    }
-
-    true
-}
+// Email/password validation helpers removed as local auth is no longer supported.
 
 fn public_user_from_row(user: &UserRow) -> PublicUser {
     PublicUser {
@@ -7042,13 +6962,17 @@ pub fn run() {
         })
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
-            interface::tauri::commands::auth::register,
-            interface::tauri::commands::auth::login,
+            // `register` and `login` (local credentials) are intentionally
+            // not exposed over the IPC surface. Authentication is primarily
+            // performed via Steam SSO (`start_steam_auth`) so these older
+            // endpoints are omitted from the generated handler to reduce
+            // attack surface and surface area for dead code.
             interface::tauri::commands::auth::logout,
             interface::tauri::commands::auth::get_session,
             interface::tauri::commands::auth::start_steam_auth,
             interface::tauri::commands::library::get_library,
-            interface::tauri::commands::library::get_steam_status,
+            // `get_steam_status` is a server-side helper (not exposed to the
+            // frontend) and is intentionally not registered here.
             interface::tauri::commands::library::sync_steam_library,
             interface::tauri::commands::library::set_game_favorite,
             interface::tauri::commands::collections::list_collections,

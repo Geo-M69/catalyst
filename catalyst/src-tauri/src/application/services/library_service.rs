@@ -14,19 +14,6 @@ pub(crate) fn get_library(state: &AppState) -> AppResult<LibraryResponse> {
 	})
 }
 
-pub(crate) fn get_steam_status(state: &AppState) -> AppResult<SteamStatusResponse> {
-	let connection = open_connection(&state.db_path)?;
-	cleanup_expired_sessions(&connection)?;
-	let user = get_authenticated_user(state, &connection)?;
-
-	Ok(SteamStatusResponse {
-		user_id: user.id,
-		provider: String::from("steam"),
-		linked: user.steam_id.is_some(),
-		steam_id: user.steam_id,
-	})
-}
-
 pub(crate) fn sync_steam_library(state: &AppState) -> AppResult<SteamSyncResponse> {
 	let connection = open_connection(&state.db_path)?;
 	cleanup_expired_sessions(&connection)?;

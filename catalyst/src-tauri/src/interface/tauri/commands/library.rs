@@ -8,11 +8,8 @@ pub(crate) fn get_library(state: State<'_, AppState>) -> AppResult<LibraryRespon
     crate::application::services::library_service::get_library(state.inner())
 }
 
-#[tauri::command]
-pub(crate) fn get_steam_status(state: State<'_, AppState>) -> AppResult<SteamStatusResponse> {
-    crate::application::services::library_service::get_steam_status(state.inner())
-}
-
+// `get_steam_status` command removed; Steam status is available via server-side
+// logic and no longer exposed directly to the frontend.
 #[tauri::command]
 pub(crate) fn sync_steam_library(state: State<'_, AppState>) -> AppResult<SteamSyncResponse> {
     crate::application::services::library_service::sync_steam_library(state.inner())
