@@ -49,11 +49,13 @@ const filterPanelElement = document.getElementById("filter-panel");
 const libraryGridElement = document.getElementById("library-grid");
 const libraryAspectShellElement = document.getElementById("library-aspect-shell");
 const panelLeftElement = document.querySelector<HTMLElement>(".panel-left");
+const panelMiddleElement = document.querySelector<HTMLElement>(".panel-middle");
 const gameDetailsShellElement = document.getElementById("game-details-shell");
 const gameDetailsBackButton = document.getElementById("game-details-back-button");
+const appTopHover = document.getElementById("app-top-hover");
 const gameDetailsContentElement = document.getElementById("game-details-content");
 const detailsHeroBg = document.getElementById("details-hero-bg");
-const detailsGameTitle = document.getElementById("details-game-title");
+const detailsTitleInfo = document.getElementById("details-title-info");
 const detailsPlayButton = document.getElementById("details-play-button");
 const detailsSettingsButton = document.getElementById("details-settings-button");
 const detailsFavoriteButton = document.getElementById("details-favorite-button");
@@ -78,17 +80,39 @@ if (
   || !(libraryGridElement instanceof HTMLElement)
   || !(libraryAspectShellElement instanceof HTMLElement)
   || !(panelLeftElement instanceof HTMLElement)
+  || !(panelMiddleElement instanceof HTMLElement)
   || !(gameDetailsShellElement instanceof HTMLElement)
   || !(gameDetailsBackButton instanceof HTMLButtonElement)
+  || !(appTopHover instanceof HTMLElement)
   || !(gameDetailsContentElement instanceof HTMLElement)
   || !(detailsHeroBg instanceof HTMLElement)
-  || !(detailsGameTitle instanceof HTMLElement)
+  || !(detailsTitleInfo instanceof HTMLElement)
   || !(detailsPlayButton instanceof HTMLButtonElement)
   || !(detailsSettingsButton instanceof HTMLButtonElement)
   || !(detailsFavoriteButton instanceof HTMLButtonElement)
   || !(detailsPropertiesButton instanceof HTMLButtonElement)
 ) {
   throw new Error("Main page is missing required DOM elements");
+}
+
+// Back button visibility helper: show while hovering the top hotspot or the back button itself
+{
+  let hideTimer: number | null = null;
+  const show = (): void => {
+    hideTimer && window.clearTimeout(hideTimer);
+    document.body.classList.add("show-back-button");
+  };
+  const hide = (): void => {
+    hideTimer && window.clearTimeout(hideTimer);
+    hideTimer = window.setTimeout(() => document.body.classList.remove("show-back-button"), 350);
+  };
+
+  appTopHover.addEventListener("mouseenter", show);
+  appTopHover.addEventListener("mouseleave", hide);
+  gameDetailsBackButton.addEventListener("mouseenter", show);
+  gameDetailsBackButton.addEventListener("mouseleave", hide);
+  gameDetailsBackButton.addEventListener("focus", show);
+  gameDetailsBackButton.addEventListener("blur", hide);
 }
 
 import { store, isLibraryViewMode, isCollectionLibraryViewMode, isGameLibraryViewMode, type LibraryViewMode, findGameById } from "./libraryStore";
@@ -304,6 +328,7 @@ const openGameDetails = (gameId: string, pushHistory = true): void => {
 
   // Hide left sidebar and library grid, show details panel
   panelLeftElement.hidden = true;
+  panelMiddleElement.hidden = true;
   libraryGridElement.hidden = true;
   gameDetailsShellElement.hidden = false;
 
@@ -326,6 +351,7 @@ const closeGameDetails = (pushHistory = false): void => {
 
   // Restore UI
   panelLeftElement.hidden = false;
+  panelMiddleElement.hidden = false;
   libraryGridElement.hidden = false;
   gameDetailsShellElement.hidden = true;
 
@@ -388,13 +414,35 @@ window.addEventListener("game-customization-changed", (ev: Event) => {
 const renderGameDetails = (gameId: string): void => {
   const game = findGameById(gameId) ?? store.gameById.get(gameId) ?? null;
   if (!game) {
-    detailsGameTitle.textContent = "Game not found";
+    const playCellFallback = detailsTitleInfo.querySelector('.details-play-cell');
+    const notFound = document.createElement('div');
+    notFound.innerHTML = `<div><strong>Title</strong><div class=\"muted\">Game not found</div></div>`;
+    if (playCellFallback) {
+      detailsTitleInfo.replaceChildren(playCellFallback, notFound);
+    } else {
+      detailsTitleInfo.replaceChildren(notFound);
+    }
     detailsHeroBg.style.backgroundImage = "";
     gameDetailsContentElement.textContent = "Game details unavailable.";
     return;
   }
 
-  detailsGameTitle.textContent = game.name;
+  // Populate short activity/status info into the title row (preserve existing play cell)
+  const lastPlayed = game.lastPlayedAt ? new Date(game.lastPlayedAt) : null;
+  const lastPlayedLabel = lastPlayed
+    ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(lastPlayed)
+    : "Never played";
+  const playtimeLabel = typeof game.playtimeMinutes === "number" ? `${Math.round(game.playtimeMinutes)} minutes` : "-";
+
+  const playCell = detailsTitleInfo.querySelector('.details-play-cell') ?? document.createElement('div');
+  const lastPlayedDiv = document.createElement('div');
+  lastPlayedDiv.innerHTML = `<strong>Last Played</strong><div class="muted">${lastPlayedLabel}</div>`;
+  const playtimeDiv = document.createElement('div');
+  playtimeDiv.innerHTML = `<strong>Playtime</strong><div class="muted">${playtimeLabel}</div>`;
+  const statusDiv = document.createElement('div');
+  statusDiv.innerHTML = `<strong>Status</strong><div class="muted">${game.installed ? "Installed" : "Not installed"}</div>`;
+
+  detailsTitleInfo.replaceChildren(playCell, lastPlayedDiv, playtimeDiv, statusDiv);
   // Determine hero background image using customization artwork -> steam candidates -> gradient fallback
   void (async () => {
     // Ensure a neutral gradient fallback is present immediately to avoid layout shift
@@ -434,7 +482,7 @@ const renderGameDetails = (gameId: string): void => {
     }
 
     try {
-      const steamCandidates = getSteamArtworkCandidates(game, "wide-cover") ?? [];
+      const steamCandidates = getSteamArtworkCandidates(game, "background") ?? [];
       for (const c of steamCandidates) candidates.push(c);
     } catch {
       // ignore
@@ -453,7 +501,10 @@ const renderGameDetails = (gameId: string): void => {
 
   // Update action buttons
   detailsPlayButton.textContent = game.installed ? "Play" : "Install";
-  detailsFavoriteButton.textContent = game.favorite ? "★ Favorited" : "☆ Favorite";
+  // Keep the favorite button icon SVG intact; use aria-pressed and class to indicate state
+  detailsFavoriteButton.setAttribute("aria-pressed", `${game.favorite ? "true" : "false"}`);
+  detailsFavoriteButton.setAttribute("aria-label", game.favorite ? "Unfavorite" : "Favorite");
+  detailsFavoriteButton.classList.toggle("is-favorited", !!game.favorite);
   // Fill main + side content with sections (use real data where available)
   gameDetailsContentElement.replaceChildren();
   const cols = document.createElement("div");
@@ -462,21 +513,11 @@ const renderGameDetails = (gameId: string): void => {
   const main = document.createElement("div");
   main.className = "game-details-main-inner";
 
-  // Activity / Timeline
+  // Activity / Timeline (activity-row moved into the title row above)
   const activitySection = document.createElement("section");
   activitySection.className = "details-section";
-  const lastPlayed = game.lastPlayedAt ? new Date(game.lastPlayedAt) : null;
-  const lastPlayedLabel = lastPlayed
-    ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(lastPlayed)
-    : "Never played";
-  const playtimeLabel = typeof game.playtimeMinutes === "number" ? `${Math.round(game.playtimeMinutes)} minutes` : "-";
   activitySection.innerHTML = `
     <h3>Activity</h3>
-    <div class="activity-row">
-      <div><strong>Last Played</strong><div class="muted">${lastPlayedLabel}</div></div>
-      <div><strong>Playtime</strong><div class="muted">${playtimeLabel}</div></div>
-      <div><strong>Status</strong><div class="muted">${game.installed ? "Installed" : "Not installed"}</div></div>
-    </div>
     <div class="details-subsection">
       <h4>Timeline</h4>
       <p class="placeholder">Recent activity and news will appear here.</p>

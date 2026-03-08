@@ -10,6 +10,7 @@
 
 <body class="library-page">
     <div id="library-aspect-shell" class="library-aspect-shell" data-aspect-label="16:9">
+    <div id="app-top-hover" class="app-top-hover" aria-hidden="true"></div>
     <main class="launcher-library" aria-label="Game launcher library view">
       <section class="library-column panel-left" aria-label="Library filters">
         <header class="panel-heading-stack">
@@ -114,20 +115,31 @@
       <section id="game-details-shell" class="library-column panel-details" hidden aria-label="Game details">
         <header class="panel-heading-details">
           <div class="details-hero">
-            <div id="details-hero-bg" class="details-hero-bg"></div>
-            <div class="details-hero-overlay">
-              <button id="game-details-back-button" class="secondary-button" type="button">Back</button>
-              <div id="details-title-row" class="details-title-row">
-                <h2 id="details-game-title">Game Title</h2>
-                <div class="details-action-row">
-                  <button id="details-play-button" class="primary-button">Play</button>
-                  <button id="details-settings-button" class="secondary-button">Settings</button>
-                  <button id="details-favorite-button" class="secondary-button">★</button>
-                  <button id="details-properties-button" class="secondary-button">Details</button>
-                </div>
+              <div id="details-hero-bg" class="details-hero-bg"></div>
+              <div class="details-hero-overlay">
+                <button id="game-details-back-button" class="secondary-button" type="button" aria-label="Back">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-arrow-left-circle"><circle cx="12" cy="12" r="10"></circle><polyline points="12 8 8 12 12 16"></polyline><line x1="16" y1="12" x2="8" y2="12"></line></svg>
+                </button>
               </div>
             </div>
-          </div>
+            <div id="details-title-row" class="details-title-row details-title-row-below">
+              <div id="details-title-info" class="details-title-info">
+                <div class="details-play-cell">
+                  <button id="details-play-button" class="primary-button">Play</button>
+                </div>
+              </div>
+              <div class="details-action-row">
+                <button id="details-settings-button" class="secondary-button" aria-label="Settings" data-tooltip="Settings">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-settings"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                </button>
+                <button id="details-properties-button" class="secondary-button" aria-label="Details" data-tooltip="Game Details">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-info"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+                </button>
+                <button id="details-favorite-button" class="secondary-button" aria-label="Favorite" data-tooltip="Add to Favorites">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-star"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+                </button>
+              </div>
+            </div>
         </header>
         <div id="game-details-content" class="game-details-content">
           <div class="game-details-columns">
