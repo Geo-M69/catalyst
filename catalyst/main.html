@@ -110,6 +110,37 @@
         <div id="library-grid" class="library-grid-scroll" aria-live="polite"></div>
       </section>
 
+      <!-- Game details shell: hidden by default, shown when a game is opened -->
+      <section id="game-details-shell" class="library-column panel-details" hidden aria-label="Game details">
+        <header class="panel-heading-details">
+          <div class="details-hero">
+            <div id="details-hero-bg" class="details-hero-bg"></div>
+            <div class="details-hero-overlay">
+              <button id="game-details-back-button" class="secondary-button" type="button">Back</button>
+              <div id="details-title-row" class="details-title-row">
+                <h2 id="details-game-title">Game Title</h2>
+                <div class="details-action-row">
+                  <button id="details-play-button" class="primary-button">Play</button>
+                  <button id="details-settings-button" class="secondary-button">Settings</button>
+                  <button id="details-favorite-button" class="secondary-button">★</button>
+                  <button id="details-properties-button" class="secondary-button">Details</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </header>
+        <div id="game-details-content" class="game-details-content">
+          <div class="game-details-columns">
+            <div class="game-details-main">
+              <p class="placeholder">Activity & timeline (placeholder)</p>
+            </div>
+            <aside class="game-details-side">
+              <p class="placeholder">Friends / Achievements (placeholder)</p>
+            </aside>
+          </div>
+        </div>
+      </section>
+
     </main>
     </div>
   </body>

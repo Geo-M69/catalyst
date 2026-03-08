@@ -48,6 +48,16 @@ const downloadActivityListElement = document.getElementById("download-activity-l
 const filterPanelElement = document.getElementById("filter-panel");
 const libraryGridElement = document.getElementById("library-grid");
 const libraryAspectShellElement = document.getElementById("library-aspect-shell");
+const panelLeftElement = document.querySelector<HTMLElement>(".panel-left");
+const gameDetailsShellElement = document.getElementById("game-details-shell");
+const gameDetailsBackButton = document.getElementById("game-details-back-button");
+const gameDetailsContentElement = document.getElementById("game-details-content");
+const detailsHeroBg = document.getElementById("details-hero-bg");
+const detailsGameTitle = document.getElementById("details-game-title");
+const detailsPlayButton = document.getElementById("details-play-button");
+const detailsSettingsButton = document.getElementById("details-settings-button");
+const detailsFavoriteButton = document.getElementById("details-favorite-button");
+const detailsPropertiesButton = document.getElementById("details-properties-button");
 
 if (
   !(sessionAccountElement instanceof HTMLElement)
@@ -67,11 +77,22 @@ if (
   || !(filterPanelElement instanceof HTMLElement)
   || !(libraryGridElement instanceof HTMLElement)
   || !(libraryAspectShellElement instanceof HTMLElement)
+  || !(panelLeftElement instanceof HTMLElement)
+  || !(gameDetailsShellElement instanceof HTMLElement)
+  || !(gameDetailsBackButton instanceof HTMLButtonElement)
+  || !(gameDetailsContentElement instanceof HTMLElement)
+  || !(detailsHeroBg instanceof HTMLElement)
+  || !(detailsGameTitle instanceof HTMLElement)
+  || !(detailsPlayButton instanceof HTMLButtonElement)
+  || !(detailsSettingsButton instanceof HTMLButtonElement)
+  || !(detailsFavoriteButton instanceof HTMLButtonElement)
+  || !(detailsPropertiesButton instanceof HTMLButtonElement)
 ) {
   throw new Error("Main page is missing required DOM elements");
 }
 
-import { store, isLibraryViewMode, isCollectionLibraryViewMode, isGameLibraryViewMode, type LibraryViewMode } from "./libraryStore";
+import { store, isLibraryViewMode, isCollectionLibraryViewMode, isGameLibraryViewMode, type LibraryViewMode, findGameById } from "./libraryStore";
+import { getSteamArtworkCandidates } from "./steamArtwork";
 import { formatBytes, isFiniteNonNegativeNumber } from "../shared/utils/format";
 const GRID_CARD_WIDTH_CSS_VAR = "--game-grid-card-min-width";
 const GRID_CARD_WIDTH_DEFAULT_PX = 180;
@@ -266,6 +287,288 @@ const showLauncherToast = (message: string, variant: "info" | "error" = "info"):
       toast.remove();
     }, 160);
   }, TOAST_DURATION_MS);
+};
+
+// --- Game details navigation / view-state handling ---
+const openGameDetails = (gameId: string, pushHistory = true): void => {
+  // Preserve scroll and view mode
+  try {
+    store.preservedLibraryScrollTop = libraryGridElement.scrollTop;
+  } catch {
+    store.preservedLibraryScrollTop = 0;
+  }
+  store.preservedLibraryViewMode = store.activeLibraryViewMode;
+
+  store.appViewMode = "game-details";
+  store.selectedGameId = gameId;
+
+  // Hide left sidebar and library grid, show details panel
+  panelLeftElement.hidden = true;
+  libraryGridElement.hidden = true;
+  gameDetailsShellElement.hidden = false;
+
+  // Minimal details content while fuller implementation is added later
+  gameDetailsContentElement.textContent = "Loading details...";
+  renderGameDetails(gameId);
+
+  if (pushHistory) {
+    try {
+      history.pushState({ view: "game-details", gameId }, "", `#game/${encodeURIComponent(gameId)}`);
+    } catch {
+      // ignore
+    }
+  }
+};
+
+const closeGameDetails = (pushHistory = false): void => {
+  store.appViewMode = "library";
+  store.selectedGameId = null;
+
+  // Restore UI
+  panelLeftElement.hidden = false;
+  libraryGridElement.hidden = false;
+  gameDetailsShellElement.hidden = true;
+
+  // Restore scroll and view mode
+  try {
+    libraryGridElement.scrollTop = store.preservedLibraryScrollTop ?? 0;
+    store.activeLibraryViewMode = store.preservedLibraryViewMode ?? store.activeLibraryViewMode;
+  } catch {
+    // ignore
+  }
+
+  if (pushHistory) {
+    try {
+      history.pushState({ view: "library" }, "", "#");
+    } catch {
+      // ignore
+    }
+  }
+};
+
+// Listen for card open events
+document.addEventListener("open-game-details", (e: Event) => {
+  const custom = e as CustomEvent<{ gameId: string }>;
+  const id = custom?.detail?.gameId;
+  if (typeof id === "string" && id.length > 0) {
+    openGameDetails(id, true);
+  }
+});
+
+// Back button
+gameDetailsBackButton.addEventListener("click", () => {
+  history.back();
+});
+
+// Handle browser history navigation
+window.addEventListener("popstate", (ev: PopStateEvent) => {
+  const state = ev.state as any;
+  if (state && state.view === "game-details" && typeof state.gameId === "string") {
+    openGameDetails(state.gameId, false);
+    return;
+  }
+
+  // Default: return to library
+  closeGameDetails(false);
+});
+
+// When properties or customization artwork change elsewhere, refresh open details if showing
+window.addEventListener("game-customization-changed", (ev: Event) => {
+  try {
+    const ce = ev as CustomEvent;
+    const gameId = ce?.detail?.gameId as string | undefined;
+    if (gameId && store.appViewMode === "game-details" && store.selectedGameId === gameId) {
+      renderGameDetails(gameId);
+    }
+  } catch {
+    // ignore
+  }
+});
+
+const renderGameDetails = (gameId: string): void => {
+  const game = findGameById(gameId) ?? store.gameById.get(gameId) ?? null;
+  if (!game) {
+    detailsGameTitle.textContent = "Game not found";
+    detailsHeroBg.style.backgroundImage = "";
+    gameDetailsContentElement.textContent = "Game details unavailable.";
+    return;
+  }
+
+  detailsGameTitle.textContent = game.name;
+  // Determine hero background image using customization artwork -> steam candidates -> gradient fallback
+  void (async () => {
+    // Ensure a neutral gradient fallback is present immediately to avoid layout shift
+    detailsHeroBg.style.backgroundImage = ""; // let CSS fallback (gradient) show via class
+    detailsHeroBg.classList.add("details-hero-loading");
+
+    // Helper: attempt to load the first image that succeeds from candidates
+    const loadFirstAvailable = async (candidates: string[]): Promise<string | null> => {
+      for (const url of candidates) {
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const img = new Image();
+            let settled = false;
+            const clean = () => {
+              img.onload = null;
+              img.onerror = null;
+            };
+            img.onload = () => { if (!settled) { settled = true; clean(); resolve(); } };
+            img.onerror = () => { if (!settled) { settled = true; clean(); reject(new Error('error')); } };
+            // start load
+            img.src = url;
+          });
+          return url;
+        } catch {
+          // try next
+          continue;
+        }
+      }
+      return null;
+    };
+
+    // Build candidate list in priority order
+    const customization = await getGameCustomizationArtworkForGame(game);
+    const candidates: string[] = [];
+    if (customization && typeof customization.background === "string" && customization.background.trim() !== "") {
+      candidates.push(customization.background);
+    }
+
+    try {
+      const steamCandidates = getSteamArtworkCandidates(game, "wide-cover") ?? [];
+      for (const c of steamCandidates) candidates.push(c);
+    } catch {
+      // ignore
+    }
+
+    const chosen = await loadFirstAvailable(candidates);
+    if (chosen) {
+      // set background image with a smooth fade; remove loading marker
+      detailsHeroBg.style.backgroundImage = `url('${chosen}')`;
+    } else {
+      // leave gradient/fallback in place
+      detailsHeroBg.style.backgroundImage = "";
+    }
+    detailsHeroBg.classList.remove("details-hero-loading");
+  })();
+
+  // Update action buttons
+  detailsPlayButton.textContent = game.installed ? "Play" : "Install";
+  detailsFavoriteButton.textContent = game.favorite ? "★ Favorited" : "☆ Favorite";
+  // Fill main + side content with sections (use real data where available)
+  gameDetailsContentElement.replaceChildren();
+  const cols = document.createElement("div");
+  cols.className = "game-details-columns";
+
+  const main = document.createElement("div");
+  main.className = "game-details-main-inner";
+
+  // Activity / Timeline
+  const activitySection = document.createElement("section");
+  activitySection.className = "details-section";
+  const lastPlayed = game.lastPlayedAt ? new Date(game.lastPlayedAt) : null;
+  const lastPlayedLabel = lastPlayed
+    ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(lastPlayed)
+    : "Never played";
+  const playtimeLabel = typeof game.playtimeMinutes === "number" ? `${Math.round(game.playtimeMinutes)} minutes` : "-";
+  activitySection.innerHTML = `
+    <h3>Activity</h3>
+    <div class="activity-row">
+      <div><strong>Last Played</strong><div class="muted">${lastPlayedLabel}</div></div>
+      <div><strong>Playtime</strong><div class="muted">${playtimeLabel}</div></div>
+      <div><strong>Status</strong><div class="muted">${game.installed ? "Installed" : "Not installed"}</div></div>
+    </div>
+    <div class="details-subsection">
+      <h4>Timeline</h4>
+      <p class="placeholder">Recent activity and news will appear here.</p>
+    </div>
+  `;
+
+  // Achievements (placeholder-first)
+  const achievementsSection = document.createElement("section");
+  achievementsSection.className = "details-section";
+  achievementsSection.innerHTML = `
+    <h4>Achievements</h4>
+    <p class="placeholder">Achievements are not available yet. Coming soon.</p>
+  `;
+
+  // Screenshots (placeholder grid)
+  const screenshotsSection = document.createElement("section");
+  screenshotsSection.className = "details-section";
+  screenshotsSection.innerHTML = `
+    <h4>Screenshots</h4>
+    <p class="placeholder">No screenshots available. You can add screenshots via the Properties panel.</p>
+  `;
+
+  // Review and Notes (read-only placeholders for v1)
+  const notesSection = document.createElement("section");
+  notesSection.className = "details-section";
+  notesSection.innerHTML = `
+    <h4>Notes</h4>
+    <div class="notes-card placeholder">Personal notes for this game will appear here (read-only in v1).</div>
+  `;
+
+  const reviewSection = document.createElement("section");
+  reviewSection.className = "details-section";
+  reviewSection.innerHTML = `
+    <h4>Review</h4>
+    <div class="review-card placeholder">Write a review for this game (coming soon — read-only placeholder).</div>
+  `;
+
+  main.append(activitySection, achievementsSection, screenshotsSection, notesSection, reviewSection);
+
+  // Side column
+  const side = document.createElement("aside");
+  side.className = "game-details-side-inner";
+
+  // Friends activity (placeholder; suggest connecting Steam)
+  const friendsSection = document.createElement("section");
+  friendsSection.className = "details-section";
+  friendsSection.innerHTML = `
+    <h4>Friends</h4>
+    <p class="placeholder">${store.steamLinked ? "Friends activity will appear here." : "Connect Steam to show friends activity."}</p>
+  `;
+
+  // Trading cards (placeholder)
+  const cardsSection = document.createElement("section");
+  cardsSection.className = "details-section";
+  cardsSection.innerHTML = `
+    <h4>Trading Cards</h4>
+    <p class="placeholder">Trading card details and progress will appear here.</p>
+  `;
+
+  // Installation details (real data if available)
+  const installationSection = document.createElement("section");
+  installationSection.className = "details-section";
+  installationSection.innerHTML = `<h4>Installation</h4><p class="placeholder">Loading installation details…</p>`;
+
+  side.append(friendsSection, cardsSection, installationSection);
+
+  cols.append(main, side);
+  gameDetailsContentElement.append(cols);
+
+  // Async: fetch installation details and update installationSection if available
+  void (async () => {
+    try {
+      const install = await getGameInstallationDetailsForGame(game);
+      installationSection.replaceChildren();
+      installationSection.className = "details-section";
+      if (!install) {
+        installationSection.innerHTML = `<h4>Installation</h4><p class=\"placeholder\">No installation data available.</p>`;
+      } else {
+        const list = document.createElement("div");
+        list.className = "installation-list";
+        const pathRow = document.createElement("div");
+        pathRow.innerHTML = `<div><strong>Path</strong><div class=\"muted\">${install.installPath ?? "-"}</div></div>`;
+        const sizeRow = document.createElement("div");
+        sizeRow.innerHTML = `<div><strong>Installed Size</strong><div class=\"muted\">${formatBytes(install.installedBytes) ?? "-"}</div></div>`;
+        list.append(pathRow, sizeRow);
+        installationSection.append(document.createElement("h4")).textContent = "Installation";
+        installationSection.append(list);
+      }
+    } catch (err) {
+      installationSection.innerHTML = `<h4>Installation</h4><p class=\"placeholder\">Could not load installation details.</p>`;
+    }
+  })();
 };
 
 
@@ -1673,6 +1976,12 @@ const openGameProperties = async (game: GameResponse): Promise<void> => {
     persistedSettings: persistedSettings ?? undefined,
     saveSettings: async (settings) => {
       await setGamePropertiesSettingsForGame(game, settings);
+      // Notify listeners that customization/settings may have changed for this game
+      try {
+        window.dispatchEvent(new CustomEvent("game-customization-changed", { detail: { gameId: game.id } }));
+      } catch {
+        // ignore
+      }
     },
     installationDetails: installationDetails ?? undefined,
     customizationArtworkPaths: customizationArtwork ?? undefined,
@@ -1893,6 +2202,69 @@ const gameContextMenu = createGameContextMenu({
 });
 store.closeGameContextMenu = gameContextMenu.closeMenu;
 
+// Wire details action buttons to reuse existing actions where possible
+if (detailsSettingsButton instanceof HTMLButtonElement) {
+  detailsSettingsButton.addEventListener("click", (e) => {
+    const gameId = store.selectedGameId;
+    if (!gameId) return;
+    const game = findGameById(gameId) ?? store.gameById.get(gameId);
+    if (!game) return;
+    // Open the context menu anchored to the settings button if supported
+    if (typeof gameContextMenu.openMenu === "function") {
+      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      gameContextMenu.openMenu(game, e.currentTarget as HTMLElement, rect.left + 8, rect.top + 8);
+      return;
+    }
+  });
+}
+
+if (detailsPlayButton instanceof HTMLButtonElement) {
+  detailsPlayButton.addEventListener("click", async () => {
+    const gameId = store.selectedGameId;
+    if (!gameId) return;
+    const game = findGameById(gameId) ?? store.gameById.get(gameId);
+    if (!game) return;
+
+    if (game.installed) {
+      await ipcService.playGame({ provider: game.provider, externalId: game.externalId });
+    } else {
+      const installLocations = await listGameInstallLocationsForGame(game);
+      const installSizeBytes = await getGameInstallSizeEstimateForGame(game);
+      const installRequest = await installDialog.open({ game, locations: installLocations, installSizeBytes: typeof installSizeBytes === "number" ? installSizeBytes : undefined });
+      if (installRequest === null) return;
+      await ipcService.installGame({ provider: game.provider, externalId: game.externalId, installPath: installRequest.installPath, createDesktopShortcut: installRequest.createDesktopShortcut, createApplicationShortcut: installRequest.createApplicationShortcut });
+      showLauncherToast(`Queued "${game.name}" for install.`);
+      void refreshSteamDownloads();
+    }
+  });
+}
+
+if (detailsFavoriteButton instanceof HTMLButtonElement) {
+  detailsFavoriteButton.addEventListener("click", async () => {
+    const gameId = store.selectedGameId;
+    if (!gameId) return;
+    const game = findGameById(gameId) ?? store.gameById.get(gameId);
+    if (!game) return;
+    const newFav = !game.favorite;
+    await ipcService.setGameFavorite({ favorite: newFav, provider: game.provider, externalId: game.externalId });
+    updateGameInState(game.id, (existing) => ({ ...existing, favorite: newFav }));
+    renderGameLibrary();
+    renderGameDetails(game.id);
+  });
+}
+
+if (detailsPropertiesButton instanceof HTMLButtonElement) {
+  detailsPropertiesButton.addEventListener("click", async () => {
+    const gameId = store.selectedGameId;
+    if (!gameId) return;
+    const game = findGameById(gameId) ?? store.gameById.get(gameId);
+    if (!game) return;
+    await openGameProperties(game);
+    // After returning from properties, re-render details to pick up any changed artwork
+    renderGameDetails(game.id);
+  });
+}
+
 sessionAccountButton.addEventListener("click", () => {
   if (sessionAccountMenuElement.hidden) {
     openSessionAccountMenu();
@@ -2076,6 +2448,7 @@ const refreshLibrary = async (syncBeforeLoad = false, importSteamCollections = f
       ipcService.getLibrary(),
       listCollectionsForUser().catch(() => []),
     ]);
+    // (removed debug log)
     setAllGames(library.games);
     setAllCollections(collections);
     renderActiveLibraryView();

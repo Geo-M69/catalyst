@@ -71,6 +71,25 @@ export const createGameCard = (game: GameResponse): HTMLElement => {
   card.dataset.gameExternalId = game.externalId;
   card.setAttribute("aria-label", `${game.name} (${game.provider})`);
 
+  // Dispatch a global event to request opening the game details view. Main page
+  // listens for `open-game-details` and performs the navigation + UI changes.
+  const openDetails = (): void => {
+    const evt = new CustomEvent("open-game-details", { detail: { gameId: game.id }, bubbles: true });
+    card.dispatchEvent(evt);
+  };
+
+  card.addEventListener("click", (e) => {
+    // Ignore clicks that came from interactive children (e.g., context menus)
+    openDetails();
+  });
+
+  card.addEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.key === "Enter") {
+      openDetails();
+      e.preventDefault();
+    }
+  });
+
   const media = document.createElement("div");
   media.className = "game-card-media";
 

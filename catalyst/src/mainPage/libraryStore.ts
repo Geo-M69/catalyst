@@ -29,6 +29,13 @@ export interface DownloadEtaSnapshot {
 export const store = {
   allGames: [] as GameResponse[],
   gameById: new Map<string, GameResponse>(),
+  // App-level view mode: 'library' or 'game-details'
+  appViewMode: "library" as "library" | "game-details",
+  // Currently selected game id when in `game-details` view
+  selectedGameId: null as string | null,
+  // Preserve scroll / view state when opening details so we can restore on back
+  preservedLibraryScrollTop: 0,
+  preservedLibraryViewMode: "games" as LibraryViewMode,
   isLoadingLibrary: false,
   steamLinked: false,
   closeGameContextMenu: null as (() => void) | null,

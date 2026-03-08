@@ -7,6 +7,8 @@ pub(crate) fn get_library(state: &AppState) -> AppResult<LibraryResponse> {
 	let user = get_authenticated_user(state, &connection)?;
 	let games = list_games_by_user(&connection, &user.id)?;
 
+	// (removed debug log)
+
 	Ok(LibraryResponse {
 		user_id: user.id,
 		total: games.len(),

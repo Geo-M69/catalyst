@@ -34,6 +34,7 @@
   --color-accent: #f487b6;
   --color-card-bg: rgba(255, 255, 255, 0.06);
   --color-card-border: rgba(255, 255, 255, 0.18);
+  --color-accent-alt: #7dd3fc;
   --color-error: #ff8686;
   --color-button-bg: #ffffff;
   --color-button-text: #1a1a1a;
@@ -397,6 +398,187 @@ button:disabled {
 
 .panel-right {
   overflow: auto;
+}
+
+/* Game details panel styles (Phase 2) */
+.panel-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+  background: linear-gradient(180deg, rgba(0,0,0,0.24), transparent 40%);
+  border-left: 1px solid rgba(255,255,255,0.04);
+  min-width: 0;
+}
+
+.panel-heading-details {
+  position: relative;
+  padding: 0;
+  margin: 0;
+}
+
+.details-hero {
+  position: relative;
+  width: 100%;
+  height: clamp(200px, 30vh, 360px);
+  overflow: hidden;
+  background: linear-gradient(180deg, rgba(6,8,12,0.65), rgba(6,8,12,0.9));
+}
+
+.details-hero-bg {
+  position: absolute;
+  inset: 0;
+  background-position: center center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  filter: saturate(0.7) contrast(0.9) brightness(0.52) blur(0.4px);
+  transform: scale(1.03);
+  transition: transform 420ms ease, filter 420ms ease;
+}
+
+/* When loading or falling back, hide the image layer so the gradient/fallback shows without layout shift */
+.details-hero-bg.details-hero-loading {
+  opacity: 0;
+  transition: opacity 260ms ease;
+}
+.details-hero-bg {
+  opacity: 1;
+  transition: opacity 260ms ease;
+}
+
+.details-hero-overlay {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  height: 100%;
+  padding: 1.25rem 1.5rem;
+  gap: 0.75rem;
+  background-image: linear-gradient(180deg, rgba(0,0,0,0.0), rgba(0,0,0,0.6));
+}
+
+.details-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.details-title-row h2 {
+  margin: 0;
+  font-family: "Junicode", serif;
+  font-weight: 400;
+  font-size: clamp(1.6rem, 3.8vw, 2.4rem);
+  color: #ffffff;
+  text-shadow: 0 8px 28px rgba(0,0,0,0.6);
+  letter-spacing: 0.01em;
+}
+
+.details-action-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.details-action-row .primary-button {
+  background: linear-gradient(180deg, var(--color-button-bg), #f2f2f2);
+  color: var(--color-button-text);
+  padding: 0.7rem 1.15rem;
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(0,0,0,0.5);
+  font-weight: 700;
+}
+
+.details-action-row .secondary-button {
+  background: rgba(255,255,255,0.04);
+  color: var(--color-text);
+  padding: 0.52rem 0.85rem;
+  border-radius: 10px;
+  transition: background 160ms ease, transform 120ms ease;
+}
+
+.details-action-row .secondary-button:hover {
+  background: rgba(255,255,255,0.08);
+  transform: translateY(-1px);
+}
+
+.game-details-content {
+  padding: 1.25rem 1.5rem;
+  overflow: auto;
+}
+
+.game-details-columns {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 1.125rem;
+  align-items: start;
+}
+
+.game-details-main,
+.game-details-side {
+  min-height: 0;
+}
+
+.game-details-main .details-section,
+.game-details-side .details-section {
+  padding: 0.75rem;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.03);
+}
+
+.details-subsection {
+  margin-top: 0.8rem;
+}
+
+.activity-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.9rem;
+  align-items: start;
+}
+
+.details-section .muted {
+  color: rgba(255,255,255,0.78);
+  font-size: 0.92rem;
+  margin-top: 0.35rem;
+}
+
+.placeholder {
+  color: rgba(255,255,255,0.66);
+  font-style: italic;
+}
+
+.notes-card,
+.review-card {
+  padding: 0.9rem;
+  border-radius: 8px;
+  background: rgba(0,0,0,0.24);
+  color: rgba(255,255,255,0.92);
+}
+
+.installation-list > div {
+  padding: 0.42rem 0;
+  border-bottom: 1px solid rgba(255,255,255,0.02);
+}
+
+.installation-list > div:last-child {
+  border-bottom: none;
+}
+
+.placeholder {
+  color: rgba(255,255,255,0.6);
+  font-size: 0.95rem;
+}
+
+@media (max-width: 980px) {
+  .game-details-columns {
+    grid-template-columns: 1fr;
+  }
+  .details-action-row {
+    gap: 0.35rem;
+  }
 }
 
 .panel-middle {

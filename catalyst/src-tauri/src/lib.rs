@@ -116,6 +116,7 @@ struct LibraryGameInput {
     installed: bool,
     artwork_url: Option<String>,
     last_synced_at: String,
+    last_played_at: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -152,6 +153,7 @@ struct GameResponse {
     installed: bool,
     artwork_url: Option<String>,
     last_synced_at: String,
+    last_played_at: Option<String>,
     favorite: bool,
     steam_tags: Vec<String>,
     genres: Vec<String>,
@@ -366,6 +368,7 @@ struct SteamOwnedGame {
     playtime_forever: Option<i64>,
     img_logo_url: Option<String>,
     img_icon_url: Option<String>,
+    rtime_last_played: Option<i64>,
 }
 
 
@@ -3438,6 +3441,15 @@ fn map_steam_game(
         installed,
         artwork_url,
         last_synced_at: Utc::now().to_rfc3339(),
+        last_played_at: match game.rtime_last_played {
+            Some(secs) if secs > 0 => {
+                match Utc.timestamp_opt(secs, 0).single() {
+                    Some(dt) => Some(dt.to_rfc3339()),
+                    None => None,
+                }
+            }
+            _ => None,
+        },
     }
 }
 
@@ -3500,21 +3512,22 @@ fn replace_provider_games(
     let mut insert = connection
         .prepare(
             "
-            INSERT INTO games (user_id, provider, external_id, name, kind, playtime_minutes, installed, artwork_url, last_synced_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-            ON CONFLICT(user_id, provider, external_id) DO UPDATE SET
-              name = excluded.name,
-              kind = excluded.kind,
-              playtime_minutes = excluded.playtime_minutes,
-              installed = excluded.installed,
-              artwork_url = excluded.artwork_url,
-              last_synced_at = excluded.last_synced_at
+                        INSERT INTO games (user_id, provider, external_id, name, kind, playtime_minutes, installed, artwork_url, last_synced_at, last_played_at)
+                        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                        ON CONFLICT(user_id, provider, external_id) DO UPDATE SET
+                            name = excluded.name,
+                            kind = excluded.kind,
+                            playtime_minutes = excluded.playtime_minutes,
+                            installed = excluded.installed,
+                            artwork_url = excluded.artwork_url,
+                            last_synced_at = excluded.last_synced_at,
+                            last_played_at = excluded.last_played_at
             ",
         )
         .map_err(|error| format!("Failed to prepare game insert statement: {error}"))?;
 
     for game in games {
-        insert
+            insert
             .execute(params![
                 user_id,
                 provider,
@@ -3524,7 +3537,8 @@ fn replace_provider_games(
                 game.playtime_minutes,
                 if game.installed { 1 } else { 0 },
                 game.artwork_url,
-                game.last_synced_at
+                game.last_synced_at,
+                game.last_played_at
             ])
             .map_err(|error| format!("Failed to persist synced game: {error}"))?;
         // Persist derived genres for this game from cached Steam store tags (if any).
@@ -3585,8 +3599,9 @@ fn list_games_by_user(connection: &Connection, user_id: &str) -> Result<Vec<Game
               g.playtime_minutes,
               g.installed,
               g.artwork_url,
-              g.last_synced_at,
-              EXISTS(
+                            g.last_synced_at,
+                            g.last_played_at,
+                            EXISTS(
                 SELECT 1
                 FROM game_favorites favorite
                 WHERE favorite.user_id = g.user_id
@@ -3610,8 +3625,9 @@ fn list_games_by_user(connection: &Connection, user_id: &str) -> Result<Vec<Game
             let provider: String = row.get(0)?;
             let external_id: String = row.get(1)?;
             let installed_raw: i64 = row.get(5)?;
-            let favorite_raw: i64 = row.get(8)?;
-            let hide_in_library_raw: i64 = row.get(9)?;
+            let last_played: Option<String> = row.get(8)?;
+            let favorite_raw: i64 = row.get(9)?;
+            let hide_in_library_raw: i64 = row.get(10)?;
             let steam_tags = if provider.eq_ignore_ascii_case("steam") {
                 steam_tags_by_game
                     .get(&external_id)
@@ -3639,6 +3655,7 @@ fn list_games_by_user(connection: &Connection, user_id: &str) -> Result<Vec<Game
                 installed: installed_raw > 0,
                 artwork_url: row.get(6)?,
                 last_synced_at: row.get(7)?,
+                last_played_at: last_played,
                 favorite: favorite_raw > 0,
                 steam_tags,
                 genres,
@@ -6873,7 +6890,8 @@ fn initialize_database(db_path: &Path) -> Result<(), String> {
               playtime_minutes INTEGER NOT NULL,
               installed INTEGER NOT NULL DEFAULT 0,
               artwork_url TEXT,
-              last_synced_at TEXT NOT NULL,
+                            last_synced_at TEXT NOT NULL,
+                            last_played_at TEXT,
               PRIMARY KEY (user_id, provider, external_id),
               FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             );
@@ -7023,6 +7041,17 @@ fn migrate_games_table(connection: &Connection) -> Result<(), String> {
             )
             .map_err(|error| {
                 format!("Failed to migrate games table with installed column: {error}")
+            })?;
+    }
+
+    if !games_table_has_column(connection, "last_played_at")? {
+        connection
+            .execute(
+                "ALTER TABLE games ADD COLUMN last_played_at TEXT",
+                [],
+            )
+            .map_err(|error| {
+                format!("Failed to migrate games table with last_played_at column: {error}")
             })?;
     }
 
