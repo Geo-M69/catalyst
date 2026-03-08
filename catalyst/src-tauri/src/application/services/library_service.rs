@@ -1,5 +1,6 @@
 use crate::*;
 use crate::application::error::AppResult;
+use std::process::Command;
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -15,7 +16,10 @@ pub(crate) struct GameStoreMetadataResponse {
 	pub has_cloud_saves: Option<bool>,
 	pub cloud_details: Option<String>,
 	pub controller_support: Option<String>,
+	pub features: Option<Vec<FeatureResponse>>,
 }
+
+// FeatureResponse is defined in crate root (`lib.rs`) so it can be shared across responses.
 
 pub(crate) fn get_library(state: &AppState) -> AppResult<LibraryResponse> {
 	let connection = open_connection(&state.db_path)?;
@@ -184,6 +188,7 @@ pub(crate) fn get_game_store_metadata(
 			has_cloud_saves: None,
 			cloud_details: None,
 			controller_support: None,
+			features: None,
 		});
 	}
 
@@ -202,6 +207,7 @@ pub(crate) fn get_game_store_metadata(
 				has_cloud_saves: None,
 				cloud_details: None,
 				controller_support: None,
+				features: None,
 			})
 		}
 	};
@@ -220,10 +226,17 @@ pub(crate) fn get_game_store_metadata(
 		has_cloud_saves: None,
 		cloud_details: None,
 		controller_support: None,
+		features: None,
 	};
+
+	// Keep a reference to parsed store data (if available) to build normalized feature list later.
+	let mut maybe_data: Option<serde_json::Value> = None;
 
 	if let Ok(Some(cached)) = find_cached_steam_app_details(&connection, app_id, stale_before) {
 		if let Some(data) = cached.get("data") {
+
+			// capture parsed data for normalized feature building
+			maybe_data = Some(data.clone());
 			if let Some(devs) = data.get("developers").and_then(serde_json::Value::as_array) {
 				let mut out: Vec<String> = Vec::new();
 				for d in devs {
@@ -278,93 +291,171 @@ pub(crate) fn get_game_store_metadata(
 
 	// If no cached details were found, attempt a best-effort live fetch from the Steam Store
 	if response.short_description.is_none() || response.developers.is_none() {
+		// Prefer using steamcmd if available for an exact client-style appinfo
+		if let Ok(output) = Command::new("bash").arg("-lc").arg(format!("steamcmd +login anonymous +app_info_print {} +quit", app_id)).output() {
+			if output.status.success() {
+				if let Ok(text) = String::from_utf8(output.stdout) {
+					// Simple VDF-like key/value extraction: "key" "value"
+					let re = regex::Regex::new(r#"\"([^\"]+)\"\s+\"([^\"]*)\""#).unwrap();
+					let mut map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+					for cap in re.captures_iter(&text) {
+						map.insert(cap[1].to_string(), cap[2].to_string());
+					}
+										// populate response when available
+										if response.developers.is_none() {
+											if let Some(dev) = map.get("developer") {
+												response.developers = Some(vec![dev.to_string()]);
+											}
+										}
+										if response.publishers.is_none() {
+											if let Some(pubr) = map.get("publisher") {
+												response.publishers = Some(vec![pubr.to_string()]);
+											}
+										}
+										if response.short_description.is_none() {
+											if let Some(sd) = map.get("short_description") {
+												response.short_description = Some(sd.to_string());
+											}
+										}
+										if response.header_image.is_none() {
+											if let Some(h) = map.get("header_image") {
+												response.header_image = Some(h.to_string());
+											}
+										}
+										if response.franchise.is_none() {
+											if let Some(fr) = map.get("franchise") {
+												response.franchise = Some(fr.to_string());
+											}
+										}
+										// Build a minimal JSON details object to cache so downstream callers can reuse it
+										let mut obj = serde_json::Map::new();
+										let mut data_map = serde_json::Map::new();
+										if let Some(dev) = map.get("developer") {
+											data_map.insert("developers".to_string(), serde_json::Value::Array(vec![serde_json::Value::String(dev.to_string())]));
+										}
+										if let Some(pubr) = map.get("publisher") {
+											data_map.insert("publishers".to_string(), serde_json::Value::Array(vec![serde_json::Value::String(pubr.to_string())]));
+										}
+										if let Some(sd) = map.get("short_description") {
+											data_map.insert("short_description".to_string(), serde_json::Value::String(sd.to_string()));
+										}
+										if let Some(h) = map.get("header_image") {
+											data_map.insert("header_image".to_string(), serde_json::Value::String(h.to_string()));
+										}
+										if let Some(fr) = map.get("franchise") {
+											data_map.insert("franchise".to_string(), serde_json::Value::String(fr.to_string()));
+										}
+										obj.insert("data".to_string(), serde_json::Value::Object(data_map));
+										obj.insert("success".to_string(), serde_json::Value::Bool(true));
+										let entry = serde_json::Value::Object(obj);
+										let _ = crate::cache_steam_app_details(&connection, app_id, &entry);
+										// also expose parsed JSON data for later normalized feature building
+										if let Some(d) = entry.get("data") {
+											maybe_data = Some(d.clone());
+										}
+										// If we got any meaningful value, skip the HTTP store fetch.
+										if response.short_description.is_some() || response.developers.is_some() || response.publishers.is_some() {
+											// proceed to feature inference later; we have cached details now
+										} else {
+											// fall through to HTTP fetch below
+										}
+				}
+			}
+		}
 		if let Ok(client) = crate::build_http_client() {
-			let mut request_url = match url::Url::parse(crate::STEAM_APP_DETAILS_ENDPOINT) {
-				Ok(u) => u,
-				Err(_) => Url::parse("https://store.steampowered.com/api/appdetails").unwrap(),
-			};
-			// append query
-			request_url.query_pairs_mut().append_pair("appids", &app_id.to_string()).append_pair("l", "english");
-			if let Ok(resp) = client.get(request_url).send() {
-				if resp.status().is_success() {
-					if let Ok(payload) = resp.json::<serde_json::Value>() {
-						if let Some(entry) = payload.get(&app_id.to_string()) {
-							if entry.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
-								if let Some(data) = entry.get("data") {
-									let _ = crate::cache_steam_app_details(&connection, app_id, data);
-									// infer features similar to cache_steam_app_details implementation
-									let has_achievements = data.get("achievements").is_some();
-									let has_cloud = data
-										.get("cloud")
-										.and_then(|v| v.get("enabled").and_then(serde_json::Value::as_bool))
-										.unwrap_or_else(|| data.get("cloud").is_some());
-									let mut controller_support: Option<String> = None;
-									if let Some(categories) = data.get("categories").and_then(serde_json::Value::as_array) {
-										for cat in categories {
-											if let Some(desc) = cat.get("description").and_then(serde_json::Value::as_str) {
-												let lowered = desc.to_ascii_lowercase();
-												if lowered.contains("full controller") || lowered.contains("full controller support") {
-													controller_support = Some(String::from("Full"));
-													break;
-												}
-												if lowered.contains("partial controller") || lowered.contains("partial controller support") {
-													controller_support = Some(String::from("Partial"));
-													break;
+			// If steamcmd already provided useful fields, skip the HTTP store fetch.
+			if response.short_description.is_some() || response.developers.is_some() || response.publishers.is_some() {
+				// skip HTTP fetch: we prefer steamcmd results when present
+			} else {
+				let mut request_url = match url::Url::parse(crate::STEAM_APP_DETAILS_ENDPOINT) {
+					Ok(u) => u,
+					Err(_) => Url::parse("https://store.steampowered.com/api/appdetails").unwrap(),
+				};
+				// append query
+				request_url.query_pairs_mut().append_pair("appids", &app_id.to_string()).append_pair("l", "english");
+				if let Ok(resp) = client.get(request_url).send() {
+					if resp.status().is_success() {
+						if let Ok(payload) = resp.json::<serde_json::Value>() {
+							if let Some(entry) = payload.get(&app_id.to_string()) {
+								if entry.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+									if let Some(data) = entry.get("data") {
+										// capture parsed data for normalized feature building
+										maybe_data = Some(data.clone());
+										let _ = crate::cache_steam_app_details(&connection, app_id, data);
+										// infer features similar to cache_steam_app_details implementation
+										let has_achievements = data.get("achievements").is_some();
+										let has_cloud = data
+											.get("cloud")
+											.and_then(|v| v.get("enabled").and_then(serde_json::Value::as_bool))
+											.unwrap_or_else(|| data.get("cloud").is_some());
+										let mut controller_support: Option<String> = None;
+										if let Some(categories) = data.get("categories").and_then(serde_json::Value::as_array) {
+											for cat in categories {
+												if let Some(desc) = cat.get("description").and_then(serde_json::Value::as_str) {
+													let lowered = desc.to_ascii_lowercase();
+													if lowered.contains("full controller") || lowered.contains("full controller support") {
+														controller_support = Some(String::from("Full"));
+														break;
+													}
+													if lowered.contains("partial controller") || lowered.contains("partial controller support") {
+														controller_support = Some(String::from("Partial"));
+														break;
+													}
 												}
 											}
 										}
-									}
-									if controller_support.is_none() {
-										if let Some(cs) = data.get("controller_support").and_then(serde_json::Value::as_str) {
-											controller_support = Some(cs.to_owned());
-										} else if let Some(cs) = data.get("controller_supports").and_then(serde_json::Value::as_str) {
-											controller_support = Some(cs.to_owned());
+										if controller_support.is_none() {
+											if let Some(cs) = data.get("controller_support").and_then(serde_json::Value::as_str) {
+												controller_support = Some(cs.to_owned());
+											} else if let Some(cs) = data.get("controller_supports").and_then(serde_json::Value::as_str) {
+												controller_support = Some(cs.to_owned());
+											}
 										}
-									}
-									let _ = crate::cache_steam_app_features(&connection, app_id, has_achievements, None, has_cloud, None, controller_support.as_deref());
+										let _ = crate::cache_steam_app_features(&connection, app_id, has_achievements, None, has_cloud, None, controller_support.as_deref());
 
-									// apply freshly fetched data to response
-									if let Some(devs) = data.get("developers").and_then(|v| v.as_array()) {
-										let mut out: Vec<String> = Vec::new();
-										for d in devs {
-											if let Some(s) = d.as_str() {
-												out.push(s.to_owned());
+										// apply freshly fetched data to response
+										if let Some(devs) = data.get("developers").and_then(|v| v.as_array()) {
+											let mut out: Vec<String> = Vec::new();
+											for d in devs {
+												if let Some(s) = d.as_str() {
+													out.push(s.to_owned());
+												}
+											}
+											if !out.is_empty() {
+												response.developers = Some(out);
 											}
 										}
-										if !out.is_empty() {
-											response.developers = Some(out);
-										}
-									}
-									if let Some(pubs) = data.get("publishers").and_then(|v| v.as_array()) {
-										let mut out: Vec<String> = Vec::new();
-										for p in pubs {
-											if let Some(s) = p.as_str() {
-												out.push(s.to_owned());
+										if let Some(pubs) = data.get("publishers").and_then(|v| v.as_array()) {
+											let mut out: Vec<String> = Vec::new();
+											for p in pubs {
+												if let Some(s) = p.as_str() {
+													out.push(s.to_owned());
+												}
+											}
+											if !out.is_empty() {
+												response.publishers = Some(out);
 											}
 										}
-										if !out.is_empty() {
-											response.publishers = Some(out);
+										if let Some(fr) = data.get("franchise").and_then(serde_json::Value::as_str) {
+											response.franchise = Some(fr.to_owned());
 										}
-									}
-									if let Some(fr) = data.get("franchise").and_then(serde_json::Value::as_str) {
-										response.franchise = Some(fr.to_owned());
-									}
-									if let Some(rel) = data.get("release_date").and_then(|v| v.get("date")).and_then(serde_json::Value::as_str) {
-										response.release_date = Some(rel.to_owned());
-									}
-									if let Some(sd) = data.get("short_description").and_then(serde_json::Value::as_str) {
-										response.short_description = Some(sd.to_owned());
-									}
-									if let Some(h) = data.get("header_image").and_then(serde_json::Value::as_str) {
-										response.header_image = Some(h.to_owned());
+										if let Some(rel) = data.get("release_date").and_then(|v| v.get("date")).and_then(serde_json::Value::as_str) {
+											response.release_date = Some(rel.to_owned());
+										}
+										if let Some(sd) = data.get("short_description").and_then(serde_json::Value::as_str) {
+											response.short_description = Some(sd.to_owned());
+										}
+										if let Some(h) = data.get("header_image").and_then(serde_json::Value::as_str) {
+											response.header_image = Some(h.to_owned());
+										}
 									}
 								}
 							}
 						}
+						}
 					}
 				}
 			}
-		}
 	}
 
 	if let Ok(Some((has_ach, ach_count_opt, has_cloud, cloud_details_opt, controller_opt))) =
@@ -375,6 +466,106 @@ pub(crate) fn get_game_store_metadata(
 		response.has_cloud_saves = Some(has_cloud);
 		response.cloud_details = cloud_details_opt;
 		response.controller_support = controller_opt;
+	}
+
+	// Build a normalized features list using parsed store data and inferred flags.
+	{
+		let mut features: Vec<FeatureResponse> = Vec::new();
+
+		if let Some(ref data) = maybe_data {
+			// Categories mapping (Steam often lists these on the right)
+			if let Some(categories) = data.get("categories").and_then(serde_json::Value::as_array) {
+				let mut seen_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
+				// helper to canonicalize description to a preferred feature key/label
+				let canonical_from_desc = |desc: &str| -> Option<(String, String)> {
+					let lowered = desc.to_ascii_lowercase();
+					if lowered.contains("remote play together") || lowered.contains("remote play") {
+						return Some(("remote-play-together".to_string(), "Remote Play Together".to_string()));
+					}
+					if lowered.contains("multi-player") || lowered.contains("multiplayer") {
+						return Some(("multi-player".to_string(), "Multi-Player".to_string()));
+					}
+					if lowered.contains("co-op") || lowered.contains("cooperative") {
+						return Some(("multi-player".to_string(), "Multi-Player".to_string()));
+					}
+					if lowered.contains("single-player") || lowered.contains("single player") {
+						return Some(("single-player".to_string(), "Single-Player".to_string()));
+					}
+					if lowered.contains("achievements") || lowered.contains("steam achievements") {
+						return Some(("achievements".to_string(), "Achievements".to_string()));
+					}
+					if lowered.contains("full controller") {
+						return Some(("controller-full".to_string(), "Full Controller Support".to_string()));
+					}
+					if lowered.contains("partial controller") {
+						return Some(("controller-partial".to_string(), "Partial Controller Support".to_string()));
+					}
+					if lowered.contains("workshop") {
+						return Some(("workshop".to_string(), "Steam Workshop".to_string()));
+					}
+					if lowered.contains("family sharing") || lowered.contains("family-share") || lowered.contains("family_share") {
+						return Some(("family-sharing".to_string(), "Family Sharing".to_string()));
+					}
+					None
+				};
+				for cat in categories {
+					let id_opt = cat.get("id").and_then(|v| v.as_u64());
+					let desc_opt = cat.get("description").and_then(serde_json::Value::as_str).map(|s| s.to_string());
+					if let Some(desc) = desc_opt.as_deref() {
+						if let Some((key, label)) = canonical_from_desc(desc) {
+							if seen_keys.insert(key.clone()) {
+								features.push(FeatureResponse { key: key.clone(), label: label.clone(), icon: None, tooltip: None });
+							}
+							// don't also add generic category-<id> when a canonical mapping applies
+							continue;
+						}
+					}
+					// no canonical mapping: include category id-based feature so raw ids are available in UI
+					let label = desc_opt.clone().or_else(|| id_opt.map(|id| format!("Category {}", id))).unwrap_or_else(|| "Category".to_string());
+					let key = if let Some(id) = id_opt { format!("category-{}", id) } else { label.to_ascii_lowercase().replace(' ', "-") };
+					if seen_keys.insert(key.clone()) {
+						features.push(FeatureResponse { key: key.clone(), label: label.clone(), icon: None, tooltip: None });
+					}
+				}
+			}
+
+			// Controller-specific strings (DualShock / DualSense) may appear in other fields
+			let as_string = data.to_string().to_ascii_lowercase();
+			if as_string.contains("dualshock") {
+				features.push(FeatureResponse { key: "controller-dualshock".to_string(), label: "DualShock Support".to_string(), icon: Some("dualshock".to_string()), tooltip: None });
+			}
+			if as_string.contains("dualsense") {
+				features.push(FeatureResponse { key: "controller-dualsense".to_string(), label: "DualSense Support".to_string(), icon: Some("dualsense".to_string()), tooltip: None });
+			}
+			// Steam Workshop
+			if as_string.contains("workshop") || as_string.contains("steam workshop") {
+				features.push(FeatureResponse { key: "workshop".to_string(), label: "Steam Workshop".to_string(), icon: Some("workshop".to_string()), tooltip: None });
+			}
+			// Family Sharing eligibility
+			if as_string.contains("family sharing") || as_string.contains("family-share") || as_string.contains("family_share") {
+				features.push(FeatureResponse { key: "family-sharing".to_string(), label: "Family Sharing".to_string(), icon: Some("family".to_string()), tooltip: None });
+			}
+		}
+
+		// Achievements (use inferred/cached flag if present)
+		if response.has_achievements.unwrap_or(false) {
+			let tooltip = response.achievements_count.map(|c| format!("{} achievements", c));
+			features.push(FeatureResponse { key: "achievements".to_string(), label: "Achievements".to_string(), icon: Some("trophy".to_string()), tooltip });
+		}
+
+		// Cloud saves
+		if response.has_cloud_saves.unwrap_or(false) {
+			features.push(FeatureResponse { key: "cloud-saves".to_string(), label: "Cloud Saves".to_string(), icon: Some("cloud".to_string()), tooltip: response.cloud_details.clone() });
+		}
+
+		// Controller support summary
+		if let Some(ref ctrl) = response.controller_support {
+			features.push(FeatureResponse { key: "controller-support".to_string(), label: format!("Controller: {}", ctrl), icon: Some("gamepad".to_string()), tooltip: None });
+		}
+
+		if !features.is_empty() {
+			response.features = Some(features);
+		}
 	}
 
 	Ok(response)

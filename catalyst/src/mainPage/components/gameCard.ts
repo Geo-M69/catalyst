@@ -79,7 +79,7 @@ export const createGameCard = (game: GameResponse): HTMLElement => {
     card.dispatchEvent(evt);
   };
 
-  card.addEventListener("click", (e) => {
+  card.addEventListener("click", () => {
     // Ignore clicks that came from interactive children (e.g., context menus)
     openDetails();
   });

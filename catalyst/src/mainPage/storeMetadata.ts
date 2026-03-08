@@ -1,4 +1,5 @@
 import { ipcService } from "../shared/ipc/client";
+import type { Feature } from "./types";
 
 export interface GameStoreMetadata {
   developers?: string[];
@@ -12,6 +13,7 @@ export interface GameStoreMetadata {
   hasCloudSaves?: boolean;
   cloudDetails?: string | null;
   controllerSupport?: string | null;
+  features?: Feature[];
 }
 
 export const fetchGameStoreMetadata = async (provider: string, externalId: string): Promise<GameStoreMetadata | null> => {

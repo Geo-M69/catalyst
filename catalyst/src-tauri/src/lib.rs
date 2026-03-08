@@ -172,6 +172,16 @@ struct GameResponse {
     controller_support: Option<String>,
     achievements_count: Option<i64>,
     cloud_details: Option<String>,
+    features: Vec<FeatureResponse>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FeatureResponse {
+    key: String,
+    label: String,
+    icon: Option<String>,
+    tooltip: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -3830,6 +3840,7 @@ fn list_games_by_user(connection: &Connection, user_id: &str) -> Result<Vec<Game
                 controller_support: None,
                 achievements_count: None,
                 cloud_details: None,
+                features: Vec::new(),
             })
         })
         .map_err(|error| format!("Failed to query library rows: {error}"))?;
@@ -3917,8 +3928,10 @@ fn list_games_by_user(connection: &Connection, user_id: &str) -> Result<Vec<Game
             continue;
         }
         if let Ok(app_id) = game.external_id.parse::<u64>() {
-            if let Some(cached) = prefetched_details.get(&app_id) {
-                if let Some(data) = cached.get("data") {
+                let mut maybe_data: Option<serde_json::Value> = None;
+                if let Some(cached) = prefetched_details.get(&app_id) {
+                    if let Some(data) = cached.get("data") {
+                        maybe_data = Some(data.clone());
                     if let Some(devs) = data.get("developers").and_then(|v| v.as_array()) {
                         game.developers = devs
                             .iter()
@@ -3963,6 +3976,97 @@ fn list_games_by_user(connection: &Connection, user_id: &str) -> Result<Vec<Game
                 game.has_cloud_saves = *has_cloud;
                 game.cloud_details = cloud_details_opt.clone();
                 game.controller_support = controller_opt.clone();
+            }
+
+            // Build normalized features for the game based on cached details and features
+            let mut features: Vec<FeatureResponse> = Vec::new();
+            if let Some(data) = maybe_data {
+                if let Some(categories) = data.get("categories").and_then(serde_json::Value::as_array) {
+                    let mut seen_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
+                    // helper to canonicalize description to a preferred feature key/label
+                    let canonical_from_desc = |desc: &str| -> Option<(String, String)> {
+                        let lowered = desc.to_ascii_lowercase();
+                        if lowered.contains("remote play together") || lowered.contains("remote play") {
+                            return Some(("remote-play-together".to_string(), "Remote Play Together".to_string()));
+                        }
+                        if lowered.contains("multi-player") || lowered.contains("multiplayer") {
+                            return Some(("multi-player".to_string(), "Multi-Player".to_string()));
+                        }
+                        if lowered.contains("co-op") || lowered.contains("cooperative") {
+                            return Some(("multi-player".to_string(), "Multi-Player".to_string()));
+                        }
+                        if lowered.contains("single-player") || lowered.contains("single player") {
+                            return Some(("single-player".to_string(), "Single-Player".to_string()));
+                        }
+                        if lowered.contains("achievements") || lowered.contains("steam achievements") {
+                            return Some(("achievements".to_string(), "Achievements".to_string()));
+                        }
+                        if lowered.contains("full controller") {
+                            return Some(("controller-full".to_string(), "Full Controller Support".to_string()));
+                        }
+                        if lowered.contains("partial controller") {
+                            return Some(("controller-partial".to_string(), "Partial Controller Support".to_string()));
+                        }
+                        if lowered.contains("workshop") {
+                            return Some(("workshop".to_string(), "Steam Workshop".to_string()));
+                        }
+                        if lowered.contains("family sharing") || lowered.contains("family-share") || lowered.contains("family_share") {
+                            return Some(("family-sharing".to_string(), "Family Sharing".to_string()));
+                        }
+                        None
+                    };
+                    for cat in categories {
+                        let id_opt = cat.get("id").and_then(|v| v.as_u64());
+                        let desc_opt = cat.get("description").and_then(serde_json::Value::as_str).map(|s| s.to_string());
+                        if let Some(desc) = desc_opt.as_deref() {
+                            if let Some((key, label)) = canonical_from_desc(desc) {
+                                if seen_keys.insert(key.clone()) {
+                                    features.push(FeatureResponse { key: key.clone(), label: label.clone(), icon: None, tooltip: None });
+                                }
+                                // don't also add generic category-<id> when a canonical mapping applies
+                                continue;
+                            }
+                        }
+                        // no canonical mapping: include category id-based feature so raw ids are available in UI
+                        let label = desc_opt.clone().or_else(|| id_opt.map(|id| format!("Category {}", id))).unwrap_or_else(|| "Category".to_string());
+                        let key = if let Some(id) = id_opt { format!("category-{}", id) } else { label.to_ascii_lowercase().replace(' ', "-") };
+                        if seen_keys.insert(key.clone()) {
+                            features.push(FeatureResponse { key: key.clone(), label: label.clone(), icon: None, tooltip: None });
+                        }
+                    }
+                }
+
+                // Controller-specific strings (DualShock / DualSense) and workshop/family sharing may appear anywhere in the store data
+                let as_string = data.to_string().to_ascii_lowercase();
+                if as_string.contains("dualshock") {
+                    features.push(FeatureResponse { key: "controller-dualshock".to_string(), label: "DualShock Support".to_string(), icon: Some("dualshock".to_string()), tooltip: None });
+                }
+                if as_string.contains("dualsense") {
+                    features.push(FeatureResponse { key: "controller-dualsense".to_string(), label: "DualSense Support".to_string(), icon: Some("dualsense".to_string()), tooltip: None });
+                }
+                // Steam Workshop
+                if as_string.contains("workshop") || as_string.contains("steam workshop") {
+                    features.push(FeatureResponse { key: "workshop".to_string(), label: "Steam Workshop".to_string(), icon: Some("workshop".to_string()), tooltip: None });
+                }
+                // Family Sharing eligibility
+                if as_string.contains("family sharing") || as_string.contains("family-share") || as_string.contains("family_share") {
+                    features.push(FeatureResponse { key: "family-sharing".to_string(), label: "Family Sharing".to_string(), icon: Some("family".to_string()), tooltip: None });
+                }
+            }
+
+            if game.has_achievements {
+                let tooltip = game.achievements_count.map(|c| format!("{} achievements", c));
+                features.push(FeatureResponse { key: "achievements".to_string(), label: "Achievements".to_string(), icon: Some("trophy".to_string()), tooltip });
+            }
+            if game.has_cloud_saves {
+                features.push(FeatureResponse { key: "cloud-saves".to_string(), label: "Cloud Saves".to_string(), icon: Some("cloud".to_string()), tooltip: game.cloud_details.clone() });
+            }
+            if let Some(ref ctrl) = game.controller_support {
+                features.push(FeatureResponse { key: "controller-support".to_string(), label: format!("Controller: {}", ctrl), icon: Some("gamepad".to_string()), tooltip: None });
+            }
+
+            if !features.is_empty() {
+                game.features = features;
             }
         }
     }

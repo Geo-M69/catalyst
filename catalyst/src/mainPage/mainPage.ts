@@ -626,9 +626,11 @@ const renderGameDetails = (gameId: string): void => {
         const pathRow = document.createElement("div");
         pathRow.innerHTML = `<div><strong>Path</strong><div class=\"muted\">${install.installPath ?? "-"}</div></div>`;
         const sizeRow = document.createElement("div");
-        sizeRow.innerHTML = `<div><strong>Installed Size</strong><div class=\"muted\">${formatBytes(install.installedBytes) ?? "-"}</div></div>`;
+        sizeRow.innerHTML = `<div><strong>Installed Size</strong><div class=\"muted\">${formatBytes(install.sizeOnDiskBytes) ?? "-"}</div></div>`;
         list.append(pathRow, sizeRow);
-        installationSection.append(document.createElement("h4")).textContent = "Installation";
+        const h4 = document.createElement("h4");
+        h4.textContent = "Installation";
+        installationSection.append(h4);
         installationSection.append(list);
       }
     } catch (err) {
@@ -2354,6 +2356,19 @@ const renderDetailsDropdown = (gameId: string): void => {
   desc.textContent = (game as any).shortDescription ?? (game.shortDescription ?? (game as any).description ?? "");
   left.append(img, desc);
 
+  // center: metadata (create early so async metadata merge can update these elements)
+  const center = document.createElement("div");
+  center.className = "dd-center";
+  const developers = Array.isArray((game as any).developers) ? (game as any).developers.join(", ") : (game.developers ? game.developers.join(", ") : "-");
+  const publishers = Array.isArray((game as any).publishers) ? (game as any).publishers.join(", ") : (game.publishers ? game.publishers.join(", ") : "-");
+  const franText = (game as any).franchise ?? game.franchise ?? "-";
+  const releaseText = (game as any).release_date ?? (game as any).releaseDate ?? game.releaseDate ?? "-";
+  const dev = document.createElement("div"); dev.className = "meta-row"; dev.innerHTML = `<div class="meta-label">Developer</div><div>${escapeHtml(developers)}</div>`;
+  const pub = document.createElement("div"); pub.className = "meta-row"; pub.innerHTML = `<div class="meta-label">Publisher</div><div>${escapeHtml(publishers)}</div>`;
+  const fran = document.createElement("div"); fran.className = "meta-row"; fran.innerHTML = `<div class="meta-label">Franchise</div><div>${escapeHtml(String(franText))}</div>`;
+  const rel = document.createElement("div"); rel.className = "meta-row"; rel.innerHTML = `<div class="meta-label">Release Date</div><div>${escapeHtml(String(releaseText))}</div>`;
+  center.append(dev, pub, fran, rel);
+
   // If store metadata is missing or stale in the frontend, fetch it on-demand
   (async () => {
     try {
@@ -2412,36 +2427,50 @@ const renderDetailsDropdown = (gameId: string): void => {
     }
   })();
 
-  // center: metadata
-  const center = document.createElement("div");
-  center.className = "dd-center";
-  const developers = Array.isArray((game as any).developers) ? (game as any).developers.join(", ") : (game.developers ? game.developers.join(", ") : "-");
-  const publishers = Array.isArray((game as any).publishers) ? (game as any).publishers.join(", ") : (game.publishers ? game.publishers.join(", ") : "-");
-  const franText = (game as any).franchise ?? game.franchise ?? "-";
-  const releaseText = (game as any).release_date ?? (game as any).releaseDate ?? game.releaseDate ?? "-";
-  const dev = document.createElement("div"); dev.className = "meta-row"; dev.innerHTML = `<div class="meta-label">Developer</div><div>${escapeHtml(developers)}</div>`;
-  const pub = document.createElement("div"); pub.className = "meta-row"; pub.innerHTML = `<div class="meta-label">Publisher</div><div>${escapeHtml(publishers)}</div>`;
-  const fran = document.createElement("div"); fran.className = "meta-row"; fran.innerHTML = `<div class="meta-label">Franchise</div><div>${escapeHtml(String(franText))}</div>`;
-  const rel = document.createElement("div"); rel.className = "meta-row"; rel.innerHTML = `<div class="meta-label">Release Date</div><div>${escapeHtml(String(releaseText))}</div>`;
-  center.append(dev, pub, fran, rel);
+
 
   // right: features
   const right = document.createElement("div");
   right.className = "dd-right";
-  const features: Array<{ key: string; label: string; enabled: boolean }>= [
-    { key: "singleplayer", label: "Single-Player", enabled: !!(game as any).singlePlayer },
-    { key: "achievements", label: "Achievements", enabled: !!(game as any).hasAchievements },
-    { key: "cloud", label: "Cloud Saves", enabled: !!(game as any).hasCloudSaves },
-    { key: "family", label: "Family Sharing", enabled: !!(game as any).familySharing },
-  ];
-  for (const f of features) {
-    const row = document.createElement("div"); row.className = `feature ${f.enabled ? "enabled" : ""}`;
-    row.innerHTML = `<span class="dot" aria-hidden="true"></span><div>${f.label}</div>`;
+  // Render normalized features: prefer `game.features`, fall back to inferred flags. If frontend metadata is missing
+  // we'll fetch it in the background and update the right column dynamically.
+  const featureList: Array<{ key: string; label: string; icon?: string | null; tooltip?: string | null }> = [];
+  if (Array.isArray((game as any).features) && (game as any).features.length > 0) {
+    for (const f of (game as any).features) featureList.push({ key: f.key, label: f.label, icon: f.icon ?? null, tooltip: f.tooltip ?? null });
+  }
+
+  // fallback: render some basic inferred flags if none present
+  if (featureList.length === 0) {
+    if ((game as any).hasAchievements || game.hasAchievements) featureList.push({ key: "achievements", label: "Achievements", icon: "trophy" });
+    if ((game as any).hasCloudSaves || game.hasCloudSaves) featureList.push({ key: "cloud-saves", label: "Cloud Saves", icon: "cloud" });
+    const ctrlVal = (game as any).controllerSupport ?? game.controllerSupport;
+    if (ctrlVal) featureList.push({ key: "controller-support", label: `Controller: ${ctrlVal}`, icon: "gamepad" });
+  }
+
+  for (const f of featureList) {
+    const row = document.createElement("div"); row.className = `feature ${f.key}`;
+    const label = escapeHtml(String(f.label ?? ""));
+    const title = f.tooltip ? escapeHtml(String(f.tooltip)) : "";
+    row.innerHTML = `<span class="dot" aria-hidden="true"></span><div title="${title}">${label}</div>`;
     right.append(row);
   }
-  // controller support
-  const ctrl = document.createElement("div"); ctrl.className = "feature"; ctrl.innerHTML = `<span class="dot" aria-hidden="true"></span><div>Controller Support: ${escapeHtml(String((game as any).controllerSupport ?? game.controllerSupport ?? "Unknown"))}</div>`;
-  right.append(ctrl);
+
+  // If we don't have frontend metadata, fetch it and update the right column
+  if ((!Array.isArray((game as any).features) || (game as any).features.length === 0)) {
+    import("./storeMetadata").then(m => m.fetchGameStoreMetadata(game.provider, game.externalId)).then((meta) => {
+      if (meta && Array.isArray((meta as any).features) && (meta as any).features.length > 0) {
+        // clear and re-render
+        right.innerHTML = "";
+        for (const f of (meta as any).features) {
+          const row = document.createElement("div"); row.className = `feature ${f.key}`;
+          const label = escapeHtml(String(f.label ?? ""));
+          const title = f.tooltip ? escapeHtml(String(f.tooltip)) : "";
+          row.innerHTML = `<span class="dot" aria-hidden="true"></span><div title="${title}">${label}</div>`;
+          right.append(row);
+        }
+      }
+    }).catch(() => {});
+  }
 
   detailsDropdown.replaceChildren(left, center, right);
 };

@@ -49,6 +49,14 @@ export interface GameStoreMetadataPayload {
   hasCloudSaves?: boolean;
   cloudDetails?: string | null;
   controllerSupport?: string | null;
+  features?: FeaturePayload[];
+}
+
+export interface FeaturePayload {
+  key: string;
+  label: string;
+  icon?: string | null;
+  tooltip?: string | null;
 }
 
 export interface GameInstallLocationPayload {

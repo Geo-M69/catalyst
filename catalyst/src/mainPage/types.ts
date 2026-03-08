@@ -31,6 +31,19 @@ export interface GameResponse {
   releaseDate?: string;
   shortDescription?: string;
   headerImage?: string;
+  features?: Feature[];
+  hasAchievements?: boolean;
+  achievementsCount?: number | null;
+  hasCloudSaves?: boolean;
+  cloudDetails?: string | null;
+  controllerSupport?: string | null;
+}
+
+export interface Feature {
+  key: string;
+  label: string;
+  icon?: string;
+  tooltip?: string;
 }
 
 export interface CollectionResponse {
