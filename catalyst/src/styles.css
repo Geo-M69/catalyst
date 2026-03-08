@@ -316,6 +316,11 @@ button:disabled {
   background: #080808;
 }
 
+/* When the details dropdown is open, allow the page to scroll so content below can be reached */
+.library-page.details-dropdown-open {
+  overflow: auto;
+}
+
 .library-aspect-shell {
   --library-aspect-width: 100vw;
   --library-aspect-height: 100svh;
@@ -425,6 +430,24 @@ button:disabled {
   background: linear-gradient(180deg, rgba(6,8,12,0.65), rgba(6,8,12,0.9));
 }
 
+/* Make the hero visually fixed at the top of the details shell while allowing the
+   content below (title, dropdown, and the details content) to scroll as one
+   contiguous area. */
+#game-details-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 0; /* allow children to shrink inside flex container */
+  height: 100%;
+  max-height: 100%;
+  overflow: auto; /* page-level scroll for details area */
+}
+
+.details-hero {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+}
+
 .details-hero-bg {
   position: absolute;
   inset: 0;
@@ -519,6 +542,141 @@ body.show-back-button #game-details-back-button {
 .details-title-row-below h2 {
   text-shadow: none;
   color: var(--color-text, #ffffff);
+}
+
+/* Minimal three-column details dropdown */
+.details-dropdown {
+  /* make the dropdown part of the header flow so it pushes content below */
+  position: relative;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr; /* center column will be centered in the viewport */
+  gap: 0.75rem;
+  padding: 1.25rem 1.5rem; /* match game-details-content horizontal padding */
+  background: linear-gradient(180deg, rgba(6,8,12,0.95), rgba(6,8,12,0.98));
+  border-top: 1px solid rgba(255,255,255,0.04);
+  box-shadow: 0 6px 18px rgba(0,0,0,0.45);
+  min-height: 140px;
+  align-items: start;
+  box-sizing: border-box;
+}
+
+/* Inline dropdown: let the page handle scrolling; remove internal scrolling */
+.details-dropdown {
+  max-height: none;
+  overflow: visible;
+}
+
+.details-dropdown .dd-left {
+  /* place the left content in the first grid column; give it room for a longer description */
+  width: 520px;
+  display: flex;
+  flex-direction: row; /* image and description side-by-side */
+  gap: 0.6rem;
+  align-items: flex-start;
+  justify-self: start;
+}
+.details-dropdown .dd-left img {
+  width: 120px;
+  height: 160px;
+  object-fit: cover;
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.5);
+  display: block;
+  flex: 0 0 auto;
+}
+.details-dropdown .dd-left .dd-desc {
+  font-size: 0.95rem;
+  color: rgba(255,255,255,0.92);
+  line-height: 1.35;
+  flex: 1 1 auto;
+  max-width: calc(100% - 124px);
+}
+
+.details-dropdown .dd-center {
+  grid-column: 2 / 3;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0 0.5rem;
+  color: rgba(255,255,255,0.95);
+  align-items: center; /* center meta rows horizontally within the central column */
+  justify-self: center;
+}
+.details-dropdown .dd-center .meta-row {
+  display: flex;
+  gap: 0.5rem;
+}
+.details-dropdown .dd-center .meta-label {
+  min-width: 90px;
+  color: rgba(255,255,255,0.78);
+  text-align: right;
+}
+.details-dropdown .dd-center .meta-value {
+  min-width: 160px;
+}
+
+.details-dropdown .dd-right {
+  width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  color: rgba(255,255,255,0.9);
+  justify-self: end;
+}
+
+@media (max-width: 1100px) {
+  .details-dropdown {
+    gap: 0.5rem;
+    padding: 1rem 1rem;
+  }
+
+  .details-dropdown .dd-left {
+    width: 320px;
+    gap: 0.5rem;
+  }
+
+  .details-dropdown .dd-center {
+    grid-column: 2 / 3;
+    padding: 0 0.25rem;
+  }
+
+  .details-dropdown .dd-right {
+    width: 140px;
+  }
+}
+
+@media (max-width: 720px) {
+  /* stack for small screens */
+  .details-dropdown {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+
+  .details-dropdown .dd-left,
+  .details-dropdown .dd-center,
+  .details-dropdown .dd-right {
+    width: 100%;
+    justify-self: stretch;
+  }
+  .details-dropdown .dd-left {
+    flex-direction: row;
+  }
+}
+.details-dropdown .feature {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+.details-dropdown .feature .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.12);
+}
+.details-dropdown .feature.enabled .dot {
+  background: #7ed957;
 }
 
 /* Container replacing the old title element; holds the three activity/status items */
@@ -619,7 +777,7 @@ body.show-back-button #game-details-back-button {
   z-index: 20;
 }
 .details-action-row .secondary-button[data-tooltip]:hover::after,
-.details-action-row .secondary-button[data-tooltip]:focus::after {
+.details-action-row .secondary-button[data-tooltip]:focus-visible::after {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
 }
@@ -638,13 +796,21 @@ body.show-back-button #game-details-back-button {
   z-index: 21;
 }
 .details-action-row .secondary-button[data-tooltip]:hover::before,
-.details-action-row .secondary-button[data-tooltip]:focus::before {
+.details-action-row .secondary-button[data-tooltip]:focus-visible::before {
   opacity: 1;
+}
+
+/* When the Details dropdown is open, hide tooltips for the Details button */
+.details-action-row .secondary-button[aria-expanded="true"][data-tooltip]::after,
+.details-action-row .secondary-button[aria-expanded="true"][data-tooltip]::before {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transform: none !important;
 }
 
 .game-details-content {
   padding: 1.25rem 1.5rem;
-  overflow: auto;
+  overflow: visible; /* allow the whole section below the hero to scroll together */
 }
 
 .game-details-columns {

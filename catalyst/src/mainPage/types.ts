@@ -24,6 +24,13 @@ export interface GameResponse {
   steamTags?: string[];
   collections?: string[];
   hideInLibrary?: boolean;
+  // Enriched store metadata (optional)
+  developers?: string[];
+  publishers?: string[];
+  franchise?: string;
+  releaseDate?: string;
+  shortDescription?: string;
+  headerImage?: string;
 }
 
 export interface CollectionResponse {

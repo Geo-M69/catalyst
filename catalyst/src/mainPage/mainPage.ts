@@ -31,6 +31,15 @@ import type {
 
 export {};
 
+const escapeHtml = (unsafe: string): string => {
+  return String(unsafe)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+};
+
 const sessionAccountElement = document.getElementById("session-account");
 const sessionAccountButton = document.getElementById("session-account-button");
 const sessionAccountLabelElement = document.getElementById("session-account-label");
@@ -60,6 +69,7 @@ const detailsPlayButton = document.getElementById("details-play-button");
 const detailsSettingsButton = document.getElementById("details-settings-button");
 const detailsFavoriteButton = document.getElementById("details-favorite-button");
 const detailsPropertiesButton = document.getElementById("details-properties-button");
+const detailsDropdown = document.getElementById("details-dropdown");
 
 if (
   !(sessionAccountElement instanceof HTMLElement)
@@ -91,6 +101,7 @@ if (
   || !(detailsSettingsButton instanceof HTMLButtonElement)
   || !(detailsFavoriteButton instanceof HTMLButtonElement)
   || !(detailsPropertiesButton instanceof HTMLButtonElement)
+  || !(detailsDropdown instanceof HTMLElement)
 ) {
   throw new Error("Main page is missing required DOM elements");
 }
@@ -412,7 +423,9 @@ window.addEventListener("game-customization-changed", (ev: Event) => {
 });
 
 const renderGameDetails = (gameId: string): void => {
+  console.debug("renderGameDetails called for", gameId);
   const game = findGameById(gameId) ?? store.gameById.get(gameId) ?? null;
+  console.debug("resolved game:", game ? game.id : null);
   if (!game) {
     const playCellFallback = detailsTitleInfo.querySelector('.details-play-cell');
     const notFound = document.createElement('div');
@@ -498,6 +511,18 @@ const renderGameDetails = (gameId: string): void => {
     }
     detailsHeroBg.classList.remove("details-hero-loading");
   })();
+
+  // Debug: report UI visibility and content counts to help trace blank-details issue
+  try {
+    const shellHidden = gameDetailsShellElement.hidden;
+    const middleHidden = panelMiddleElement.hidden;
+    const gridHidden = libraryGridElement.hidden;
+    const contentChildren = gameDetailsContentElement.childElementCount;
+    const shellRect = gameDetailsShellElement.getBoundingClientRect();
+    console.debug("renderGameDetails UI state:", { shellHidden, middleHidden, gridHidden, contentChildren, shellRect });
+  } catch (err) {
+    console.debug("renderGameDetails UI debug failed", err);
+  }
 
   // Update action buttons
   detailsPlayButton.textContent = game.installed ? "Play" : "Install";
@@ -1095,6 +1120,7 @@ const registerGridZoomShortcut = (): void => {
 const setAllGames = (games: GameResponse[]): void => {
   store.allGames = games;
   store.gameById = new Map(games.map((game) => [game.id, game]));
+  console.debug("setAllGames: loaded", games.length, "games; sample ids:", games.slice(0,10).map(g => g.id));
   filterPanel.setSteamTagSuggestions(collectSteamTagSuggestions(games));
   updateCollectionSuggestions();
 };
@@ -2294,17 +2320,7 @@ if (detailsFavoriteButton instanceof HTMLButtonElement) {
   });
 }
 
-if (detailsPropertiesButton instanceof HTMLButtonElement) {
-  detailsPropertiesButton.addEventListener("click", async () => {
-    const gameId = store.selectedGameId;
-    if (!gameId) return;
-    const game = findGameById(gameId) ?? store.gameById.get(gameId);
-    if (!game) return;
-    await openGameProperties(game);
-    // After returning from properties, re-render details to pick up any changed artwork
-    renderGameDetails(game.id);
-  });
-}
+// Details button click handler removed: keep tooltip but do not open properties panel here.
 
 sessionAccountButton.addEventListener("click", () => {
   if (sessionAccountMenuElement.hidden) {
@@ -2314,6 +2330,159 @@ sessionAccountButton.addEventListener("click", () => {
 
   closeSessionAccountMenu();
 });
+
+// Details dropdown: render and toggle when the Details button is clicked
+const renderDetailsDropdown = (gameId: string): void => {
+  const game = findGameById(gameId) ?? store.gameById.get(gameId) ?? null;
+  if (!game) {
+    detailsDropdown.innerHTML = "";
+    return;
+  }
+
+  // left: cover (or header) + short description
+  const coverCandidates = getSteamArtworkCandidates(game, "cover");
+  const coverUrl = (coverCandidates && coverCandidates.length > 0) ? coverCandidates[0] : (game.artworkUrl ?? "");
+  const headerImage = (game as any).headerImage ?? (game.headerImage ?? undefined);
+  const left = document.createElement("div");
+  left.className = "dd-left";
+  const img = document.createElement("img");
+  // Prefer cover art (portrait) for the thumbnail; fall back to enriched header image
+  img.src = coverUrl || headerImage || "";
+  img.alt = `${game.name} cover`;
+  const desc = document.createElement("div");
+  desc.className = "dd-desc";
+  desc.textContent = (game as any).shortDescription ?? (game.shortDescription ?? (game as any).description ?? "");
+  left.append(img, desc);
+
+  // If store metadata is missing or stale in the frontend, fetch it on-demand
+  (async () => {
+    try {
+      const meta = await import("./storeMetadata").then(m => m.fetchGameStoreMetadata(game.provider, game.externalId));
+      if (meta) {
+        console.debug("fetchGameStoreMetadata result:", meta);
+        // merge into displayed elements
+        if (!desc.textContent || desc.textContent.trim().length === 0) {
+          desc.textContent = meta.shortDescription ?? "";
+        }
+        // update center fields if present: developer, publisher, franchise, release date
+        const devEl = center.querySelector('.meta-row:nth-child(1) > div:nth-child(2)');
+        if (devEl && meta.developers) devEl.textContent = meta.developers.join(', ');
+        const pubEl = center.querySelector('.meta-row:nth-child(2) > div:nth-child(2)');
+        if (pubEl && meta.publishers) pubEl.textContent = meta.publishers.join(', ');
+        const franEl = center.querySelector('.meta-row:nth-child(3) > div:nth-child(2)');
+        if (franEl) {
+          const rawFr = (meta.franchise && meta.franchise.toString().trim().length > 0) ? meta.franchise : undefined;
+          // Heuristic fallback: try to infer franchise from the game name (prefix before ':' or ' - ')
+          let inferredFr: string | undefined = undefined;
+          if (!rawFr) {
+            try {
+              const title = (game && game.name) ? String(game.name) : "";
+              if (title.includes(":")) {
+                inferredFr = title.split(":")[0].trim();
+              } else if (title.includes(" - ")) {
+                inferredFr = title.split(" - ")[0].trim();
+              } else if (title.includes(" — ")) {
+                inferredFr = title.split(" — ")[0].trim();
+              }
+              if (inferredFr && inferredFr.length === 0) inferredFr = undefined;
+            } catch {
+              inferredFr = undefined;
+            }
+          }
+          // Fallback order: explicit franchise -> inferred from title -> publisher name -> '-'
+          let publisherFallback: string | undefined = undefined;
+          if (meta && Array.isArray((meta as any).publishers) && (meta as any).publishers.length > 0) {
+            const p = (meta as any).publishers[0];
+            if (p && String(p).trim().length > 0) publisherFallback = String(p).trim();
+          }
+          if (!publisherFallback && Array.isArray((game as any).publishers) && (game as any).publishers.length > 0) {
+            const p = (game as any).publishers[0];
+            if (p && String(p).trim().length > 0) publisherFallback = String(p).trim();
+          }
+
+          const franchiseVal = rawFr ?? inferredFr ?? publisherFallback;
+          franEl.textContent = franchiseVal ?? "-";
+          if (!rawFr && franchiseVal) console.debug("franchise filled from fallback:", franchiseVal);
+        }
+        const relEl = center.querySelector('.meta-row:nth-child(4) > div:nth-child(2)');
+        if (relEl) relEl.textContent = meta.releaseDate ?? "-";
+      }
+    } catch (err) {
+      // ignore
+    }
+  })();
+
+  // center: metadata
+  const center = document.createElement("div");
+  center.className = "dd-center";
+  const developers = Array.isArray((game as any).developers) ? (game as any).developers.join(", ") : (game.developers ? game.developers.join(", ") : "-");
+  const publishers = Array.isArray((game as any).publishers) ? (game as any).publishers.join(", ") : (game.publishers ? game.publishers.join(", ") : "-");
+  const franText = (game as any).franchise ?? game.franchise ?? "-";
+  const releaseText = (game as any).release_date ?? (game as any).releaseDate ?? game.releaseDate ?? "-";
+  const dev = document.createElement("div"); dev.className = "meta-row"; dev.innerHTML = `<div class="meta-label">Developer</div><div>${escapeHtml(developers)}</div>`;
+  const pub = document.createElement("div"); pub.className = "meta-row"; pub.innerHTML = `<div class="meta-label">Publisher</div><div>${escapeHtml(publishers)}</div>`;
+  const fran = document.createElement("div"); fran.className = "meta-row"; fran.innerHTML = `<div class="meta-label">Franchise</div><div>${escapeHtml(String(franText))}</div>`;
+  const rel = document.createElement("div"); rel.className = "meta-row"; rel.innerHTML = `<div class="meta-label">Release Date</div><div>${escapeHtml(String(releaseText))}</div>`;
+  center.append(dev, pub, fran, rel);
+
+  // right: features
+  const right = document.createElement("div");
+  right.className = "dd-right";
+  const features: Array<{ key: string; label: string; enabled: boolean }>= [
+    { key: "singleplayer", label: "Single-Player", enabled: !!(game as any).singlePlayer },
+    { key: "achievements", label: "Achievements", enabled: !!(game as any).hasAchievements },
+    { key: "cloud", label: "Cloud Saves", enabled: !!(game as any).hasCloudSaves },
+    { key: "family", label: "Family Sharing", enabled: !!(game as any).familySharing },
+  ];
+  for (const f of features) {
+    const row = document.createElement("div"); row.className = `feature ${f.enabled ? "enabled" : ""}`;
+    row.innerHTML = `<span class="dot" aria-hidden="true"></span><div>${f.label}</div>`;
+    right.append(row);
+  }
+  // controller support
+  const ctrl = document.createElement("div"); ctrl.className = "feature"; ctrl.innerHTML = `<span class="dot" aria-hidden="true"></span><div>Controller Support: ${escapeHtml(String((game as any).controllerSupport ?? game.controllerSupport ?? "Unknown"))}</div>`;
+  right.append(ctrl);
+
+  detailsDropdown.replaceChildren(left, center, right);
+};
+
+const closeDetailsDropdown = (): void => {
+  detailsDropdown.hidden = true;
+  detailsDropdown.setAttribute("aria-hidden", "true");
+  detailsPropertiesButton.setAttribute("aria-expanded", "false");
+  document.body.classList.remove("details-dropdown-open");
+};
+
+const openDetailsDropdown = (gameId: string): void => {
+  renderDetailsDropdown(gameId);
+  detailsDropdown.hidden = false;
+  detailsDropdown.setAttribute("aria-hidden", "false");
+  detailsPropertiesButton.setAttribute("aria-expanded", "true");
+  document.body.classList.add("details-dropdown-open");
+};
+
+// Toggle handler
+detailsPropertiesButton.addEventListener("click", (ev) => {
+  ev.stopPropagation();
+  const gameId = store.selectedGameId;
+  if (!gameId) return;
+  if (detailsDropdown.hidden) {
+    openDetailsDropdown(gameId);
+  } else {
+    closeDetailsDropdown();
+  }
+});
+
+// Close on outside click
+document.addEventListener("click", (ev) => {
+  if (detailsDropdown.hidden) return;
+  const target = ev.target as Node | null;
+  if (!target) return;
+  if (!detailsDropdown.contains(target) && target !== detailsPropertiesButton) {
+    closeDetailsDropdown();
+  }
+});
+
 
 sessionAccountButton.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {

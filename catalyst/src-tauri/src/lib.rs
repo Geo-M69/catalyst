@@ -159,6 +159,19 @@ struct GameResponse {
     genres: Vec<String>,
     collections: Vec<String>,
     hide_in_library: bool,
+    // Enriched metadata from store (when available)
+    developers: Vec<String>,
+    publishers: Vec<String>,
+    franchise: Option<String>,
+    release_date: Option<String>,
+    short_description: Option<String>,
+    header_image: Option<String>,
+    // Inferred / cached feature flags
+    has_achievements: bool,
+    has_cloud_saves: bool,
+    controller_support: Option<String>,
+    achievements_count: Option<i64>,
+    cloud_details: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -2238,7 +2251,110 @@ fn cache_steam_app_details(
         )
         .map_err(|error| format!("Failed to cache Steam app details: {error}"))?;
 
+    // Also attempt to infer and cache common features (best-effort)
+    if let Some(data) = details.get("data") {
+        // achievements: presence of `achievements` object
+        let has_achievements = data.get("achievements").is_some();
+        // cloud saves: presence of `cloud` object or `cloud` enabled flag
+        let has_cloud = data
+            .get("cloud")
+            .and_then(|v| v.get("enabled").and_then(serde_json::Value::as_bool))
+            .unwrap_or_else(|| data.get("cloud").is_some());
+
+        // controller support: look in `categories` for controller descriptions, fallback to `controller_support` fields
+        let mut controller_support: Option<String> = None;
+        if let Some(categories) = data.get("categories").and_then(serde_json::Value::as_array) {
+            for cat in categories {
+                if let Some(desc) = cat.get("description").and_then(serde_json::Value::as_str) {
+                    let lowered = desc.to_ascii_lowercase();
+                    if lowered.contains("full controller") || lowered.contains("full controller support") {
+                        controller_support = Some(String::from("Full"));
+                        break;
+                    }
+                    if lowered.contains("partial controller") || lowered.contains("partial controller support") {
+                        controller_support = Some(String::from("Partial"));
+                        break;
+                    }
+                }
+            }
+        }
+        if controller_support.is_none() {
+            if let Some(cs) = data.get("controller_support").and_then(serde_json::Value::as_str) {
+                controller_support = Some(cs.to_owned());
+            } else if let Some(cs) = data.get("controller_supports").and_then(serde_json::Value::as_str) {
+                controller_support = Some(cs.to_owned());
+            }
+        }
+
+        // best-effort persist features (achievements_count & cloud_details not inferred here)
+        let _ = cache_steam_app_features(connection, app_id, has_achievements, None, has_cloud, None, controller_support.as_deref());
+    }
+
     Ok(())
+}
+
+fn cache_steam_app_features(
+    connection: &Connection,
+    app_id: u64,
+    has_achievements: bool,
+    achievements_count: Option<u64>,
+    has_cloud_saves: bool,
+    cloud_details: Option<&str>,
+    controller_support: Option<&str>,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "INSERT INTO steam_app_features (app_id, has_achievements, achievements_count, has_cloud_saves, cloud_details, controller_support, fetched_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            ON CONFLICT(app_id) DO UPDATE SET
+              has_achievements = excluded.has_achievements,
+              achievements_count = excluded.achievements_count,
+              has_cloud_saves = excluded.has_cloud_saves,
+              cloud_details = excluded.cloud_details,
+              controller_support = excluded.controller_support,
+              fetched_at = excluded.fetched_at",
+            params![
+                app_id.to_string(),
+                if has_achievements { 1 } else { 0 },
+                achievements_count.map(|v| v.to_string()),
+                if has_cloud_saves { 1 } else { 0 },
+                cloud_details,
+                controller_support,
+                Utc::now().to_rfc3339()
+            ],
+        )
+        .map_err(|error| format!("Failed to cache Steam app features: {error}"))?;
+
+    Ok(())
+}
+
+fn find_cached_steam_app_features(
+    connection: &Connection,
+    app_id: u64,
+    stale_before: chrono::DateTime<Utc>,
+) -> Result<Option<(bool, Option<i64>, bool, Option<String>, Option<String>)>, String> {
+    let cached = connection
+        .query_row(
+            "SELECT has_achievements, achievements_count, has_cloud_saves, cloud_details, controller_support, fetched_at FROM steam_app_features WHERE app_id = ?1",
+            params![app_id.to_string()],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, i64>(2)?, row.get::<_, Option<String>>(3)?, row.get::<_, Option<String>>(4)?, row.get::<_, String>(5)?)),
+        )
+        .optional()
+        .map_err(|error| format!("Failed to query cached Steam app features: {error}"))?;
+
+    let Some((ach_raw, ach_count_opt, cloud_raw, cloud_details_opt, controller_opt, fetched_at)) = cached else {
+        return Ok(None);
+    };
+
+    let is_fresh = chrono::DateTime::parse_from_rfc3339(&fetched_at)
+        .map(|timestamp| timestamp.with_timezone(&Utc) >= stale_before)
+        .unwrap_or(false);
+    if !is_fresh {
+        return Ok(None);
+    }
+
+    let achievements_count = ach_count_opt.and_then(|s| s.parse::<i64>().ok());
+    Ok(Some((ach_raw > 0, achievements_count, cloud_raw > 0, cloud_details_opt, controller_opt)))
 }
 
 #[cfg(test)]
@@ -2482,6 +2598,48 @@ fn fetch_steam_install_size_estimate_from_store(
                             None => size_bytes,
                         });
                     }
+
+                    // infer achievements count and cloud details from details payload when present
+                    let mut inferred_achievements_count: Option<u64> = None;
+                    if let Some(ach) = data.get("achievements") {
+                        if let Some(total) = ach.get("total").and_then(serde_json::Value::as_u64) {
+                            inferred_achievements_count = Some(total);
+                        } else if let Some(arr) = ach.as_array() {
+                            inferred_achievements_count = Some(arr.len() as u64);
+                        }
+                    }
+
+                    let mut inferred_cloud_details: Option<String> = None;
+                    let mut inferred_has_cloud = false;
+                    if let Some(cloud) = data.get("cloud") {
+                        inferred_has_cloud = cloud.get("enabled").and_then(serde_json::Value::as_bool).unwrap_or(true);
+                        if let Some(note) = cloud.get("note").and_then(serde_json::Value::as_str) {
+                            inferred_cloud_details = Some(note.to_owned());
+                        } else if let Some(desc) = cloud.get("description").and_then(serde_json::Value::as_str) {
+                            inferred_cloud_details = Some(desc.to_owned());
+                        }
+                    }
+
+                    // also attempt to infer cloud support from depots/platforms (best-effort)
+                    if inferred_cloud_details.is_none() {
+                        if let Some(pc_req) = data.get("pc_requirements") {
+                            if pc_req.is_object() {
+                                inferred_cloud_details = Some(String::from("PC requirements available"));
+                            }
+                        }
+                    }
+
+                    // persist inferred features to features cache (best-effort)
+                    // controller support not available in this scope; pass None
+                    let _ = cache_steam_app_features(
+                        connection,
+                        app_id,
+                        data.get("achievements").is_some(),
+                        inferred_achievements_count,
+                        inferred_has_cloud,
+                        inferred_cloud_details.as_deref(),
+                        None,
+                    );
                 }
             }
             return Ok(max_size_bytes);
@@ -3661,12 +3819,155 @@ fn list_games_by_user(connection: &Connection, user_id: &str) -> Result<Vec<Game
                 genres,
                 collections,
                 hide_in_library: hide_in_library_raw > 0,
+                developers: Vec::new(),
+                publishers: Vec::new(),
+                franchise: None,
+                release_date: None,
+                short_description: None,
+                header_image: None,
+                has_achievements: false,
+                has_cloud_saves: false,
+                controller_support: None,
+                achievements_count: None,
+                cloud_details: None,
             })
         })
         .map_err(|error| format!("Failed to query library rows: {error}"))?;
 
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("Failed to decode library rows: {error}"))
+    let mut games = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Failed to decode library rows: {error}"))?;
+
+    // Enrich steam games with cached Steam Store details (best-effort).
+    // To avoid N+1 queries, prefetch cached details and features for all Steam app ids present in the library.
+    let stale_before = Utc::now() - ChronoDuration::hours(STEAM_APP_DETAILS_CACHE_TTL_HOURS);
+    let mut steam_app_ids: Vec<u64> = Vec::new();
+    for g in games.iter() {
+        if g.provider.eq_ignore_ascii_case("steam") {
+            if let Ok(app_id) = g.external_id.parse::<u64>() {
+                steam_app_ids.push(app_id);
+            }
+        }
+    }
+
+    use std::collections::HashMap as StdHashMap;
+    let mut prefetched_details: StdHashMap<u64, serde_json::Value> = StdHashMap::new();
+    let mut prefetched_features: StdHashMap<u64, (bool, Option<i64>, bool, Option<String>, Option<String>)> = StdHashMap::new();
+
+    if !steam_app_ids.is_empty() {
+        // Prefetch steam_app_details for these app ids in a single query (numeric literal list)
+        let id_list = steam_app_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT app_id, details_json, fetched_at FROM steam_app_details WHERE app_id IN ({})",
+            id_list
+        );
+        if let Ok(mut stmt) = connection.prepare(&sql) {
+            if let Ok(rows) = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))) {
+                for r in rows {
+                    if let Ok((app_id_s, details_json, fetched_at)) = r {
+                        if let Ok(app_id) = app_id_s.parse::<u64>() {
+                            let is_fresh = chrono::DateTime::parse_from_rfc3339(&fetched_at)
+                                .map(|timestamp| timestamp.with_timezone(&Utc) >= stale_before)
+                                .unwrap_or(false);
+                            if !is_fresh {
+                                continue;
+                            }
+                            match serde_json::from_str::<serde_json::Value>(&details_json) {
+                                Ok(parsed) => {
+                                    prefetched_details.insert(app_id, parsed);
+                                }
+                                Err(err) => {
+                                    eprintln!("Failed to parse cached steam_app_details for {}: {}", app_id, err);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Prefetch steam_app_features similarly
+        let sqlf = format!(
+            "SELECT app_id, has_achievements, achievements_count, has_cloud_saves, cloud_details, controller_support, fetched_at FROM steam_app_features WHERE app_id IN ({})",
+            id_list
+        );
+        if let Ok(mut stmt) = connection.prepare(&sqlf) {
+            if let Ok(rows) = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, i64>(3)?, row.get::<_, Option<String>>(4)?, row.get::<_, Option<String>>(5)?, row.get::<_, String>(6)?))) {
+                for r in rows {
+                    if let Ok((app_id_s, has_ach_raw, ach_count_opt_s, has_cloud_raw, cloud_details_opt, controller_opt, fetched_at)) = r {
+                        if let Ok(app_id) = app_id_s.parse::<u64>() {
+                            let is_fresh = chrono::DateTime::parse_from_rfc3339(&fetched_at)
+                                .map(|timestamp| timestamp.with_timezone(&Utc) >= stale_before)
+                                .unwrap_or(false);
+                            if !is_fresh {
+                                continue;
+                            }
+                            let achievements_count = ach_count_opt_s.and_then(|s| s.parse::<i64>().ok());
+                            prefetched_features.insert(app_id, (has_ach_raw > 0, achievements_count, has_cloud_raw > 0, cloud_details_opt, controller_opt));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Apply prefetched data to games
+    for game in games.iter_mut() {
+        if !game.provider.eq_ignore_ascii_case("steam") {
+            continue;
+        }
+        if let Ok(app_id) = game.external_id.parse::<u64>() {
+            if let Some(cached) = prefetched_details.get(&app_id) {
+                if let Some(data) = cached.get("data") {
+                    if let Some(devs) = data.get("developers").and_then(|v| v.as_array()) {
+                        game.developers = devs
+                            .iter()
+                            .filter_map(|s| s.as_str().map(|s| s.to_string()))
+                            .collect();
+                    }
+                    if let Some(pubs) = data.get("publishers").and_then(|v| v.as_array()) {
+                        game.publishers = pubs
+                            .iter()
+                            .filter_map(|s| s.as_str().map(|s| s.to_string()))
+                            .collect();
+                    }
+                    // franchise: prefer `franchise`, fall back to `series` array joined
+                    game.franchise = data
+                        .get("franchise")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .or_else(|| {
+                            data.get("series").and_then(|v| v.as_array()).map(|arr| {
+                                arr.iter()
+                                    .filter_map(|s| s.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            })
+                        });
+
+                    // release_date: try nested `release_date.date`, then plain string fallback
+                    game.release_date = data
+                        .get("release_date")
+                        .and_then(|v| v.get("date"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .or_else(|| data.get("release_date").and_then(|v| v.as_str()).map(|s| s.to_string()));
+                    game.short_description = data.get("short_description").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    game.header_image = data.get("header_image").and_then(|v| v.as_str()).map(|s| s.to_string());
+                }
+            }
+
+            if let Some((has_ach, ach_count_opt, has_cloud, cloud_details_opt, controller_opt)) = prefetched_features.get(&app_id) {
+                game.has_achievements = *has_ach;
+                game.achievements_count = *ach_count_opt;
+                game.has_cloud_saves = *has_cloud;
+                game.cloud_details = cloud_details_opt.clone();
+                game.controller_support = controller_opt.clone();
+            }
+        }
+    }
+
+    Ok(games)
 }
 
 fn game_membership_key(provider: &str, external_id: &str) -> String {
@@ -7014,6 +7315,18 @@ fn initialize_database(db_path: &Path) -> Result<(), String> {
 
                         CREATE INDEX IF NOT EXISTS idx_steam_app_details_fetched_at ON steam_app_details(fetched_at);
 
+                                    CREATE TABLE IF NOT EXISTS steam_app_features (
+                                        app_id TEXT PRIMARY KEY,
+                                        has_achievements INTEGER NOT NULL DEFAULT 0,
+                                        achievements_count INTEGER,
+                                        has_cloud_saves INTEGER NOT NULL DEFAULT 0,
+                                        cloud_details TEXT,
+                                        controller_support TEXT,
+                                        fetched_at TEXT NOT NULL
+                                    );
+
+                                    CREATE INDEX IF NOT EXISTS idx_steam_app_features_fetched_at ON steam_app_features(fetched_at);
+
             CREATE INDEX IF NOT EXISTS idx_steam_app_store_tags_fetched_at ON steam_app_store_tags(fetched_at);
             ",
         )
@@ -7136,6 +7449,7 @@ pub fn run() {
             interface::tauri::commands::auth::get_session,
             interface::tauri::commands::auth::start_steam_auth,
             interface::tauri::commands::library::get_library,
+            interface::tauri::commands::library::get_game_store_metadata,
             // `get_steam_status` is a server-side helper (not exposed to the
             // frontend) and is intentionally not registered here.
             interface::tauri::commands::library::sync_steam_library,

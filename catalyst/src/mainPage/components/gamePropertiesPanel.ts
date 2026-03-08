@@ -195,7 +195,7 @@ const DEFAULT_GENERAL_SETTINGS: GameGeneralSettings = {
 };
 const DEFAULT_COMPATIBILITY_SETTINGS: GameCompatibilitySettings = {
   forceSteamPlayCompatibilityTool: false,
-  steamPlayCompatibilityTool: DEFAULT_COMPATIBILITY_TOOL_OPTIONS[0].id,
+  steamPlayCompatibilityTool: DEFAULT_COMPATIBILITY_TOOL_OPTIONS[0]?.id ?? "",
 };
 const AUTOMATIC_UPDATES_OPTIONS: readonly DropdownOption[] = [
   {
@@ -276,7 +276,6 @@ const DEFAULT_GAME_VERSION_BETA_OPTIONS: readonly GameVersionBetaOption[] = [
     description: "Most common version of the game",
     lastUpdated: "Unavailable",
     name: "Default Public Version",
-    buildId: undefined,
   },
 ] as const;
 const DEFAULT_GAME_VERSIONS_BETAS_SETTINGS: GameVersionsBetasSettings = {
@@ -351,67 +350,67 @@ const toRecord = (value: unknown): Record<string, unknown> | null => {
 
 const parseGeneralSettings = (record: Record<string, unknown>): GameGeneralSettings => {
   return {
-    steamOverlayEnabled: typeof record.steamOverlayEnabled === "boolean"
-      ? record.steamOverlayEnabled
+    steamOverlayEnabled: typeof record["steamOverlayEnabled"] === "boolean"
+      ? (record["steamOverlayEnabled"] as boolean)
       : DEFAULT_GENERAL_SETTINGS.steamOverlayEnabled,
-    language: typeof record.language === "string" && record.language.trim().length > 0
-      ? record.language
+    language: typeof record["language"] === "string" && (record["language"] as string).trim().length > 0
+      ? (record["language"] as string)
       : DEFAULT_GENERAL_SETTINGS.language,
-    launchOptions: typeof record.launchOptions === "string"
-      ? record.launchOptions
+    launchOptions: typeof record["launchOptions"] === "string"
+      ? (record["launchOptions"] as string)
       : DEFAULT_GENERAL_SETTINGS.launchOptions,
   };
 };
 
 const parseCompatibilitySettings = (record: Record<string, unknown>): GameCompatibilitySettings => {
   return {
-    forceSteamPlayCompatibilityTool: typeof record.forceSteamPlayCompatibilityTool === "boolean"
-      ? record.forceSteamPlayCompatibilityTool
+    forceSteamPlayCompatibilityTool: typeof record["forceSteamPlayCompatibilityTool"] === "boolean"
+      ? (record["forceSteamPlayCompatibilityTool"] as boolean)
       : DEFAULT_COMPATIBILITY_SETTINGS.forceSteamPlayCompatibilityTool,
-    steamPlayCompatibilityTool: typeof record.steamPlayCompatibilityTool === "string"
-      && record.steamPlayCompatibilityTool.trim().length > 0
-      ? record.steamPlayCompatibilityTool
+    steamPlayCompatibilityTool: typeof record["steamPlayCompatibilityTool"] === "string"
+      && (record["steamPlayCompatibilityTool"] as string).trim().length > 0
+      ? (record["steamPlayCompatibilityTool"] as string)
       : DEFAULT_COMPATIBILITY_SETTINGS.steamPlayCompatibilityTool,
   };
 };
 
 const parseUpdatesSettings = (record: Record<string, unknown>): GameUpdatesSettings => {
   return {
-    automaticUpdatesMode: typeof record.automaticUpdatesMode === "string"
-      && isAutomaticUpdatesMode(record.automaticUpdatesMode)
-      ? record.automaticUpdatesMode
+    automaticUpdatesMode: typeof record["automaticUpdatesMode"] === "string"
+      && isAutomaticUpdatesMode(record["automaticUpdatesMode"] as string)
+      ? (record["automaticUpdatesMode"] as AutomaticUpdatesMode)
       : DEFAULT_UPDATES_SETTINGS.automaticUpdatesMode,
-    backgroundDownloadsMode: typeof record.backgroundDownloadsMode === "string"
-      && isBackgroundDownloadsMode(record.backgroundDownloadsMode)
-      ? record.backgroundDownloadsMode
+    backgroundDownloadsMode: typeof record["backgroundDownloadsMode"] === "string"
+      && isBackgroundDownloadsMode(record["backgroundDownloadsMode"] as string)
+      ? (record["backgroundDownloadsMode"] as BackgroundDownloadsMode)
       : DEFAULT_UPDATES_SETTINGS.backgroundDownloadsMode,
   };
 };
 
 const parseControllerSettings = (record: Record<string, unknown>): GameControllerSettings => {
   return {
-    steamInputOverride: typeof record.steamInputOverride === "string"
-      && isSteamInputOverrideMode(record.steamInputOverride)
-      ? record.steamInputOverride
+    steamInputOverride: typeof record["steamInputOverride"] === "string"
+      && isSteamInputOverrideMode(record["steamInputOverride"] as string)
+      ? (record["steamInputOverride"] as SteamInputOverrideMode)
       : DEFAULT_CONTROLLER_SETTINGS.steamInputOverride,
   };
 };
 
 const parseGameVersionsBetasSettings = (record: Record<string, unknown>): GameVersionsBetasSettings => {
   return {
-    privateAccessCode: typeof record.privateAccessCode === "string"
-      ? record.privateAccessCode
+    privateAccessCode: typeof record["privateAccessCode"] === "string"
+      ? (record["privateAccessCode"] as string)
       : DEFAULT_GAME_VERSIONS_BETAS_SETTINGS.privateAccessCode,
-    selectedVersionId: isNonEmptyString(record.selectedVersionId)
-      ? record.selectedVersionId
+    selectedVersionId: isNonEmptyString(record["selectedVersionId"])
+      ? (record["selectedVersionId"] as string)
       : DEFAULT_GAME_VERSIONS_BETAS_SETTINGS.selectedVersionId,
   };
 };
 
 const parseCustomizationSettings = (record: Record<string, unknown>): GameCustomizationSettings => {
   return {
-    customSortName: typeof record.customSortName === "string"
-      ? record.customSortName
+    customSortName: typeof record["customSortName"] === "string"
+      ? (record["customSortName"] as string)
       : DEFAULT_CUSTOMIZATION_SETTINGS.customSortName,
   };
 };
@@ -435,12 +434,12 @@ const parseGamePropertiesPersistedSettings = (
   }
 
   const inputRecord = toRecord(input) ?? {};
-  const generalRecord = toRecord(inputRecord.general) ?? inputRecord;
-  const compatibilityRecord = toRecord(inputRecord.compatibility) ?? inputRecord;
-  const customizationRecord = toRecord(inputRecord.customization) ?? inputRecord;
-  const controllerRecord = toRecord(inputRecord.controller) ?? inputRecord;
-  const gameVersionsBetasRecord = toRecord(inputRecord.gameVersionsBetas) ?? inputRecord;
-  const updatesRecord = toRecord(inputRecord.updates) ?? inputRecord;
+  const generalRecord = toRecord(inputRecord["general"]) ?? inputRecord;
+  const compatibilityRecord = toRecord(inputRecord["compatibility"]) ?? inputRecord;
+  const customizationRecord = toRecord(inputRecord["customization"]) ?? inputRecord;
+  const controllerRecord = toRecord(inputRecord["controller"]) ?? inputRecord;
+  const gameVersionsBetasRecord = toRecord(inputRecord["gameVersionsBetas"]) ?? inputRecord;
+  const updatesRecord = toRecord(inputRecord["updates"]) ?? inputRecord;
 
   return {
     compatibility: parseCompatibilitySettings(compatibilityRecord),
@@ -528,15 +527,19 @@ const normalizeGameVersionBetaOptions = (options: readonly GameVersionBetaOption
     const normalizedDescription = option.description.trim();
     const normalizedLastUpdated = option.lastUpdated.trim();
 
-    normalized.push({
+    const entry: GameVersionBetaOption = {
       id: normalizedId,
       name: normalizedName.length > 0 ? normalizedName : normalizedId,
       description: normalizedDescription.length > 0 ? normalizedDescription : "No description available",
       lastUpdated: normalizedLastUpdated.length > 0 ? normalizedLastUpdated : "Unavailable",
-      buildId: option.buildId?.trim() || undefined,
       requiresAccessCode: option.requiresAccessCode === true,
       isDefault: option.isDefault === true,
-    });
+    };
+    const trimmedBuildId = option.buildId?.trim();
+    if (typeof trimmedBuildId === "string" && trimmedBuildId.length > 0) {
+      entry.buildId = trimmedBuildId;
+    }
+    normalized.push(entry);
   }
 
   return normalized;
@@ -631,7 +634,9 @@ const resolveGameVersionBetaOptions = (
   const defaultIndex = resolved.findIndex((option) => option.isDefault || option.id.toLowerCase() === "public");
   if (defaultIndex > 0) {
     const [defaultOption] = resolved.splice(defaultIndex, 1);
-    resolved.unshift(defaultOption);
+    if (defaultOption) {
+      resolved.unshift(defaultOption);
+    }
   }
 
   return resolved;
@@ -829,7 +834,7 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
     }
 
     const nextIndex = (activeIndex + delta + GAME_PROPERTIES_TABS.length) % GAME_PROPERTIES_TABS.length;
-    const nextTabId = GAME_PROPERTIES_TABS[nextIndex].id;
+    const nextTabId = GAME_PROPERTIES_TABS[nextIndex]?.id ?? GAME_PROPERTIES_TABS[0]?.id ?? "general";
     setTab(nextTabId);
     tabButtons.get(nextTabId)?.focus();
   };
@@ -921,7 +926,7 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
       optionButton.type = "button";
       optionButton.className = "game-properties-language-option game-properties-updates-option";
       optionButton.setAttribute("role", "option");
-      optionButton.dataset.value = option.value;
+      optionButton.dataset['value'] = option.value;
       optionButton.classList.toggle("has-divider-before", option.dividerBefore === true);
 
       const optionPrimary = document.createElement("span");
@@ -970,7 +975,7 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
       triggerSecondary.textContent = selectedOption.description ?? "";
       triggerSecondary.hidden = !selectedOption.description;
       for (const optionButton of optionButtons) {
-        const isSelected = optionButton.dataset.value === selectedOption.value;
+        const isSelected = optionButton.dataset['value'] === selectedOption.value;
         optionButton.classList.toggle("is-selected", isSelected);
         optionButton.setAttribute("aria-selected", `${isSelected}`);
       }
@@ -986,7 +991,7 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
 
     for (const optionButton of optionButtons) {
       optionButton.addEventListener("click", () => {
-        const optionValue = optionButton.dataset.value;
+        const optionValue = optionButton.dataset['value'];
         if (!optionValue) {
           return;
         }
@@ -1051,26 +1056,26 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
       if (event.key === "ArrowDown") {
         event.preventDefault();
         const nextIndex = Math.min(focusedIndex + 1, optionButtons.length - 1);
-        optionButtons[nextIndex].focus();
+        optionButtons[nextIndex]?.focus();
         return;
       }
 
       if (event.key === "ArrowUp") {
         event.preventDefault();
         const previousIndex = Math.max(focusedIndex - 1, 0);
-        optionButtons[previousIndex].focus();
+        optionButtons[previousIndex]?.focus();
         return;
       }
 
       if (event.key === "Home") {
         event.preventDefault();
-        optionButtons[0].focus();
+        optionButtons[0]?.focus();
         return;
       }
 
       if (event.key === "End") {
         event.preventDefault();
-        optionButtons[optionButtons.length - 1].focus();
+        optionButtons[optionButtons.length - 1]?.focus();
         return;
       }
 
@@ -1205,7 +1210,7 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
       optionButton.type = "button";
       optionButton.className = "game-properties-language-option";
       optionButton.setAttribute("role", "option");
-      optionButton.dataset.value = language;
+      optionButton.dataset['value'] = language;
       optionButton.textContent = language;
       languageMenu.append(optionButton);
       languageOptionButtons.push(optionButton);
@@ -1230,7 +1235,7 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
     };
 
     const setLanguageValue = (language: string, notifyChange = true): void => {
-      const selectedOption = languageOptionButtons.find((optionButton) => optionButton.dataset.value === language);
+      const selectedOption = languageOptionButtons.find((optionButton) => optionButton.dataset['value'] === language);
       if (!selectedOption) {
         return;
       }
@@ -1257,7 +1262,7 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
 
     for (const optionButton of languageOptionButtons) {
       optionButton.addEventListener("click", () => {
-        const optionValue = optionButton.dataset.value;
+        const optionValue = optionButton.dataset['value'];
         if (!optionValue) {
           return;
         }
@@ -1322,26 +1327,26 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
       if (event.key === "ArrowDown") {
         event.preventDefault();
         const nextIndex = Math.min(focusedIndex + 1, languageOptionButtons.length - 1);
-        languageOptionButtons[nextIndex].focus();
+        languageOptionButtons[nextIndex]?.focus();
         return;
       }
 
       if (event.key === "ArrowUp") {
         event.preventDefault();
         const previousIndex = Math.max(focusedIndex - 1, 0);
-        languageOptionButtons[previousIndex].focus();
+        languageOptionButtons[previousIndex]?.focus();
         return;
       }
 
       if (event.key === "Home") {
         event.preventDefault();
-        languageOptionButtons[0].focus();
+        languageOptionButtons[0]?.focus();
         return;
       }
 
       if (event.key === "End") {
         event.preventDefault();
-        languageOptionButtons[languageOptionButtons.length - 1].focus();
+        languageOptionButtons[languageOptionButtons.length - 1]?.focus();
         return;
       }
 
@@ -1518,7 +1523,7 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
       optionButton.type = "button";
       optionButton.className = "game-properties-language-option";
       optionButton.setAttribute("role", "option");
-      optionButton.dataset.value = tool.id;
+      optionButton.dataset['value'] = tool.id;
       optionButton.textContent = tool.label;
       toolMenu.append(optionButton);
       compatibilityOptionButtons.push(optionButton);
@@ -1547,7 +1552,7 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
     };
 
     const setCompatibilityTool = (toolId: string, notifyChange = true): void => {
-      const selectedOption = compatibilityOptionButtons.find((optionButton) => optionButton.dataset.value === toolId);
+      const selectedOption = compatibilityOptionButtons.find((optionButton) => optionButton.dataset['value'] === toolId);
       if (!selectedOption) {
         return;
       }
@@ -1578,7 +1583,7 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
 
     for (const optionButton of compatibilityOptionButtons) {
       optionButton.addEventListener("click", () => {
-        const optionValue = optionButton.dataset.value;
+        const optionValue = optionButton.dataset['value'];
         if (!optionValue) {
           return;
         }
@@ -1643,26 +1648,26 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
       if (event.key === "ArrowDown") {
         event.preventDefault();
         const nextIndex = Math.min(focusedIndex + 1, compatibilityOptionButtons.length - 1);
-        compatibilityOptionButtons[nextIndex].focus();
+        compatibilityOptionButtons[nextIndex]?.focus();
         return;
       }
 
       if (event.key === "ArrowUp") {
         event.preventDefault();
         const previousIndex = Math.max(focusedIndex - 1, 0);
-        compatibilityOptionButtons[previousIndex].focus();
+        compatibilityOptionButtons[previousIndex]?.focus();
         return;
       }
 
       if (event.key === "Home") {
         event.preventDefault();
-        compatibilityOptionButtons[0].focus();
+        compatibilityOptionButtons[0]?.focus();
         return;
       }
 
       if (event.key === "End") {
         event.preventDefault();
-        compatibilityOptionButtons[compatibilityOptionButtons.length - 1].focus();
+        compatibilityOptionButtons[compatibilityOptionButtons.length - 1]?.focus();
         return;
       }
 
@@ -2860,7 +2865,7 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
       image.addEventListener("error", () => {
         candidateIndex += 1;
         if (candidateIndex < artworkCandidates.length) {
-          image.src = artworkCandidates[candidateIndex];
+          image.src = artworkCandidates[candidateIndex] ?? "";
           return;
         }
 
@@ -2868,7 +2873,7 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
         appendEmptyArtworkFallback();
       });
 
-      image.src = artworkCandidates[candidateIndex];
+      image.src = artworkCandidates[candidateIndex] ?? "";
       preview.append(image);
       return preview;
     };
@@ -3075,6 +3080,7 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
     });
 
     button.addEventListener("keydown", (event) => {
+      const firstTabId = GAME_PROPERTIES_TABS[0]?.id ?? "general";
       if (event.key === "ArrowDown") {
         event.preventDefault();
         moveTabSelection(tab.id, 1);
@@ -3089,7 +3095,6 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
 
       if (event.key === "Home") {
         event.preventDefault();
-        const firstTabId = GAME_PROPERTIES_TABS[0].id;
         setTab(firstTabId);
         tabButtons.get(firstTabId)?.focus();
         return;
@@ -3097,7 +3102,7 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
 
       if (event.key === "End") {
         event.preventDefault();
-        const lastTabId = GAME_PROPERTIES_TABS[GAME_PROPERTIES_TABS.length - 1].id;
+        const lastTabId = GAME_PROPERTIES_TABS[GAME_PROPERTIES_TABS.length - 1]?.id ?? firstTabId;
         setTab(lastTabId);
         tabButtons.get(lastTabId)?.focus();
       }
@@ -3175,20 +3180,30 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
     currentAvailableLanguages = normalizeLanguageOptions(input.availableLanguages ?? []);
     currentAvailableCompatibilityTools = normalizeCompatibilityToolOptions(input.availableCompatibilityTools ?? []);
     currentSaveSettings = input.saveSettings ?? null;
-    currentInstallationDetails = input.installationDetails
-      ? {
-        installPath: input.installationDetails.installPath?.trim(),
-        sizeOnDiskBytes: typeof input.installationDetails.sizeOnDiskBytes === "number"
-          ? input.installationDetails.sizeOnDiskBytes
-          : undefined,
+    if (input.installationDetails) {
+      const details: GameInstallationDetails = {};
+      const installPath = input.installationDetails.installPath?.trim();
+      if (typeof installPath === "string" && installPath.length > 0) {
+        details.installPath = installPath;
       }
-      : null;
-    currentCustomizationArtworkPaths = {
-      cover: input.customizationArtworkPaths?.cover?.trim() || undefined,
-      background: input.customizationArtworkPaths?.background?.trim() || undefined,
-      logo: input.customizationArtworkPaths?.logo?.trim() || undefined,
-      wideCover: input.customizationArtworkPaths?.wideCover?.trim() || undefined,
-    };
+      if (typeof input.installationDetails.sizeOnDiskBytes === "number") {
+        details.sizeOnDiskBytes = input.installationDetails.sizeOnDiskBytes;
+      }
+      currentInstallationDetails = details;
+    } else {
+      currentInstallationDetails = null;
+    }
+
+    const customization: GameCustomizationArtworkPaths = {};
+    const cover = input.customizationArtworkPaths?.cover?.trim();
+    if (typeof cover === "string" && cover.length > 0) customization.cover = cover;
+    const background = input.customizationArtworkPaths?.background?.trim();
+    if (typeof background === "string" && background.length > 0) customization.background = background;
+    const logo = input.customizationArtworkPaths?.logo?.trim();
+    if (typeof logo === "string" && logo.length > 0) customization.logo = logo;
+    const wideCover = input.customizationArtworkPaths?.wideCover?.trim();
+    if (typeof wideCover === "string" && wideCover.length > 0) customization.wideCover = wideCover;
+    currentCustomizationArtworkPaths = customization;
     currentBrowseInstalledFiles = input.browseInstalledFiles ?? null;
     currentBackupInstalledFiles = input.backupInstalledFiles ?? null;
     currentVerifyInstalledFiles = input.verifyInstalledFiles ?? null;
@@ -3271,14 +3286,14 @@ export const createGamePropertiesPanel = (): GamePropertiesPanelController => {
     if (event.shiftKey) {
       if (activeElement === firstFocusable || !activeElement || !panel.contains(activeElement)) {
         event.preventDefault();
-        lastFocusable.focus();
+        lastFocusable?.focus();
       }
       return;
     }
 
     if (activeElement === lastFocusable || !activeElement || !panel.contains(activeElement)) {
       event.preventDefault();
-      firstFocusable.focus();
+      firstFocusable?.focus();
     }
   });
 

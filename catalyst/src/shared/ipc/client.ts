@@ -62,6 +62,8 @@ export const ipcService = {
     callCommand("get_game_installation_details", payload),
   getGameCustomizationArtwork: (payload: ProviderExternalIdRequest) =>
     callCommand("get_game_customization_artwork", payload),
+  getGameStoreMetadata: (payload: ProviderExternalIdRequest) =>
+    callCommand("get_game_store_metadata", payload),
   listGameInstallLocations: (payload: ProviderExternalIdRequest) => callCommand("list_game_install_locations", payload),
   getGameInstallSizeEstimate: (payload: ProviderExternalIdRequest) =>
     callCommand("get_game_install_size_estimate", payload),

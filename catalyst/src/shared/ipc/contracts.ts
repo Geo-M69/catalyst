@@ -37,6 +37,20 @@ export interface GameCustomizationArtworkPayload {
   wideCover?: string;
 }
 
+export interface GameStoreMetadataPayload {
+  developers?: string[];
+  publishers?: string[];
+  franchise?: string | null;
+  releaseDate?: string | null;
+  shortDescription?: string | null;
+  headerImage?: string | null;
+  hasAchievements?: boolean;
+  achievementsCount?: number | null;
+  hasCloudSaves?: boolean;
+  cloudDetails?: string | null;
+  controllerSupport?: string | null;
+}
+
 export interface GameInstallLocationPayload {
   path: string;
   freeSpaceBytes?: number;
@@ -131,6 +145,7 @@ export interface IpcContracts {
   clear_game_overlay_data: { req: ProviderExternalIdRequest; res: void };
   get_game_installation_details: { req: ProviderExternalIdRequest; res: GameInstallationDetailsPayload };
   get_game_customization_artwork: { req: ProviderExternalIdRequest; res: GameCustomizationArtworkPayload };
+  get_game_store_metadata: { req: ProviderExternalIdRequest; res: GameStoreMetadataPayload };
   list_game_install_locations: { req: ProviderExternalIdRequest; res: GameInstallLocationPayload[] };
   get_game_install_size_estimate: { req: ProviderExternalIdRequest; res: number | null };
   list_steam_downloads: { req: void; res: SteamDownloadProgressPayload[] };

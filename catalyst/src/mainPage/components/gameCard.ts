@@ -74,6 +74,7 @@ export const createGameCard = (game: GameResponse): HTMLElement => {
   // Dispatch a global event to request opening the game details view. Main page
   // listens for `open-game-details` and performs the navigation + UI changes.
   const openDetails = (): void => {
+    console.debug("gameCard.openDetails dispatching", game.id);
     const evt = new CustomEvent("open-game-details", { detail: { gameId: game.id }, bubbles: true });
     card.dispatchEvent(evt);
   };

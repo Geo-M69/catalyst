@@ -24,9 +24,9 @@ export const isAppErrorPayload = (value: unknown): value is AppErrorPayload => {
   }
 
   return (
-    isAppErrorKind(value.kind) &&
-    typeof value.code === "string" &&
-    hasNonEmptyMessage(value.message)
+    isAppErrorKind(value["kind"]) &&
+    typeof value["code"] === "string" &&
+    hasNonEmptyMessage(value["message"])
   );
 };
 
@@ -47,9 +47,9 @@ const parseNestedPayload = (value: unknown): AppErrorPayload | null => {
     return null;
   }
 
-  const candidateKeys: Array<keyof typeof value> = ["error", "payload", "cause", "data"];
+  const candidateKeys: string[] = ["error", "payload", "cause", "data"];
   for (const key of candidateKeys) {
-    const candidate = value[key];
+    const candidate = (value as Record<string, unknown>)[key];
     if (isAppErrorPayload(candidate)) {
       return candidate;
     }

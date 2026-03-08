@@ -1,5 +1,6 @@
 use crate::*;
 use crate::application::error::AppResult;
+use crate::application::services::library_service::GameStoreMetadataResponse;
 use tauri::{State, AppHandle};
 use tauri::Emitter;
 
@@ -33,6 +34,19 @@ pub(crate) fn set_game_favorite(
 #[tauri::command]
 pub(crate) fn list_steam_downloads(state: State<'_, AppState>) -> AppResult<Vec<SteamDownloadProgressResponse>> {
     crate::application::services::library_service::list_steam_downloads(state.inner())
+}
+
+#[tauri::command]
+pub(crate) fn get_game_store_metadata(
+    provider: String,
+    external_id: String,
+    state: State<'_, AppState>,
+) -> AppResult<GameStoreMetadataResponse> {
+    crate::application::services::library_service::get_game_store_metadata(
+        state.inner(),
+        provider,
+        external_id,
+    )
 }
 
 /// Run the blocking local Steam scan and call the provided emitter with the result.
