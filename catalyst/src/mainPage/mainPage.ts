@@ -594,20 +594,13 @@ const renderGameDetails = (gameId: string): void => {
     <p class="placeholder">${store.steamLinked ? "Friends activity will appear here." : "Connect Steam to show friends activity."}</p>
   `;
 
-  // Trading cards (placeholder)
-  const cardsSection = document.createElement("section");
-  cardsSection.className = "details-section";
-  cardsSection.innerHTML = `
-    <h4>Trading Cards</h4>
-    <p class="placeholder">Trading card details and progress will appear here.</p>
-  `;
 
   // Installation details (real data if available)
   const installationSection = document.createElement("section");
   installationSection.className = "details-section";
   installationSection.innerHTML = `<h4>Installation</h4><p class="placeholder">Loading installation details…</p>`;
 
-  side.append(friendsSection, cardsSection, installationSection);
+  side.append(friendsSection, installationSection);
 
   cols.append(main, side);
   gameDetailsContentElement.append(cols);
@@ -2436,7 +2429,14 @@ const renderDetailsDropdown = (gameId: string): void => {
   // we'll fetch it in the background and update the right column dynamically.
   const featureList: Array<{ key: string; label: string; icon?: string | null; tooltip?: string | null }> = [];
   if (Array.isArray((game as any).features) && (game as any).features.length > 0) {
-    for (const f of (game as any).features) featureList.push({ key: f.key, label: f.label, icon: f.icon ?? null, tooltip: f.tooltip ?? null });
+    const seen = new Set<string>();
+    for (const f of (game as any).features) {
+      const k = String(f.key ?? "");
+      if (k && !seen.has(k)) {
+        seen.add(k);
+        featureList.push({ key: k, label: f.label, icon: f.icon ?? null, tooltip: f.tooltip ?? null });
+      }
+    }
   }
 
   // fallback: render some basic inferred flags if none present
@@ -2459,10 +2459,14 @@ const renderDetailsDropdown = (gameId: string): void => {
   if ((!Array.isArray((game as any).features) || (game as any).features.length === 0)) {
     import("./storeMetadata").then(m => m.fetchGameStoreMetadata(game.provider, game.externalId)).then((meta) => {
       if (meta && Array.isArray((meta as any).features) && (meta as any).features.length > 0) {
-        // clear and re-render
+        // clear and re-render with deduplication
         right.innerHTML = "";
+        const seenMeta = new Set<string>();
         for (const f of (meta as any).features) {
-          const row = document.createElement("div"); row.className = `feature ${f.key}`;
+          const k = String(f.key ?? "");
+          if (!k || seenMeta.has(k)) continue;
+          seenMeta.add(k);
+          const row = document.createElement("div"); row.className = `feature ${k}`;
           const label = escapeHtml(String(f.label ?? ""));
           const title = f.tooltip ? escapeHtml(String(f.tooltip)) : "";
           row.innerHTML = `<span class="dot" aria-hidden="true"></span><div title="${title}">${label}</div>`;

@@ -480,7 +480,15 @@ pub(crate) fn get_game_store_metadata(
 				let canonical_from_desc = |desc: &str| -> Option<(String, String)> {
 					let lowered = desc.to_ascii_lowercase();
 					if lowered.contains("remote play together") || lowered.contains("remote play") {
-						return Some(("remote-play-together".to_string(), "Remote Play Together".to_string()));
+						// prefer showing Family Sharing instead of Remote Play Together per UX preference
+						return Some(("family-sharing".to_string(), "Family Sharing".to_string()));
+					}
+					if lowered.contains("steam cloud") || lowered.contains("steam cloud saves") || lowered.contains("cloud saves") || lowered == "cloud" {
+						return Some(("cloud-saves".to_string(), "Cloud Saves".to_string()));
+					}
+					// suppress Trading Cards entries — they are redundant in our UI
+					if lowered.contains("trading card") || lowered.contains("trading cards") {
+						return None;
 					}
 					if lowered.contains("multi-player") || lowered.contains("multiplayer") {
 						return Some(("multi-player".to_string(), "Multi-Player".to_string()));
@@ -506,6 +514,10 @@ pub(crate) fn get_game_store_metadata(
 					if lowered.contains("family sharing") || lowered.contains("family-share") || lowered.contains("family_share") {
 						return Some(("family-sharing".to_string(), "Family Sharing".to_string()));
 					}
+					// Suppress explicit Trading Cards category by returning a skip marker
+					if lowered.contains("trading card") || lowered.contains("trading cards") {
+						return Some(("__skip__".to_string(), "".to_string()));
+					}
 					None
 				};
 				for cat in categories {
@@ -513,6 +525,10 @@ pub(crate) fn get_game_store_metadata(
 					let desc_opt = cat.get("description").and_then(serde_json::Value::as_str).map(|s| s.to_string());
 					if let Some(desc) = desc_opt.as_deref() {
 						if let Some((key, label)) = canonical_from_desc(desc) {
+							// allow canonical helper to mark items to skip (e.g., trading cards)
+							if key == "__skip__" {
+								continue;
+							}
 							if seen_keys.insert(key.clone()) {
 								features.push(FeatureResponse { key: key.clone(), label: label.clone(), icon: None, tooltip: None });
 							}
@@ -539,11 +555,15 @@ pub(crate) fn get_game_store_metadata(
 			}
 			// Steam Workshop
 			if as_string.contains("workshop") || as_string.contains("steam workshop") {
-				features.push(FeatureResponse { key: "workshop".to_string(), label: "Steam Workshop".to_string(), icon: Some("workshop".to_string()), tooltip: None });
+				if !as_string.contains("trading card") && !as_string.contains("trading cards") {
+					features.push(FeatureResponse { key: "workshop".to_string(), label: "Steam Workshop".to_string(), icon: Some("workshop".to_string()), tooltip: None });
+				}
 			}
 			// Family Sharing eligibility
 			if as_string.contains("family sharing") || as_string.contains("family-share") || as_string.contains("family_share") {
-				features.push(FeatureResponse { key: "family-sharing".to_string(), label: "Family Sharing".to_string(), icon: Some("family".to_string()), tooltip: None });
+				if !as_string.contains("trading card") && !as_string.contains("trading cards") {
+					features.push(FeatureResponse { key: "family-sharing".to_string(), label: "Family Sharing".to_string(), icon: Some("family".to_string()), tooltip: None });
+				}
 			}
 		}
 
