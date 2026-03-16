@@ -2422,61 +2422,11 @@ const renderDetailsDropdown = (gameId: string): void => {
 
 
 
-  // right: features
-  const right = document.createElement("div");
-  right.className = "dd-right";
-  // Render normalized features: prefer `game.features`, fall back to inferred flags. If frontend metadata is missing
-  // we'll fetch it in the background and update the right column dynamically.
-  const featureList: Array<{ key: string; label: string; icon?: string | null; tooltip?: string | null }> = [];
-  if (Array.isArray((game as any).features) && (game as any).features.length > 0) {
-    const seen = new Set<string>();
-    for (const f of (game as any).features) {
-      const k = String(f.key ?? "");
-      if (k && !seen.has(k)) {
-        seen.add(k);
-        featureList.push({ key: k, label: f.label, icon: f.icon ?? null, tooltip: f.tooltip ?? null });
-      }
-    }
-  }
+  // Right column removed: features are no longer rendered in a separate `dd-right` column.
+  // We intentionally avoid fetching or rendering backend-provided store metadata into
+  // the frontend details dropdown to prevent coupling to backend-specific fields.
 
-  // fallback: render some basic inferred flags if none present
-  if (featureList.length === 0) {
-    if ((game as any).hasAchievements || game.hasAchievements) featureList.push({ key: "achievements", label: "Achievements", icon: "trophy" });
-    if ((game as any).hasCloudSaves || game.hasCloudSaves) featureList.push({ key: "cloud-saves", label: "Cloud Saves", icon: "cloud" });
-    const ctrlVal = (game as any).controllerSupport ?? game.controllerSupport;
-    if (ctrlVal) featureList.push({ key: "controller-support", label: `Controller: ${ctrlVal}`, icon: "gamepad" });
-  }
-
-  for (const f of featureList) {
-    const row = document.createElement("div"); row.className = `feature ${f.key}`;
-    const label = escapeHtml(String(f.label ?? ""));
-    const title = f.tooltip ? escapeHtml(String(f.tooltip)) : "";
-    row.innerHTML = `<span class="dot" aria-hidden="true"></span><div title="${title}">${label}</div>`;
-    right.append(row);
-  }
-
-  // If we don't have frontend metadata, fetch it and update the right column
-  if ((!Array.isArray((game as any).features) || (game as any).features.length === 0)) {
-    import("./storeMetadata").then(m => m.fetchGameStoreMetadata(game.provider, game.externalId)).then((meta) => {
-      if (meta && Array.isArray((meta as any).features) && (meta as any).features.length > 0) {
-        // clear and re-render with deduplication
-        right.innerHTML = "";
-        const seenMeta = new Set<string>();
-        for (const f of (meta as any).features) {
-          const k = String(f.key ?? "");
-          if (!k || seenMeta.has(k)) continue;
-          seenMeta.add(k);
-          const row = document.createElement("div"); row.className = `feature ${k}`;
-          const label = escapeHtml(String(f.label ?? ""));
-          const title = f.tooltip ? escapeHtml(String(f.tooltip)) : "";
-          row.innerHTML = `<span class="dot" aria-hidden="true"></span><div title="${title}">${label}</div>`;
-          right.append(row);
-        }
-      }
-    }).catch(() => {});
-  }
-
-  detailsDropdown.replaceChildren(left, center, right);
+  detailsDropdown.replaceChildren(left, center);
 };
 
 const closeDetailsDropdown = (): void => {
