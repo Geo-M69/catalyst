@@ -946,7 +946,7 @@ body.show-back-button #game-details-back-button {
   padding: 0.5rem 0.56rem;
   border-radius: 9px;
   border: 1px solid var(--color-card-border);
-  background: rgba(255, 255, 255, 0.03);
+  background: transparent;
 }
 
 .activity-timeline-news.is-featured {
