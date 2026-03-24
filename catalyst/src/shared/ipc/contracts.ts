@@ -76,6 +76,48 @@ export interface SteamDownloadProgressPayload {
   progressSource?: string;
 }
 
+export interface GameFriendActivityEntryPayload {
+  steamId: string;
+  personaName: string;
+  avatarUrl?: string;
+  profileUrl?: string;
+}
+
+export interface GameFriendsActivityPayload {
+  provider: string;
+  externalId: string;
+  playedFriends: GameFriendActivityEntryPayload[];
+  ownedFriends: GameFriendActivityEntryPayload[];
+  friendListVisibility: "public" | "private" | "unknown";
+  warning?: string;
+  lastSyncedAt: string;
+}
+
+export type GameActivityTimelineItemKind = "achievement" | "news";
+export type GameActivityTimelineNewsPresentation = "compact" | "featured";
+
+export interface GameActivityTimelineItemPayload {
+  id: string;
+  kind: GameActivityTimelineItemKind;
+  title: string;
+  subtitle?: string;
+  description?: string;
+  imageUrl?: string;
+  url?: string;
+  sourceLabel?: string;
+  presentation?: GameActivityTimelineNewsPresentation;
+  occurredAt: string;
+  isMajorUpdate?: boolean;
+}
+
+export interface GameActivityTimelinePayload {
+  provider: string;
+  externalId: string;
+  items: GameActivityTimelineItemPayload[];
+  warning?: string;
+  lastSyncedAt: string;
+}
+
 export interface GameVersionBetasPayload {
   options: GameVersionBetaOption[];
   warning?: string;
@@ -107,6 +149,14 @@ export interface InstallGameRequest extends ProviderExternalIdRequest {
 
 export interface SetGameFavoriteRequest extends ProviderExternalIdRequest {
   favorite: boolean;
+}
+
+export interface GetGameFriendsActivityRequest extends ProviderExternalIdRequest {
+  forceRefresh?: boolean;
+}
+
+export interface GetGameActivityTimelineRequest extends ProviderExternalIdRequest {
+  forceRefresh?: boolean;
 }
 
 export interface ValidateGameBetaAccessCodeRequest extends ProviderExternalIdRequest {
@@ -157,6 +207,8 @@ export interface IpcContracts {
   list_game_install_locations: { req: ProviderExternalIdRequest; res: GameInstallLocationPayload[] };
   get_game_install_size_estimate: { req: ProviderExternalIdRequest; res: number | null };
   list_steam_downloads: { req: void; res: SteamDownloadProgressPayload[] };
+  get_game_friends_activity: { req: GetGameFriendsActivityRequest; res: GameFriendsActivityPayload };
+  get_game_activity_timeline: { req: GetGameActivityTimelineRequest; res: GameActivityTimelinePayload };
   get_game_properties_settings: { req: ProviderExternalIdRequest; res: GamePropertiesPersistedSettings };
   set_game_properties_settings: { req: SetGamePropertiesSettingsRequest; res: void };
   browse_game_installed_files: { req: ProviderExternalIdRequest; res: void };

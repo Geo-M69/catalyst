@@ -89,6 +89,17 @@ const revealAuthPanel = (): void => {
   }, SPLASH_DURATION_MS);
 };
 
+const revealDocument = (): void => {
+  try {
+    document.documentElement.style.visibility = "visible";
+    if (document.body) {
+      document.body.style.visibility = "visible";
+    }
+  } catch {
+    // ignore if DOM access fails for some reason
+  }
+};
+
 const refreshSession = async (): Promise<boolean> => {
   try {
     const user = await ipcService.getSession();
@@ -144,11 +155,7 @@ const initialize = async (): Promise<void> => {
   }
 
   // Unhide the document now that we've confirmed the user is not redirected
-  try {
-    document.documentElement.style.visibility = "visible";
-  } catch {
-    // ignore if DOM access fails for some reason
-  }
+  revealDocument();
 
   revealAuthPanel();
 };

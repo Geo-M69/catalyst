@@ -18,9 +18,14 @@ import {
   type CollectionResponse,
   type GameResponse,
 } from "./types";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { ipcService } from "../shared/ipc/client";
 import { normalizeAppError } from "../shared/ipc/errors";
 import type {
+  GameActivityTimelineItemPayload,
+  GameActivityTimelinePayload,
+  GameFriendActivityEntryPayload,
+  GameFriendsActivityPayload,
   GameCustomizationArtworkPayload,
   GameInstallLocationPayload,
   GameInstallationDetailsPayload,
@@ -422,7 +427,7 @@ window.addEventListener("game-customization-changed", (ev: Event) => {
   }
 });
 
-const renderGameDetails = (gameId: string): void => {
+const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false): void => {
   console.debug("renderGameDetails called for", gameId);
   const game = findGameById(gameId) ?? store.gameById.get(gameId) ?? null;
   console.debug("resolved game:", game ? game.id : null);
@@ -540,14 +545,305 @@ const renderGameDetails = (gameId: string): void => {
 
   // Activity / Timeline (activity-row moved into the title row above)
   const activitySection = document.createElement("section");
-  activitySection.className = "details-section";
+  activitySection.className = "details-section details-activity-section";
   activitySection.innerHTML = `
     <h3>Activity</h3>
-    <div class="details-subsection">
+    <div class="details-subsection game-activity-timeline">
       <h4>Timeline</h4>
-      <p class="placeholder">Recent activity and news will appear here.</p>
+      <p class="placeholder">Loading recent activity…</p>
     </div>
   `;
+  const activityTimelineSection = activitySection.querySelector(".game-activity-timeline");
+  if (!(activityTimelineSection instanceof HTMLElement)) {
+    throw new Error("Activity timeline section is missing");
+  }
+
+  const formatTimelineDateLabel = (isoDate: string): string => {
+    const parsedDate = new Date(isoDate);
+    if (Number.isNaN(parsedDate.valueOf())) {
+      return "RECENT";
+    }
+    return new Intl.DateTimeFormat(undefined, {
+      month: "long",
+      day: "numeric",
+    }).format(parsedDate).toLocaleUpperCase();
+  };
+
+  const formatTimelineTimeLabel = (isoDate: string): string => {
+    const parsedDate = new Date(isoDate);
+    if (Number.isNaN(parsedDate.valueOf())) {
+      return "";
+    }
+    return new Intl.DateTimeFormat(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(parsedDate);
+  };
+
+  const renderActivityPlaceholder = (message: string): void => {
+    activityTimelineSection.replaceChildren();
+    const heading = document.createElement("h4");
+    heading.textContent = "Timeline";
+    const placeholder = document.createElement("p");
+    placeholder.className = "placeholder";
+    placeholder.textContent = message;
+    activityTimelineSection.append(heading, placeholder);
+  };
+
+  const createTimelineAchievementCard = (item: GameActivityTimelineItemPayload): HTMLElement => {
+    const card = document.createElement("article");
+    card.className = "activity-timeline-achievement";
+
+    if (item.imageUrl?.trim()) {
+      const image = document.createElement("img");
+      image.className = "activity-timeline-achievement-icon";
+      image.src = item.imageUrl.trim();
+      image.alt = item.title;
+      image.loading = "lazy";
+      card.append(image);
+    } else {
+      const fallback = document.createElement("div");
+      fallback.className = "activity-timeline-achievement-icon is-fallback";
+      fallback.textContent = "A";
+      card.append(fallback);
+    }
+
+    const content = document.createElement("div");
+    content.className = "activity-timeline-achievement-content";
+    const title = document.createElement("p");
+    title.className = "activity-timeline-achievement-title";
+    title.textContent = item.title;
+    const description = document.createElement("p");
+    description.className = "activity-timeline-achievement-description";
+    description.textContent = item.description?.trim() || item.subtitle?.trim() || "Achievement unlocked";
+    const time = document.createElement("p");
+    time.className = "activity-timeline-achievement-time";
+    time.textContent = formatTimelineTimeLabel(item.occurredAt);
+    content.append(title, description, time);
+
+    card.append(content);
+    return card;
+  };
+
+  const createTimelineNewsCard = (
+    item: GameActivityTimelineItemPayload,
+    defaultWideCoverCandidates: string[]
+  ): HTMLElement => {
+    const isCompact = item.presentation === "compact";
+    const card = document.createElement("article");
+    card.className = `activity-timeline-news${item.isMajorUpdate ? " is-major-update" : ""}${isCompact ? " is-compact" : " is-featured"}`;
+
+    const imageCandidates: string[] = [];
+    const seenImageCandidates = new Set<string>();
+    const addImageCandidate = (value?: string | null): void => {
+      const trimmed = value?.trim();
+      if (!trimmed || seenImageCandidates.has(trimmed)) {
+        return;
+      }
+      seenImageCandidates.add(trimmed);
+      imageCandidates.push(trimmed);
+
+      const placeholderMatch = trimmed.match(/\{steam_clan_image\}\/([a-z0-9/_\-.]+)/i);
+      if (placeholderMatch?.[1]) {
+        const normalizedPath = placeholderMatch[1].replace(/^\/+/, "");
+        for (const host of [
+          "https://clan.akamai.steamstatic.com/images",
+          "https://clan.cloudflare.steamstatic.com/images",
+          "https://cdn.cloudflare.steamstatic.com/steamcommunity/public/images/clans",
+        ]) {
+          addImageCandidate(`${host}/${normalizedPath}`);
+        }
+      }
+
+      const hostMatch = trimmed.match(
+        /^https?:\/\/(?:clan\.(?:akamai|cloudflare)\.steamstatic\.com\/images|cdn\.cloudflare\.steamstatic\.com\/steamcommunity\/public\/images\/clans)\/([a-z0-9/_\-.]+)$/i
+      );
+      if (hostMatch?.[1]) {
+        const normalizedPath = hostMatch[1].replace(/^\/+/, "");
+        for (const host of [
+          "https://clan.akamai.steamstatic.com/images",
+          "https://clan.cloudflare.steamstatic.com/images",
+          "https://cdn.cloudflare.steamstatic.com/steamcommunity/public/images/clans",
+        ]) {
+          addImageCandidate(`${host}/${normalizedPath}`);
+        }
+      }
+    };
+
+    if (!isCompact) {
+      addImageCandidate(item.imageUrl);
+      for (const candidate of defaultWideCoverCandidates) {
+        addImageCandidate(candidate);
+      }
+    }
+
+    if (!isCompact && imageCandidates.length > 0) {
+      const image = document.createElement("img");
+      image.className = "activity-timeline-news-image";
+      image.alt = `${item.title} artwork`;
+      image.loading = "lazy";
+      let candidateIndex = 0;
+      image.addEventListener("error", () => {
+        candidateIndex += 1;
+        if (candidateIndex < imageCandidates.length) {
+          image.src = imageCandidates[candidateIndex] ?? "";
+          return;
+        }
+        image.remove();
+      });
+      image.src = imageCandidates[candidateIndex] ?? "";
+      card.append(image);
+    }
+
+    const content = document.createElement("div");
+    content.className = "activity-timeline-news-content";
+    const meta = document.createElement("p");
+    meta.className = "activity-timeline-news-meta";
+    meta.textContent = "NEWS";
+
+    const link = item.url?.trim();
+    if (link) {
+      const titleLink = document.createElement("a");
+      titleLink.className = "activity-timeline-news-title-link";
+      titleLink.href = link;
+      titleLink.target = "_blank";
+      titleLink.rel = "noopener noreferrer";
+      titleLink.textContent = item.title;
+      content.append(meta, titleLink);
+    } else {
+      const title = document.createElement("h5");
+      title.className = "activity-timeline-news-title";
+      title.textContent = item.title;
+      content.append(meta, title);
+    }
+
+    const description = item.description?.trim();
+    if (description && !isCompact) {
+      const body = document.createElement("p");
+      body.className = "activity-timeline-news-description";
+      body.textContent = description;
+      content.append(body);
+    }
+
+    card.append(content);
+    return card;
+  };
+
+  const renderActivityTimeline = (
+    timeline: GameActivityTimelinePayload,
+    defaultWideCoverCandidates: string[]
+  ): void => {
+    activityTimelineSection.replaceChildren();
+    const heading = document.createElement("h4");
+    heading.textContent = "Timeline";
+    activityTimelineSection.append(heading);
+
+    if (timeline.warning?.trim()) {
+      const warning = document.createElement("p");
+      warning.className = "activity-timeline-warning";
+      warning.textContent = timeline.warning.trim();
+      activityTimelineSection.append(warning);
+    }
+
+    if (!Array.isArray(timeline.items) || timeline.items.length === 0) {
+      const emptyState = document.createElement("p");
+      emptyState.className = "placeholder";
+      emptyState.textContent = "No recent activity available for this title.";
+      activityTimelineSection.append(emptyState);
+      return;
+    }
+
+    const groupsByDay = new Map<string, GameActivityTimelineItemPayload[]>();
+    for (const item of timeline.items) {
+      const dateKey = new Date(item.occurredAt).toLocaleDateString("en-CA");
+      const group = groupsByDay.get(dateKey);
+      if (group) {
+        group.push(item);
+      } else {
+        groupsByDay.set(dateKey, [item]);
+      }
+    }
+
+    for (const [, dayItems] of groupsByDay) {
+      const dayGroup = document.createElement("section");
+      dayGroup.className = "activity-timeline-day";
+
+      const dayLabel = document.createElement("p");
+      dayLabel.className = "activity-timeline-day-label";
+      dayLabel.textContent = formatTimelineDateLabel(dayItems[0]?.occurredAt ?? "");
+      dayGroup.append(dayLabel);
+
+      const achievementItems = dayItems.filter((item) => item.kind === "achievement");
+      if (achievementItems.length > 0) {
+        const achievementGroup = document.createElement("div");
+        achievementGroup.className = "activity-timeline-achievement-group";
+
+        const achievementHeader = document.createElement("p");
+        achievementHeader.className = "activity-timeline-achievement-group-label";
+        achievementHeader.textContent = achievementItems.length === 1
+          ? "Unlocked 1 achievement"
+          : `Unlocked ${achievementItems.length} achievements`;
+        achievementGroup.append(achievementHeader);
+
+        const achievementRow = document.createElement("div");
+        achievementRow.className = "activity-timeline-achievement-row";
+        for (const achievementItem of achievementItems) {
+          achievementRow.append(createTimelineAchievementCard(achievementItem));
+        }
+        achievementGroup.append(achievementRow);
+        dayGroup.append(achievementGroup);
+      }
+
+      const newsItems = dayItems.filter((item) => item.kind !== "achievement");
+      for (const newsItem of newsItems) {
+        dayGroup.append(createTimelineNewsCard(newsItem, defaultWideCoverCandidates));
+      }
+
+      activityTimelineSection.append(dayGroup);
+    }
+  };
+
+  const resolveTimelineWideCoverCandidates = async (targetGame: GameResponse): Promise<string[]> => {
+    const candidates: string[] = [];
+    const seen = new Set<string>();
+
+    const addCandidate = (value?: string | null): void => {
+      const trimmed = value?.trim();
+      if (!trimmed || seen.has(trimmed)) {
+        return;
+      }
+      seen.add(trimmed);
+      candidates.push(trimmed);
+    };
+
+    try {
+      const customization = await getGameCustomizationArtworkForGame(targetGame);
+      const localWideCoverPath = customization?.wideCover?.trim();
+      if (localWideCoverPath && localWideCoverPath.length > 0) {
+        try {
+          addCandidate(convertFileSrc(localWideCoverPath));
+        } catch {
+          addCandidate(localWideCoverPath);
+        }
+      }
+    } catch {
+      // ignore and continue with Steam CDN candidates
+    }
+
+    try {
+      const wideCoverCandidates = getSteamArtworkCandidates(targetGame, "wide-cover");
+      for (const candidate of wideCoverCandidates) {
+        addCandidate(candidate);
+      }
+    } catch {
+      // ignore and continue with metadata fallback
+    }
+
+    addCandidate(targetGame.headerImage);
+    addCandidate(targetGame.artworkUrl);
+
+    return candidates;
+  };
 
   // Achievements (placeholder-first)
   const achievementsSection = document.createElement("section");
@@ -586,14 +882,116 @@ const renderGameDetails = (gameId: string): void => {
   const side = document.createElement("aside");
   side.className = "game-details-side-inner";
 
-  // Friends activity (placeholder; suggest connecting Steam)
+  // Friends activity
   const friendsSection = document.createElement("section");
   friendsSection.className = "details-section";
-  friendsSection.innerHTML = `
-    <h4>Friends</h4>
-    <p class="placeholder">${store.steamLinked ? "Friends activity will appear here." : "Connect Steam to show friends activity."}</p>
-  `;
+  friendsSection.innerHTML = `<h4>Friends</h4><p class="placeholder">Loading friends activity…</p>`;
 
+  const renderFriendsPlaceholder = (message: string): void => {
+    friendsSection.replaceChildren();
+    const heading = document.createElement("h4");
+    heading.textContent = "Friends";
+    const placeholder = document.createElement("p");
+    placeholder.className = "placeholder";
+    placeholder.textContent = message;
+    friendsSection.append(heading, placeholder);
+  };
+
+  const formatFriendCountLabel = (
+    count: number,
+    singularText: string,
+    pluralText: string
+  ): string => {
+    if (count === 1) {
+      return `1 friend ${singularText}`;
+    }
+    return `${count} friends ${pluralText}`;
+  };
+
+  const createFriendAvatar = (friend: GameFriendActivityEntryPayload): HTMLElement => {
+    const avatar = document.createElement("div");
+    avatar.className = "friends-activity-avatar";
+    avatar.setAttribute("title", friend.personaName);
+    avatar.setAttribute("aria-label", friend.personaName);
+
+    const avatarUrl = friend.avatarUrl?.trim();
+    if (avatarUrl && avatarUrl.length > 0) {
+      const image = document.createElement("img");
+      image.src = avatarUrl;
+      image.alt = friend.personaName;
+      image.loading = "lazy";
+      avatar.append(image);
+      return avatar;
+    }
+
+    const initials = friend.personaName.trim().slice(0, 1).toLocaleUpperCase() || "?";
+    avatar.textContent = initials;
+    return avatar;
+  };
+
+  const createFriendGroup = (label: string, friends: GameFriendActivityEntryPayload[]): HTMLElement => {
+    const group = document.createElement("div");
+    group.className = "friends-activity-group";
+
+    const groupLabel = document.createElement("p");
+    groupLabel.className = "friends-activity-label";
+    groupLabel.textContent = label;
+
+    const avatars = document.createElement("div");
+    avatars.className = "friends-activity-avatars";
+    const visibleFriends = friends.slice(0, 10);
+    for (const friend of visibleFriends) {
+      avatars.append(createFriendAvatar(friend));
+    }
+    const remainingCount = friends.length - visibleFriends.length;
+    if (remainingCount > 0) {
+      const more = document.createElement("span");
+      more.className = "friends-activity-more";
+      more.textContent = `+${remainingCount}`;
+      avatars.append(more);
+    }
+
+    group.append(groupLabel, avatars);
+    return group;
+  };
+
+  const renderFriendsActivity = (activity: GameFriendsActivityPayload): void => {
+    friendsSection.replaceChildren();
+    const heading = document.createElement("h4");
+    heading.textContent = "Friends";
+    friendsSection.append(heading);
+
+    const playedFriends = activity.playedFriends ?? [];
+    const hasPlayedFriends = playedFriends.length > 0;
+
+    if (activity.warning?.trim()) {
+      const warning = document.createElement("p");
+      warning.className = "placeholder";
+      warning.textContent = activity.warning.trim();
+      friendsSection.append(warning);
+    }
+
+    if (!hasPlayedFriends) {
+      const emptyState = document.createElement("p");
+      emptyState.className = "placeholder";
+      emptyState.textContent = "No friend activity found for this game.";
+      friendsSection.append(emptyState);
+      return;
+    }
+
+    if (hasPlayedFriends) {
+      friendsSection.append(
+        createFriendGroup(
+          formatFriendCountLabel(
+            playedFriends.length,
+            "has played previously",
+            "have played previously"
+          ),
+          playedFriends
+        )
+      );
+    }
+  };
 
   // Installation details (real data if available)
   const installationSection = document.createElement("section");
@@ -604,6 +1002,50 @@ const renderGameDetails = (gameId: string): void => {
 
   cols.append(main, side);
   gameDetailsContentElement.append(cols);
+
+  // Async: fetch friends activity and update friendsSection if available
+  void (async () => {
+    const normalizedProvider = game.provider.trim().toLocaleLowerCase();
+    if (normalizedProvider !== "steam") {
+      renderActivityPlaceholder("Recent timeline activity is currently available for Steam games.");
+      return;
+    }
+
+    const [timeline, timelineWideCoverCandidates] = await Promise.all([
+      getGameActivityTimelineForGame(game, forceFriendsActivityRefresh),
+      resolveTimelineWideCoverCandidates(game),
+    ]);
+    if (store.appViewMode !== "game-details" || store.selectedGameId !== game.id) {
+      return;
+    }
+    if (!timeline) {
+      renderActivityPlaceholder("Could not load activity timeline.");
+      return;
+    }
+    renderActivityTimeline(timeline, timelineWideCoverCandidates);
+  })();
+
+  void (async () => {
+    const normalizedProvider = game.provider.trim().toLocaleLowerCase();
+    if (!store.steamLinked) {
+      renderFriendsPlaceholder("Connect Steam to view friends activity.");
+      return;
+    }
+    if (normalizedProvider !== "steam") {
+      renderFriendsPlaceholder("Friends activity is currently available for Steam games.");
+      return;
+    }
+
+    const friendsActivity = await getGameFriendsActivityForGame(game, forceFriendsActivityRefresh);
+    if (store.appViewMode !== "game-details" || store.selectedGameId !== game.id) {
+      return;
+    }
+    if (!friendsActivity) {
+      renderFriendsPlaceholder("Could not load friends activity.");
+      return;
+    }
+    renderFriendsActivity(friendsActivity);
+  })();
 
   // Async: fetch installation details and update installationSection if available
   void (async () => {
@@ -1780,6 +2222,36 @@ const getGameInstallationDetailsForGame = async (game: GameResponse): Promise<Ga
   }
 };
 
+const getGameFriendsActivityForGame = async (
+  game: GameResponse,
+  forceRefresh = false
+): Promise<GameFriendsActivityPayload | null> => {
+  try {
+    return await ipcService.getGameFriendsActivity({
+      provider: game.provider,
+      externalId: game.externalId,
+      forceRefresh,
+    });
+  } catch {
+    return null;
+  }
+};
+
+const getGameActivityTimelineForGame = async (
+  game: GameResponse,
+  forceRefresh = false
+): Promise<GameActivityTimelinePayload | null> => {
+  try {
+    return await ipcService.getGameActivityTimeline({
+      provider: game.provider,
+      externalId: game.externalId,
+      forceRefresh,
+    });
+  } catch {
+    return null;
+  }
+};
+
 const getGameCustomizationArtworkForGame = async (
   game: GameResponse
 ): Promise<GameCustomizationArtworkPayload | null> => {
@@ -2687,7 +3159,12 @@ const refreshSession = async (): Promise<boolean> => {
 };
 
 refreshLibraryButton.addEventListener("click", () => {
-  void refreshLibrary(true, true);
+  void (async () => {
+    await refreshLibrary(true, true);
+    if (store.appViewMode === "game-details" && store.selectedGameId) {
+      renderGameDetails(store.selectedGameId, true);
+    }
+  })();
 });
 
 window.addEventListener("resize", applyLibraryAspectSoftLock);

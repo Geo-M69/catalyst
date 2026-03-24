@@ -827,6 +827,226 @@ body.show-back-button #game-details-back-button {
   margin-top: 0.8rem;
 }
 
+.details-activity-section .details-subsection {
+  display: grid;
+  gap: 0.56rem;
+}
+
+.activity-timeline-warning {
+  margin: 0;
+  padding: 0.42rem 0.56rem;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--color-muted);
+  font-size: 0.82rem;
+}
+
+.activity-timeline-day + .activity-timeline-day {
+  margin-top: 0.74rem;
+}
+
+.activity-timeline-day-label {
+  margin: 0;
+  padding-top: 0.16rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 0.73rem;
+  letter-spacing: 0.07em;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.56);
+}
+
+.activity-timeline-achievement-group {
+  margin-top: 0.42rem;
+}
+
+.activity-timeline-achievement-group-label {
+  margin: 0;
+  font-size: 0.81rem;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.activity-timeline-achievement-row {
+  margin-top: 0.32rem;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(196px, 1fr);
+  gap: 0.45rem;
+  overflow-x: auto;
+  padding-bottom: 0.05rem;
+}
+
+.activity-timeline-achievement {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 0.46rem;
+  align-items: center;
+  min-height: 48px;
+  padding: 0.4rem 0.48rem;
+  border-radius: 8px;
+  border: 1px solid var(--color-card-border);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.activity-timeline-achievement-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  object-fit: cover;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.24);
+}
+
+.activity-timeline-achievement-icon.is-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.activity-timeline-achievement-content {
+  min-width: 0;
+  display: grid;
+  gap: 0.08rem;
+}
+
+.activity-timeline-achievement-title {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 620;
+  color: rgba(255, 255, 255, 0.94);
+  line-height: 1.2;
+}
+
+.activity-timeline-achievement-description {
+  margin: 0;
+  font-size: 0.76rem;
+  color: rgba(255, 255, 255, 0.68);
+  line-height: 1.18;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+
+.activity-timeline-achievement-time {
+  margin: 0;
+  font-size: 0.72rem;
+  color: rgba(255, 255, 255, 0.58);
+}
+
+.activity-timeline-news {
+  margin-top: 0.44rem;
+  display: grid;
+  grid-template-columns: clamp(166px, 28%, 244px) minmax(0, 1fr);
+  gap: 0.58rem;
+  padding: 0.5rem 0.56rem;
+  border-radius: 9px;
+  border: 1px solid var(--color-card-border);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.activity-timeline-news.is-featured {
+  grid-template-columns: clamp(166px, 28%, 244px) minmax(0, 1fr);
+}
+
+.activity-timeline-news.is-compact {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.3rem;
+  padding: 0.36rem 0.5rem;
+  border-radius: 8px;
+}
+
+.activity-timeline-news.is-major-update {
+  border-color: rgba(255, 255, 255, 0.24);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.activity-timeline-news-image {
+  width: 100%;
+  height: 98px;
+  min-height: 98px;
+  max-height: 98px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.activity-timeline-news-content {
+  min-width: 0;
+  display: grid;
+  gap: 0.24rem;
+  align-content: start;
+}
+
+.activity-timeline-news.is-compact .activity-timeline-news-content {
+  gap: 0.14rem;
+}
+
+.activity-timeline-news-meta {
+  margin: 0;
+  font-size: 0.65rem;
+  letter-spacing: 0.08em;
+  font-weight: 650;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.activity-timeline-news-title {
+  margin: 0;
+  font-size: 0.96rem;
+  line-height: 1.22;
+  color: rgba(255, 255, 255, 0.93);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.activity-timeline-news-title-link {
+  margin: 0;
+  font-size: 0.96rem;
+  line-height: 1.22;
+  color: rgba(255, 255, 255, 0.93);
+  text-decoration: none;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.activity-timeline-news-title-link:hover,
+.activity-timeline-news-title-link:focus-visible {
+  text-decoration: underline;
+}
+
+.activity-timeline-news-description {
+  margin: 0;
+  font-size: 0.81rem;
+  line-height: 1.28;
+  color: rgba(255, 255, 255, 0.68);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.activity-timeline-news.is-compact .activity-timeline-news-title,
+.activity-timeline-news.is-compact .activity-timeline-news-title-link {
+  font-size: 0.9rem;
+  line-height: 1.2;
+  -webkit-line-clamp: 1;
+}
+
+.activity-timeline-news.is-compact .activity-timeline-news-meta {
+  font-size: 0.62rem;
+  letter-spacing: 0.07em;
+}
+
 .activity-row {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -862,6 +1082,61 @@ body.show-back-button #game-details-back-button {
   border-bottom: none;
 }
 
+.friends-activity-group + .friends-activity-group {
+  margin-top: 0.95rem;
+}
+
+.friends-activity-label {
+  margin: 0;
+  color: rgba(255,255,255,0.84);
+  font-size: 0.94rem;
+}
+
+.friends-activity-avatars {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 0.5rem;
+}
+
+.friends-activity-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.92);
+  font-size: 0.72rem;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.friends-activity-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.friends-activity-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 34px;
+  padding: 0 0.45rem;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: rgba(255,255,255,0.82);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
 .placeholder {
   color: rgba(255,255,255,0.6);
   font-size: 0.95rem;
@@ -871,6 +1146,25 @@ body.show-back-button #game-details-back-button {
   .game-details-columns {
     grid-template-columns: 1fr;
   }
+
+  .activity-timeline-news {
+    grid-template-columns: 136px minmax(0, 1fr);
+    gap: 0.46rem;
+    padding: 0.44rem 0.46rem;
+  }
+
+  .activity-timeline-news.is-compact {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.24rem;
+    padding: 0.34rem 0.44rem;
+  }
+
+  .activity-timeline-news-image {
+    height: 78px;
+    min-height: 78px;
+    max-height: 78px;
+  }
+
   .details-action-row {
     gap: 0.35rem;
   }

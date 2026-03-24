@@ -4,6 +4,8 @@ import type {
   AddGameToCollectionRequest,
   CreateCollectionRequest,
   DeleteCollectionRequest,
+  GetGameActivityTimelineRequest,
+  GetGameFriendsActivityRequest,
   InstallGameRequest,
   IpcCommandName,
   IpcContracts,
@@ -68,6 +70,10 @@ export const ipcService = {
   getGameInstallSizeEstimate: (payload: ProviderExternalIdRequest) =>
     callCommand("get_game_install_size_estimate", payload),
   listSteamDownloads: () => callCommand("list_steam_downloads"),
+  getGameFriendsActivity: (payload: GetGameFriendsActivityRequest) =>
+    callCommand("get_game_friends_activity", payload),
+  getGameActivityTimeline: (payload: GetGameActivityTimelineRequest) =>
+    callCommand("get_game_activity_timeline", payload),
   getGamePropertiesSettings: (payload: ProviderExternalIdRequest) =>
     callCommand("get_game_properties_settings", payload),
   setGamePropertiesSettings: (payload: SetGamePropertiesSettingsRequest) =>

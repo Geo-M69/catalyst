@@ -1,6 +1,10 @@
 use crate::*;
 use crate::application::error::AppResult;
-use crate::application::services::library_service::GameStoreMetadataResponse;
+use crate::application::services::library_service::{
+    GameActivityTimelineResponse,
+    GameFriendsActivityResponse,
+    GameStoreMetadataResponse,
+};
 use tauri::{State, AppHandle};
 use tauri::Emitter;
 
@@ -46,6 +50,36 @@ pub(crate) fn get_game_store_metadata(
         state.inner(),
         provider,
         external_id,
+    )
+}
+
+#[tauri::command]
+pub(crate) fn get_game_friends_activity(
+    provider: String,
+    external_id: String,
+    force_refresh: Option<bool>,
+    state: State<'_, AppState>,
+) -> AppResult<GameFriendsActivityResponse> {
+    crate::application::services::library_service::get_game_friends_activity(
+        state.inner(),
+        provider,
+        external_id,
+        force_refresh.unwrap_or(false),
+    )
+}
+
+#[tauri::command]
+pub(crate) fn get_game_activity_timeline(
+    provider: String,
+    external_id: String,
+    force_refresh: Option<bool>,
+    state: State<'_, AppState>,
+) -> AppResult<GameActivityTimelineResponse> {
+    crate::application::services::library_service::get_game_activity_timeline(
+        state.inner(),
+        provider,
+        external_id,
+        force_refresh.unwrap_or(false),
     )
 }
 
