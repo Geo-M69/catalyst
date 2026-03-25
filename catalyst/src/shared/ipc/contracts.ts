@@ -118,6 +118,48 @@ export interface GameActivityTimelinePayload {
   lastSyncedAt: string;
 }
 
+export interface GameAchievementEntryPayload {
+  apiName: string;
+  name: string;
+  description?: string;
+  icon?: string | null;
+  unlocked: boolean;
+  unlockedAt?: string | null;
+}
+
+export interface GameAchievementsPayload {
+  provider: string;
+  externalId: string;
+  total: number;
+  unlockedCount: number;
+  percent?: number | null;
+  entries: GameAchievementEntryPayload[];
+  warning?: string;
+  lastSyncedAt: string;
+}
+
+export interface GameTradingCardsPayload {
+  provider: string;
+  externalId: string;
+  supported: boolean;
+  badgeLevel?: number | null;
+  badgeXp?: number | null;
+  totalCards: number;
+  ownedCards: number;
+  cards: GameTradingCardEntryPayload[];
+  warning?: string;
+  viewUrl: string;
+  lastSyncedAt: string;
+}
+
+export interface GameTradingCardEntryPayload {
+  id: string;
+  name: string;
+  imageUrl?: string | null;
+  ownedCount: number;
+  isOwned: boolean;
+}
+
 export interface GameVersionBetasPayload {
   options: GameVersionBetaOption[];
   warning?: string;
@@ -156,6 +198,10 @@ export interface GetGameFriendsActivityRequest extends ProviderExternalIdRequest
 }
 
 export interface GetGameActivityTimelineRequest extends ProviderExternalIdRequest {
+  forceRefresh?: boolean;
+}
+
+export interface GetGameTradingCardsRequest extends ProviderExternalIdRequest {
   forceRefresh?: boolean;
 }
 
@@ -209,6 +255,8 @@ export interface IpcContracts {
   list_steam_downloads: { req: void; res: SteamDownloadProgressPayload[] };
   get_game_friends_activity: { req: GetGameFriendsActivityRequest; res: GameFriendsActivityPayload };
   get_game_activity_timeline: { req: GetGameActivityTimelineRequest; res: GameActivityTimelinePayload };
+  get_game_achievements: { req: GetGameActivityTimelineRequest; res: GameAchievementsPayload };
+  get_game_trading_cards: { req: GetGameTradingCardsRequest; res: GameTradingCardsPayload };
   get_game_properties_settings: { req: ProviderExternalIdRequest; res: GamePropertiesPersistedSettings };
   set_game_properties_settings: { req: SetGamePropertiesSettingsRequest; res: void };
   browse_game_installed_files: { req: ProviderExternalIdRequest; res: void };

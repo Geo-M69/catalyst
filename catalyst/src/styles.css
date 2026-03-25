@@ -886,7 +886,6 @@ body.show-back-button #game-details-back-button {
   padding: 0.4rem 0.48rem;
   border-radius: 8px;
   border: 1px solid var(--color-card-border);
-  background: rgba(255, 255, 255, 0.03);
 }
 
 .activity-timeline-achievement-icon {
@@ -1135,6 +1134,198 @@ body.show-back-button #game-details-back-button {
   color: rgba(255,255,255,0.82);
   font-size: 0.78rem;
   font-weight: 600;
+}
+
+/* Achievements UI */
+.achievements-section .achievements-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.achievements-count {
+  margin: 0;
+  font-weight: 500;
+}
+.achievements-progress .achievements-bar {
+  background: rgba(255,255,255,0.04);
+  height: 10px;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.achievements-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #9ddcff 0%, #4aa3ff 100%);
+  width: 0%;
+  transition: width 320ms ease;
+}
+.achievements-icons {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+.achievements-icon {
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  flex: 0 0 40px;
+  box-sizing: border-box;
+  background: rgba(255,255,255,0.03);
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.achievements-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.achievements-icon.is-locked img {
+  filter: grayscale(100%) brightness(0.7);
+  opacity: 0.85;
+}
+.achievements-icon-fallback { font-weight: 600; color: rgba(255,255,255,0.9); }
+.achievements-more {
+  min-width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.4);
+  color: rgba(255,255,255,0.9);
+  border-radius: 4px;
+}
+.achievements-view-link { text-align: right; margin: 0; }
+.achievements-view-link a { color: var(--muted-link-color, #9fc2ff); font-size: 0.9rem; }
+
+.trading-cards-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.trading-cards-badge-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.48rem;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.trading-cards-badge-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.9);
+  font-weight: 620;
+  font-size: 0.8rem;
+}
+
+.trading-cards-badge-text {
+  min-width: 0;
+  display: grid;
+  gap: 0.15rem;
+}
+
+.trading-cards-badge-title,
+.trading-cards-badge-meta {
+  margin: 0;
+}
+
+.trading-cards-badge-title {
+  color: rgba(255, 255, 255, 0.92);
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.trading-cards-badge-meta {
+  color: rgba(255, 255, 255, 0.66);
+  font-size: 0.8rem;
+}
+
+.trading-cards-progress {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.8rem;
+}
+
+.trading-cards-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.32rem;
+}
+
+.trading-cards-tile {
+  position: relative;
+  width: 52px;
+  height: 72px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+}
+
+.trading-cards-tile img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.trading-cards-tile.is-missing img {
+  filter: grayscale(100%) brightness(0.55);
+  opacity: 0.82;
+}
+
+.trading-cards-fallback {
+  width: 100%;
+  height: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.84);
+  font-weight: 620;
+  font-size: 0.82rem;
+}
+
+.trading-cards-owned-count {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  min-width: 20px;
+  height: 14px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  background: rgba(0, 0, 0, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 0.66rem;
+  font-weight: 650;
+}
+
+.trading-cards-view-link {
+  text-align: right;
+  margin: 0;
+}
+
+.trading-cards-view-link a {
+  color: var(--muted-link-color, #9fc2ff);
+  font-size: 0.88rem;
 }
 
 .placeholder {

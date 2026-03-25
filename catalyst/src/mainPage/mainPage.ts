@@ -30,6 +30,7 @@ import type {
   GameInstallLocationPayload,
   GameInstallationDetailsPayload,
   GamePrivacySettingsPayload,
+  GameTradingCardsPayload,
   GameVersionBetasPayload,
   SteamDownloadProgressPayload,
 } from "../shared/ipc/contracts";
@@ -847,11 +848,145 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
 
   // Achievements (placeholder-first)
   const achievementsSection = document.createElement("section");
-  achievementsSection.className = "details-section";
+  achievementsSection.className = "details-section achievements-section";
   achievementsSection.innerHTML = `
     <h4>Achievements</h4>
-    <p class="placeholder">Achievements are not available yet. Coming soon.</p>
+    <div class="achievements-summary">
+      <p class="achievements-count placeholder">Achievements are not available yet. Coming soon.</p>
+      <div class="achievements-progress">
+        <div class="achievements-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <div class="achievements-bar-fill" style="width:0%"></div>
+        </div>
+      </div>
+      <div class="achievements-icons" aria-hidden="false"></div>
+      <p class="achievements-view-link"><a href="#" target="_blank" rel="noopener noreferrer">View achievements</a></p>
+    </div>
   `;
+
+  const renderAchievementsPlaceholder = (message: string): void => {
+    achievementsSection.replaceChildren();
+    const heading = document.createElement("h4");
+    heading.textContent = "Achievements";
+    const placeholder = document.createElement("p");
+    placeholder.className = "placeholder";
+    placeholder.textContent = message;
+    achievementsSection.append(heading, placeholder);
+  };
+
+  const tradingCardsSection = document.createElement("section");
+  tradingCardsSection.className = "details-section trading-cards-section";
+  tradingCardsSection.hidden = true;
+  tradingCardsSection.innerHTML = `
+    <h4>Trading Cards</h4>
+    <p class="placeholder">Loading trading card progress…</p>
+  `;
+
+  const hideTradingCardsSection = (): void => {
+    tradingCardsSection.hidden = true;
+  };
+
+  const showTradingCardsSection = (): void => {
+    tradingCardsSection.hidden = false;
+  };
+
+  const renderTradingCardsPlaceholder = (message: string): void => {
+    showTradingCardsSection();
+    tradingCardsSection.replaceChildren();
+    const heading = document.createElement("h4");
+    heading.textContent = "Trading Cards";
+    const placeholder = document.createElement("p");
+    placeholder.className = "placeholder";
+    placeholder.textContent = message;
+    tradingCardsSection.append(heading, placeholder);
+  };
+
+  const renderTradingCards = (payload: GameTradingCardsPayload): void => {
+    showTradingCardsSection();
+    tradingCardsSection.replaceChildren();
+
+    const heading = document.createElement("h4");
+    heading.textContent = "Trading Cards";
+    tradingCardsSection.append(heading);
+
+    if (payload.warning?.trim()) {
+      const warning = document.createElement("p");
+      warning.className = "activity-timeline-warning";
+      warning.textContent = payload.warning.trim();
+      tradingCardsSection.append(warning);
+    }
+
+    if (!payload.supported) {
+      hideTradingCardsSection();
+      return;
+    }
+
+    const summary = document.createElement("div");
+    summary.className = "trading-cards-summary";
+
+    const totalCards = Math.max(0, payload.totalCards ?? 0);
+    const ownedCards = Math.max(0, payload.ownedCards ?? 0);
+    const cardsLeft = Math.max(0, totalCards - ownedCards);
+
+    const cardsRow = document.createElement("div");
+    cardsRow.className = "trading-cards-row";
+
+    const progress = document.createElement("p");
+    progress.className = "trading-cards-progress";
+    progress.textContent = totalCards > 0
+      ? `${cardsLeft} trading cards left to collect (${ownedCards}/${totalCards} owned)`
+      : "No trading-card set information is available for this title yet.";
+
+    const cards = payload.cards ?? [];
+    if (cards.length > 0) {
+      for (const card of cards) {
+        const tile = document.createElement("div");
+        tile.className = `trading-cards-tile${card.isOwned ? " is-owned" : " is-missing"}`;
+        tile.setAttribute("title", card.isOwned
+          ? `${card.name} (${Math.max(1, card.ownedCount)} owned)`
+          : `${card.name} (missing)`);
+        tile.setAttribute("aria-label", card.name);
+
+        const imageUrl = card.imageUrl?.trim();
+        if (imageUrl && imageUrl.length > 0) {
+          const image = document.createElement("img");
+          image.src = imageUrl;
+          image.alt = card.name;
+          image.loading = "lazy";
+          tile.append(image);
+        } else {
+          const fallback = document.createElement("div");
+          fallback.className = "trading-cards-fallback";
+          fallback.textContent = card.name.slice(0, 1).toLocaleUpperCase() || "?";
+          tile.append(fallback);
+        }
+
+        if (card.ownedCount > 1) {
+          const count = document.createElement("span");
+          count.className = "trading-cards-owned-count";
+          count.textContent = `x${card.ownedCount}`;
+          tile.append(count);
+        }
+        cardsRow.append(tile);
+      }
+    } else {
+      const empty = document.createElement("p");
+      empty.className = "placeholder";
+      empty.textContent = "Could not load per-card tile data yet.";
+      cardsRow.append(empty);
+    }
+
+    const viewLinkWrap = document.createElement("p");
+    viewLinkWrap.className = "trading-cards-view-link";
+    const viewLink = document.createElement("a");
+    viewLink.href = payload.viewUrl?.trim() || "https://steamcommunity.com/tradingcards/";
+    viewLink.target = "_blank";
+    viewLink.rel = "noopener noreferrer";
+    viewLink.textContent = "View My Trading Cards";
+    viewLinkWrap.append(viewLink);
+
+    summary.append(progress, cardsRow, viewLinkWrap);
+    tradingCardsSection.append(summary);
+  };
 
   // Screenshots (placeholder grid)
   const screenshotsSection = document.createElement("section");
@@ -876,7 +1011,7 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
     <div class="review-card placeholder">Write a review for this game (coming soon — read-only placeholder).</div>
   `;
 
-  main.append(activitySection, achievementsSection, screenshotsSection, notesSection, reviewSection);
+  main.append(activitySection, screenshotsSection, notesSection, reviewSection);
 
   // Side column
   const side = document.createElement("aside");
@@ -993,12 +1128,12 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
     }
   };
 
-  // Installation details (real data if available)
-  const installationSection = document.createElement("section");
-  installationSection.className = "details-section";
-  installationSection.innerHTML = `<h4>Installation</h4><p class="placeholder">Loading installation details…</p>`;
+  // Notes section (placeholder for future work)
+  const sideNotesSection = document.createElement("section");
+  sideNotesSection.className = "details-section";
+  sideNotesSection.innerHTML = `<h4>Notes</h4><p class="placeholder">Notes coming soon.</p>`;
 
-  side.append(friendsSection, installationSection);
+  side.append(friendsSection, achievementsSection, tradingCardsSection, sideNotesSection);
 
   cols.append(main, side);
   gameDetailsContentElement.append(cols);
@@ -1025,6 +1160,147 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
     renderActivityTimeline(timeline, timelineWideCoverCandidates);
   })();
 
+  // Async: fetch achievements summary and render Steam-like UI
+  void (async () => {
+    const normalizedProvider = game.provider.trim().toLocaleLowerCase();
+    if (!store.steamLinked) {
+      renderAchievementsPlaceholder("Connect Steam to view achievements.");
+      return;
+    }
+    if (normalizedProvider !== "steam") {
+      renderAchievementsPlaceholder("Achievements are currently available for Steam games.");
+      return;
+    }
+
+    try {
+      const payload = await ipcService.getGameAchievements({ provider: game.provider, externalId: game.externalId, forceRefresh: false });
+      if (store.appViewMode !== "game-details" || store.selectedGameId !== game.id) {
+        return;
+      }
+
+      // Clear placeholder and build UI
+      achievementsSection.replaceChildren();
+      const heading = document.createElement("h4");
+      heading.textContent = "Achievements";
+      const summary = document.createElement("div");
+      summary.className = "achievements-summary";
+
+      const total = payload.total ?? 0;
+      const unlocked = payload.unlockedCount ?? 0;
+      const percent = payload.percent ?? (total > 0 ? (unlocked / total) * 100 : 0);
+
+      const countP = document.createElement("p");
+      countP.className = "achievements-count";
+      countP.textContent = `You've unlocked ${unlocked}/${total} (${Math.round(percent)}%)`;
+
+      const progressWrap = document.createElement("div");
+      progressWrap.className = "achievements-progress";
+      const bar = document.createElement("div");
+      bar.className = "achievements-bar";
+      bar.setAttribute("role", "progressbar");
+      bar.setAttribute("aria-valuemin", "0");
+      bar.setAttribute("aria-valuemax", "100");
+      bar.setAttribute("aria-valuenow", `${Math.round(percent)}`);
+      const fill = document.createElement("div");
+      fill.className = "achievements-bar-fill";
+      fill.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+      bar.append(fill);
+      progressWrap.append(bar);
+
+      const iconsRow = document.createElement("div");
+      iconsRow.className = "achievements-icons";
+
+      const entries = payload.entries ?? [];
+      if (entries.length === 0) {
+        const empty = document.createElement("p");
+        empty.className = "placeholder";
+        empty.textContent = payload.warning ?? "No achievements available for this title.";
+        achievementsSection.append(heading, empty);
+        return;
+      }
+
+      const maxVisible = 10;
+      let shown = 0;
+      for (const entry of entries) {
+        if (shown >= maxVisible) break;
+        const iconWrap = document.createElement("div");
+        iconWrap.className = `achievements-icon ${entry.unlocked ? "is-unlocked" : "is-locked"}`;
+        iconWrap.setAttribute("title", entry.name + (entry.unlockedAt ? ` — ${entry.unlockedAt}` : ""));
+        if (entry.icon) {
+          const img = document.createElement("img");
+          img.src = entry.icon;
+          img.alt = entry.name;
+          img.loading = "lazy";
+          iconWrap.append(img);
+        } else {
+          const fallback = document.createElement("div");
+          fallback.className = "achievements-icon-fallback";
+          fallback.textContent = entry.name.slice(0, 1).toUpperCase() || "?";
+          iconWrap.append(fallback);
+        }
+        iconsRow.append(iconWrap);
+        shown += 1;
+      }
+
+      if (entries.length > maxVisible) {
+        const more = document.createElement("div");
+        more.className = "achievements-more";
+        more.textContent = `+${entries.length - maxVisible}`;
+        iconsRow.append(more);
+      }
+
+      const viewLinkP = document.createElement("p");
+      viewLinkP.className = "achievements-view-link";
+      const viewLink = document.createElement("a");
+      // Link to Steam achievements page (general)
+      const appId = parseInt(game.externalId || "", 10);
+      if (!Number.isNaN(appId)) {
+        viewLink.href = `https://steamcommunity.com/stats/${appId}/achievements`;
+      } else {
+        viewLink.href = `https://store.steampowered.com/`;
+      }
+      viewLink.target = "_blank";
+      viewLink.rel = "noopener noreferrer";
+      viewLink.textContent = "View My Achievements";
+      viewLinkP.append(viewLink);
+
+      summary.append(countP, progressWrap, iconsRow, viewLinkP);
+      achievementsSection.append(heading, summary);
+    } catch (err: any) {
+      console.error("getGameAchievements failed:", err);
+      const message = err?.message ?? "Could not load achievements right now.";
+      renderAchievementsPlaceholder(message);
+    }
+  })();
+
+  // Async: fetch trading-card summary and link out to Steam inventory view
+  void (async () => {
+    const normalizedProvider = game.provider.trim().toLocaleLowerCase();
+    if (normalizedProvider !== "steam") {
+      hideTradingCardsSection();
+      return;
+    }
+
+    if (!store.steamLinked) {
+      renderTradingCardsPlaceholder("Connect Steam to view trading-card progress.");
+      return;
+    }
+
+    const tradingCards = await getGameTradingCardsForGame(game, false);
+    if (store.appViewMode !== "game-details" || store.selectedGameId !== game.id) {
+      return;
+    }
+    if (!tradingCards) {
+      renderTradingCardsPlaceholder("Could not load trading-card progress.");
+      return;
+    }
+    if (!tradingCards.supported) {
+      hideTradingCardsSection();
+      return;
+    }
+    renderTradingCards(tradingCards);
+  })();
+
   void (async () => {
     const normalizedProvider = game.provider.trim().toLocaleLowerCase();
     if (!store.steamLinked) {
@@ -1047,31 +1323,7 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
     renderFriendsActivity(friendsActivity);
   })();
 
-  // Async: fetch installation details and update installationSection if available
-  void (async () => {
-    try {
-      const install = await getGameInstallationDetailsForGame(game);
-      installationSection.replaceChildren();
-      installationSection.className = "details-section";
-      if (!install) {
-        installationSection.innerHTML = `<h4>Installation</h4><p class=\"placeholder\">No installation data available.</p>`;
-      } else {
-        const list = document.createElement("div");
-        list.className = "installation-list";
-        const pathRow = document.createElement("div");
-        pathRow.innerHTML = `<div><strong>Path</strong><div class=\"muted\">${install.installPath ?? "-"}</div></div>`;
-        const sizeRow = document.createElement("div");
-        sizeRow.innerHTML = `<div><strong>Installed Size</strong><div class=\"muted\">${formatBytes(install.sizeOnDiskBytes) ?? "-"}</div></div>`;
-        list.append(pathRow, sizeRow);
-        const h4 = document.createElement("h4");
-        h4.textContent = "Installation";
-        installationSection.append(h4);
-        installationSection.append(list);
-      }
-    } catch (err) {
-      installationSection.innerHTML = `<h4>Installation</h4><p class=\"placeholder\">Could not load installation details.</p>`;
-    }
-  })();
+  // Notes are currently static; installation details removed per UI update.
 };
 
 
@@ -2243,6 +2495,21 @@ const getGameActivityTimelineForGame = async (
 ): Promise<GameActivityTimelinePayload | null> => {
   try {
     return await ipcService.getGameActivityTimeline({
+      provider: game.provider,
+      externalId: game.externalId,
+      forceRefresh,
+    });
+  } catch {
+    return null;
+  }
+};
+
+const getGameTradingCardsForGame = async (
+  game: GameResponse,
+  forceRefresh = false
+): Promise<GameTradingCardsPayload | null> => {
+  try {
+    return await ipcService.getGameTradingCards({
       provider: game.provider,
       externalId: game.externalId,
       forceRefresh,

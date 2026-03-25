@@ -7571,6 +7571,8 @@ pub fn run() {
             interface::tauri::commands::library::get_game_store_metadata,
             interface::tauri::commands::library::get_game_friends_activity,
             interface::tauri::commands::library::get_game_activity_timeline,
+            interface::tauri::commands::library::get_game_achievements,
+            interface::tauri::commands::library::get_game_trading_cards,
             // `get_steam_status` is a server-side helper (not exposed to the
             // frontend) and is intentionally not registered here.
             interface::tauri::commands::library::sync_steam_library,
