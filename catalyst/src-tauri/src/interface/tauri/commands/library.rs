@@ -6,6 +6,7 @@ use crate::application::services::library_service::{
     GameStoreMetadataResponse,
     GameAchievementsResponse,
     GameTradingCardsResponse,
+    GameDlcResponse,
 };
 use tauri::{State, AppHandle};
 use tauri::Emitter;
@@ -108,6 +109,21 @@ pub(crate) fn get_game_trading_cards(
     state: State<'_, AppState>,
 ) -> AppResult<GameTradingCardsResponse> {
     crate::application::services::library_service::get_game_trading_cards(
+        state.inner(),
+        provider,
+        external_id,
+        force_refresh.unwrap_or(false),
+    )
+}
+
+#[tauri::command]
+pub(crate) fn get_game_dlc(
+    provider: String,
+    external_id: String,
+    force_refresh: Option<bool>,
+    state: State<'_, AppState>,
+) -> AppResult<GameDlcResponse> {
+    crate::application::services::library_service::get_game_dlc(
         state.inner(),
         provider,
         external_id,

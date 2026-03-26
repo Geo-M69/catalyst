@@ -19,11 +19,13 @@ import {
   type GameResponse,
 } from "./types";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { ipcService } from "../shared/ipc/client";
 import { normalizeAppError } from "../shared/ipc/errors";
 import type {
   GameActivityTimelineItemPayload,
   GameActivityTimelinePayload,
+  GameDlcPayload,
   GameFriendActivityEntryPayload,
   GameFriendsActivityPayload,
   GameCustomizationArtworkPayload,
@@ -153,6 +155,7 @@ const DOWNLOAD_ETA_SMOOTHING_FACTOR = 0.35;
 const DOWNLOAD_ETA_SAMPLE_MIN_SECONDS = 0.5;
 const DOWNLOAD_ETA_STALE_MS = 15000;
 const TOAST_DURATION_MS = 3200;
+const DLC_CDN_CAPSULE_URL = "https://cdn.cloudflare.steamstatic.com/steam/apps";
 const LIBRARY_SOFT_LOCK_ASPECTS: ReadonlyArray<{ label: string; ratio: number }> = [
   { label: "16:9", ratio: 16 / 9 },
   { label: "21:9", ratio: 21 / 9 },
@@ -179,6 +182,18 @@ const resolveToastRegion = (): HTMLElement => {
 };
 
 const toastRegionElement = resolveToastRegion();
+
+const openSteamConnectedUrl = async (
+  steamProtocolUrl: string,
+  webFallbackUrl: string
+): Promise<void> => {
+  try {
+    await openUrl(steamProtocolUrl);
+    return;
+  } catch {
+    await openUrl(webFallbackUrl);
+  }
+};
 
 const collectSteamTagSuggestions = (games: GameResponse[]): string[] => {
   const tagsByKey = new Map<string, string>();
@@ -988,6 +1003,165 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
     tradingCardsSection.append(summary);
   };
 
+  const dlcSection = document.createElement("section");
+  dlcSection.className = "details-section details-dlc-section";
+  dlcSection.innerHTML = `
+    <h4>DLC</h4>
+    <p class="placeholder">Loading downloadable content…</p>
+  `;
+
+  const renderDlcPlaceholder = (message: string): void => {
+    dlcSection.replaceChildren();
+    const heading = document.createElement("h4");
+    heading.textContent = "DLC";
+    const placeholder = document.createElement("p");
+    placeholder.className = "placeholder";
+    placeholder.textContent = message;
+    dlcSection.append(heading, placeholder);
+  };
+
+  const renderDlc = (payload: GameDlcPayload): void => {
+    dlcSection.replaceChildren();
+    const headingRow = document.createElement("div");
+    headingRow.className = "details-dlc-header";
+
+    const heading = document.createElement("h4");
+    heading.textContent = "DLC";
+    headingRow.append(heading);
+
+    dlcSection.append(headingRow);
+
+    if (payload.warning?.trim()) {
+      const warning = document.createElement("p");
+      warning.className = "activity-timeline-warning";
+      warning.textContent = payload.warning.trim();
+      dlcSection.append(warning);
+    }
+
+    const entries = payload.entries ?? [];
+    if (entries.length === 0) {
+      const emptyState = document.createElement("p");
+      emptyState.className = "placeholder";
+      emptyState.textContent = "No DLC listed for this title.";
+      dlcSection.append(emptyState);
+      return;
+    }
+
+    const list = document.createElement("div");
+    list.className = "details-dlc-list";
+
+    for (const entry of entries) {
+      const targetGameId = entry.id?.trim() || `${entry.provider}:${entry.externalId}`;
+      const dlcGame = findGameById(targetGameId) ?? store.gameById.get(targetGameId) ?? null;
+      const shouldUseStoreLink = !entry.inLibrary || entry.provider.trim().toLocaleLowerCase() !== "steam" || !dlcGame;
+      const primaryActionLabel = shouldUseStoreLink ? "View in store" : (entry.installed ? "Play" : "Install");
+
+      const tile = document.createElement("button");
+      tile.type = "button";
+      tile.className = "details-dlc-tile";
+      tile.setAttribute("aria-label", `${entry.name}: ${primaryActionLabel}`);
+
+      const artwork = document.createElement("img");
+      artwork.className = "details-dlc-image";
+      artwork.alt = `${entry.name} artwork`;
+      artwork.loading = "lazy";
+      const appId = encodeURIComponent(entry.externalId);
+      artwork.src = `${DLC_CDN_CAPSULE_URL}/${appId}/header.jpg`;
+      artwork.addEventListener("error", () => {
+        artwork.src = `${DLC_CDN_CAPSULE_URL}/${appId}/capsule_467x181.jpg`;
+      }, { once: true });
+      tile.append(artwork);
+
+      tile.addEventListener("click", async () => {
+        const defaultStoreUrl = `https://store.steampowered.com/app/${encodeURIComponent(entry.externalId)}`;
+        const storeUrl = entry.storeUrl?.trim() || defaultStoreUrl;
+        const steamStoreUrl = `steam://openurl/${storeUrl}`;
+        const previousBusyState = tile.getAttribute("aria-busy");
+        tile.setAttribute("aria-busy", "true");
+        tile.disabled = true;
+        try {
+          if (shouldUseStoreLink) {
+            await openSteamConnectedUrl(steamStoreUrl, storeUrl);
+            return;
+          }
+
+          if (!dlcGame) {
+            await openSteamConnectedUrl(steamStoreUrl, storeUrl);
+            return;
+          }
+
+          if (dlcGame.installed) {
+            await ipcService.playGame({ provider: dlcGame.provider, externalId: dlcGame.externalId });
+            return;
+          }
+
+          const installLocations = await listGameInstallLocationsForGame(dlcGame);
+          const installSizeBytes = await getGameInstallSizeEstimateForGame(dlcGame);
+          const installRequest = await installDialog.open({
+            game: dlcGame,
+            locations: installLocations,
+            installSizeBytes: typeof installSizeBytes === "number" ? installSizeBytes : undefined,
+          });
+          if (installRequest === null) {
+            return;
+          }
+          await ipcService.installGame({
+            provider: dlcGame.provider,
+            externalId: dlcGame.externalId,
+            installPath: installRequest.installPath,
+            createDesktopShortcut: installRequest.createDesktopShortcut,
+            createApplicationShortcut: installRequest.createApplicationShortcut,
+          });
+          showLauncherToast(`Queued "${dlcGame.name}" for install.`);
+          void refreshSteamDownloads();
+        } catch (error) {
+          const appError = normalizeAppError(error, "Could not run this DLC action.");
+          showLauncherToast(appError.message, "error");
+        } finally {
+          tile.disabled = false;
+          tile.setAttribute("aria-busy", previousBusyState ?? "false");
+        }
+      });
+
+      list.append(tile);
+    }
+
+    const footer = document.createElement("div");
+    footer.className = "details-dlc-footer";
+
+    const storeLink = document.createElement("button");
+    storeLink.type = "button";
+    storeLink.className = "details-dlc-link";
+    storeLink.textContent = "View DLC In Store";
+    storeLink.addEventListener("click", async () => {
+      const storeUrl = `https://store.steampowered.com/dlc/${encodeURIComponent(game.externalId)}`;
+      try {
+        await openSteamConnectedUrl(`steam://openurl/${storeUrl}`, storeUrl);
+      } catch (error) {
+        const appError = normalizeAppError(error, "Could not open DLC store.");
+        showLauncherToast(appError.message, "error");
+      }
+    });
+
+    const manageLink = document.createElement("button");
+    manageLink.type = "button";
+    manageLink.className = "details-dlc-link details-dlc-manage-link";
+    manageLink.textContent = `Manage My ${entries.length} DLC${entries.length === 1 ? "" : "s"}`;
+    manageLink.addEventListener("click", async () => {
+      const manageFallbackUrl = `https://store.steampowered.com/dlc/${encodeURIComponent(game.externalId)}`;
+      const steamManageUrl = `steam://nav/games/details/${encodeURIComponent(game.externalId)}`;
+      try {
+        await openSteamConnectedUrl(steamManageUrl, manageFallbackUrl);
+      } catch (error) {
+        const appError = normalizeAppError(error, "Could not open Steam DLC manager.");
+        showLauncherToast(appError.message, "error");
+      }
+    });
+
+    footer.append(storeLink, manageLink);
+    dlcSection.append(list, footer);
+  };
+
   // Screenshots (placeholder grid)
   const screenshotsSection = document.createElement("section");
   screenshotsSection.className = "details-section";
@@ -1133,7 +1307,7 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
   sideNotesSection.className = "details-section";
   sideNotesSection.innerHTML = `<h4>Notes</h4><p class="placeholder">Notes coming soon.</p>`;
 
-  side.append(friendsSection, achievementsSection, tradingCardsSection, sideNotesSection);
+  side.append(friendsSection, achievementsSection, tradingCardsSection, dlcSection, sideNotesSection);
 
   cols.append(main, side);
   gameDetailsContentElement.append(cols);
@@ -1299,6 +1473,26 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
       return;
     }
     renderTradingCards(tradingCards);
+  })();
+
+  // Async: fetch DLC rows for the right-side panel.
+  void (async () => {
+    const normalizedProvider = game.provider.trim().toLocaleLowerCase();
+    if (normalizedProvider !== "steam") {
+      renderDlcPlaceholder("DLC details are currently available for Steam games.");
+      return;
+    }
+
+    const dlcPayload = await getGameDlcForGame(game, false);
+    if (store.appViewMode !== "game-details" || store.selectedGameId !== game.id) {
+      return;
+    }
+    if (!dlcPayload) {
+      renderDlcPlaceholder("Could not load DLC details right now.");
+      return;
+    }
+
+    renderDlc(dlcPayload);
   })();
 
   void (async () => {
@@ -2510,6 +2704,21 @@ const getGameTradingCardsForGame = async (
 ): Promise<GameTradingCardsPayload | null> => {
   try {
     return await ipcService.getGameTradingCards({
+      provider: game.provider,
+      externalId: game.externalId,
+      forceRefresh,
+    });
+  } catch {
+    return null;
+  }
+};
+
+const getGameDlcForGame = async (
+  game: GameResponse,
+  forceRefresh = false
+): Promise<GameDlcPayload | null> => {
+  try {
+    return await ipcService.getGameDlc({
       provider: game.provider,
       externalId: game.externalId,
       forceRefresh,

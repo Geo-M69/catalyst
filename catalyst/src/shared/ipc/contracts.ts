@@ -160,6 +160,24 @@ export interface GameTradingCardEntryPayload {
   isOwned: boolean;
 }
 
+export interface GameDlcEntryPayload {
+  id: string;
+  provider: string;
+  externalId: string;
+  name: string;
+  installed: boolean;
+  inLibrary: boolean;
+  storeUrl: string;
+}
+
+export interface GameDlcPayload {
+  provider: string;
+  externalId: string;
+  entries: GameDlcEntryPayload[];
+  warning?: string;
+  lastSyncedAt: string;
+}
+
 export interface GameVersionBetasPayload {
   options: GameVersionBetaOption[];
   warning?: string;
@@ -202,6 +220,10 @@ export interface GetGameActivityTimelineRequest extends ProviderExternalIdReques
 }
 
 export interface GetGameTradingCardsRequest extends ProviderExternalIdRequest {
+  forceRefresh?: boolean;
+}
+
+export interface GetGameDlcRequest extends ProviderExternalIdRequest {
   forceRefresh?: boolean;
 }
 
@@ -257,6 +279,7 @@ export interface IpcContracts {
   get_game_activity_timeline: { req: GetGameActivityTimelineRequest; res: GameActivityTimelinePayload };
   get_game_achievements: { req: GetGameActivityTimelineRequest; res: GameAchievementsPayload };
   get_game_trading_cards: { req: GetGameTradingCardsRequest; res: GameTradingCardsPayload };
+  get_game_dlc: { req: GetGameDlcRequest; res: GameDlcPayload };
   get_game_properties_settings: { req: ProviderExternalIdRequest; res: GamePropertiesPersistedSettings };
   set_game_properties_settings: { req: SetGamePropertiesSettingsRequest; res: void };
   browse_game_installed_files: { req: ProviderExternalIdRequest; res: void };

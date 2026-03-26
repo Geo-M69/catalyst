@@ -805,7 +805,7 @@ body.show-back-button #game-details-back-button {
 
 .game-details-columns {
   display: grid;
-  grid-template-columns: 1fr 340px;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
   gap: 1.125rem;
   align-items: start;
 }
@@ -813,6 +813,7 @@ body.show-back-button #game-details-back-button {
 .game-details-main,
 .game-details-side {
   min-height: 0;
+  min-width: 0;
 }
 
 .game-details-main .details-section,
@@ -821,6 +822,33 @@ body.show-back-button #game-details-back-button {
   border-radius: 8px;
   background: rgba(255,255,255,0.02);
   border: 1px solid rgba(255,255,255,0.03);
+}
+
+.game-details-side-inner {
+  display: grid;
+  gap: 0.72rem;
+  min-width: 0;
+}
+
+.game-details-side-inner .details-section {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 9px;
+  padding: 0.72rem 0.72rem 0.66rem;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.game-details-side-inner .details-section h4 {
+  margin: 0 0 0.6rem;
+  font-size: 0.86rem;
+  letter-spacing: 0.08em;
+  font-weight: 560;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.78);
 }
 
 .details-subsection {
@@ -1097,6 +1125,7 @@ body.show-back-button #game-details-back-button {
   align-items: center;
   gap: 0.45rem;
   margin-top: 0.5rem;
+  max-width: 100%;
 }
 
 .friends-activity-avatar {
@@ -1154,7 +1183,7 @@ body.show-back-button #game-details-back-button {
 }
 .achievements-bar-fill {
   height: 100%;
-  background: linear-gradient(90deg, #9ddcff 0%, #4aa3ff 100%);
+  background: linear-gradient(90deg, #8e8e8e 0%, #bdbdbd 100%);
   width: 0%;
   transition: width 320ms ease;
 }
@@ -1164,6 +1193,7 @@ body.show-back-button #game-details-back-button {
   align-items: center;
   flex-wrap: nowrap;
   overflow: hidden;
+  max-width: 100%;
 }
 .achievements-icon {
   width: 40px;
@@ -1185,8 +1215,7 @@ body.show-back-button #game-details-back-button {
   display: block;
 }
 .achievements-icon.is-locked img {
-  filter: grayscale(100%) brightness(0.7);
-  opacity: 0.85;
+  opacity: 0.62;
 }
 .achievements-icon-fallback { font-weight: 600; color: rgba(255,255,255,0.9); }
 .achievements-more {
@@ -1200,7 +1229,9 @@ body.show-back-button #game-details-back-button {
   border-radius: 4px;
 }
 .achievements-view-link { text-align: right; margin: 0; }
-.achievements-view-link a { color: var(--muted-link-color, #9fc2ff); font-size: 0.9rem; }
+.achievements-view-link a { color: rgba(255, 255, 255, 0.56); font-size: 0.9rem; }
+.achievements-view-link a:hover,
+.achievements-view-link a:focus-visible { color: rgba(255, 255, 255, 0.88); }
 
 .trading-cards-summary {
   display: flex;
@@ -1264,6 +1295,7 @@ body.show-back-button #game-details-back-button {
   display: flex;
   flex-wrap: wrap;
   gap: 0.32rem;
+  max-width: 100%;
 }
 
 .trading-cards-tile {
@@ -1285,8 +1317,7 @@ body.show-back-button #game-details-back-button {
 }
 
 .trading-cards-tile.is-missing img {
-  filter: grayscale(100%) brightness(0.55);
-  opacity: 0.82;
+  opacity: 0.58;
 }
 
 .trading-cards-fallback {
@@ -1324,8 +1355,129 @@ body.show-back-button #game-details-back-button {
 }
 
 .trading-cards-view-link a {
-  color: var(--muted-link-color, #9fc2ff);
+  color: rgba(255, 255, 255, 0.56);
   font-size: 0.88rem;
+}
+
+.trading-cards-view-link a:hover,
+.trading-cards-view-link a:focus-visible {
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.details-dlc-list {
+  display: grid;
+  gap: 0.72rem;
+  min-width: 0;
+}
+
+.details-dlc-header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.6rem;
+  margin-bottom: 0.6rem;
+}
+
+.details-dlc-header h4 {
+  margin: 0;
+  font-size: 0.86rem;
+  letter-spacing: 0.08em;
+  font-weight: 560;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.details-dlc-section {
+  background: transparent !important;
+  border: 1px solid rgba(255, 255, 255, 0.14) !important;
+  border-radius: 9px;
+  padding: 0.72rem 0.72rem 0.66rem;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+}
+
+.details-dlc-tile {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  padding: 0;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.24);
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 150ms ease, transform 140ms ease, filter 150ms ease;
+}
+
+.details-dlc-tile:hover {
+  border-color: rgba(255, 255, 255, 0.36);
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+}
+
+.details-dlc-tile:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.65);
+  outline-offset: 2px;
+}
+
+.details-dlc-tile[aria-busy="true"] {
+  opacity: 0.72;
+}
+
+.details-dlc-image {
+  display: block;
+  width: 100%;
+  height: clamp(96px, 16vh, 148px);
+  object-fit: cover;
+  object-position: center;
+  background: #050505;
+}
+
+.details-dlc-footer {
+  margin-top: 0.56rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.58rem;
+  flex-wrap: wrap;
+}
+
+.details-dlc-link {
+  border: none;
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  color: rgba(255, 255, 255, 0.56);
+  font-size: clamp(0.78rem, 1.1vw, 0.92rem);
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 140ms ease;
+}
+
+.details-dlc-link:hover,
+.details-dlc-link:focus-visible {
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.details-dlc-manage-link {
+  margin-left: auto;
+  text-align: right;
+}
+
+@media (max-width: 1200px) {
+  .game-details-columns {
+    grid-template-columns: minmax(0, 1fr) 300px;
+    gap: 0.9rem;
+  }
+}
+
+@media (max-width: 1150px) {
+  .details-dlc-image {
+    height: 126px;
+  }
+
+  .details-dlc-link {
+    font-size: 0.84rem;
+  }
 }
 
 .placeholder {
@@ -1333,7 +1485,7 @@ body.show-back-button #game-details-back-button {
   font-size: 0.95rem;
 }
 
-@media (max-width: 980px) {
+@media (max-width: 1080px) {
   .game-details-columns {
     grid-template-columns: 1fr;
   }
