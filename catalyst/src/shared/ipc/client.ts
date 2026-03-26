@@ -82,6 +82,7 @@ export const ipcService = {
     callCommand("get_game_trading_cards", payload),
   getGameDlc: (payload: GetGameDlcRequest) =>
     callCommand("get_game_dlc", payload),
+  getGameScreenshots: (payload: ProviderExternalIdRequest) => callCommand("get_game_screenshots", payload),
   getGamePropertiesSettings: (payload: ProviderExternalIdRequest) =>
     callCommand("get_game_properties_settings", payload),
   setGamePropertiesSettings: (payload: SetGamePropertiesSettingsRequest) =>

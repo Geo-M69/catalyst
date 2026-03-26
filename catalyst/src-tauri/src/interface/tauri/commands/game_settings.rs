@@ -113,6 +113,19 @@ pub(crate) fn get_game_customization_artwork(
 }
 
 #[tauri::command]
+pub(crate) fn get_game_screenshots(
+    provider: String,
+    external_id: String,
+    state: State<'_, AppState>,
+) -> AppResult<Vec<GameScreenshotResponse>> {
+    crate::application::services::game_settings_service::get_game_screenshots(
+        state.inner(),
+        provider,
+        external_id,
+    )
+}
+
+#[tauri::command]
 pub(crate) fn get_game_installation_details(
     provider: String,
     external_id: String,

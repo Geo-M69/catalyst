@@ -37,6 +37,12 @@ export interface GameCustomizationArtworkPayload {
   wideCover?: string;
 }
 
+export interface GameScreenshotPayload {
+  id: string;
+  path: string;
+  thumbnailPath?: string | null;
+}
+
 export interface GameStoreMetadataPayload {
   developers?: string[];
   publishers?: string[];
@@ -285,6 +291,7 @@ export interface IpcContracts {
   browse_game_installed_files: { req: ProviderExternalIdRequest; res: void };
   backup_game_files: { req: ProviderExternalIdRequest; res: void };
   verify_game_files: { req: ProviderExternalIdRequest; res: void };
+  get_game_screenshots: { req: ProviderExternalIdRequest; res: GameScreenshotPayload[] };
   add_game_desktop_shortcut: { req: ProviderExternalIdRequest; res: void };
   open_game_recording_settings: { req: ProviderExternalIdRequest; res: void };
   uninstall_game: { req: ProviderExternalIdRequest; res: void };

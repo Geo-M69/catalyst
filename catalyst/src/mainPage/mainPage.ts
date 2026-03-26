@@ -33,6 +33,7 @@ import type {
   GameInstallationDetailsPayload,
   GamePrivacySettingsPayload,
   GameTradingCardsPayload,
+  GameScreenshotPayload,
   GameVersionBetasPayload,
   SteamDownloadProgressPayload,
 } from "../shared/ipc/contracts";
@@ -1022,6 +1023,19 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
 
   const renderDlc = (payload: GameDlcPayload): void => {
     dlcSection.replaceChildren();
+    const entries = payload.entries ?? [];
+    dlcSection.hidden = false;
+
+    // If no DLC metadata was returned, show a helpful placeholder instead of hiding the section.
+    if (entries.length === 0) {
+      const heading = document.createElement("h4");
+      heading.textContent = "DLC";
+      const placeholder = document.createElement("p");
+      placeholder.className = "placeholder";
+      placeholder.textContent = "No DLC metadata available. Try syncing your Steam library to import owned DLC.";
+      dlcSection.append(heading, placeholder);
+      return;
+    }
     const headingRow = document.createElement("div");
     headingRow.className = "details-dlc-header";
 
@@ -1036,15 +1050,6 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
       warning.className = "activity-timeline-warning";
       warning.textContent = payload.warning.trim();
       dlcSection.append(warning);
-    }
-
-    const entries = payload.entries ?? [];
-    if (entries.length === 0) {
-      const emptyState = document.createElement("p");
-      emptyState.className = "placeholder";
-      emptyState.textContent = "No DLC listed for this title.";
-      dlcSection.append(emptyState);
-      return;
     }
 
     const list = document.createElement("div");
@@ -1185,7 +1190,7 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
     <div class="review-card placeholder">Write a review for this game (coming soon — read-only placeholder).</div>
   `;
 
-  main.append(activitySection, screenshotsSection, notesSection, reviewSection);
+  main.append(activitySection, notesSection, reviewSection);
 
   // Side column
   const side = document.createElement("aside");
@@ -1307,7 +1312,17 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
   sideNotesSection.className = "details-section";
   sideNotesSection.innerHTML = `<h4>Notes</h4><p class="placeholder">Notes coming soon.</p>`;
 
-  side.append(friendsSection, achievementsSection, tradingCardsSection, dlcSection, sideNotesSection);
+  // Place screenshots into the side column (keeps ordering consistent with other side widgets)
+  screenshotsSection.className = "details-section"; // ensure side styling
+
+  side.append(
+    friendsSection,
+    screenshotsSection,
+    achievementsSection,
+    tradingCardsSection,
+    dlcSection,
+    sideNotesSection
+  );
 
   cols.append(main, side);
   gameDetailsContentElement.append(cols);
@@ -1494,6 +1509,75 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
 
     renderDlc(dlcPayload);
   })();
+
+  // Async: fetch screenshots and render gallery (exposed for manual refresh)
+  const fetchAndRenderScreenshots = async (): Promise<void> => {
+    const normalizedProvider = game.provider.trim().toLocaleLowerCase();
+    screenshotsSection.replaceChildren();
+
+    const heading = document.createElement("h4");
+    heading.textContent = "Recordings and Screenshots";
+    screenshotsSection.append(heading);
+
+    if (normalizedProvider !== "steam") {
+      const placeholder = document.createElement("p");
+      placeholder.className = "placeholder";
+      placeholder.textContent = "Screenshots are currently available for local Steam installs.";
+      screenshotsSection.append(placeholder);
+      return;
+    }
+
+    try {
+      const shots = await getGameScreenshotsForGame(game);
+      if (store.appViewMode !== "game-details" || store.selectedGameId !== game.id) return;
+
+      if (!Array.isArray(shots) || shots.length === 0) {
+        const empty = document.createElement("p");
+        empty.className = "placeholder";
+        empty.textContent = "No screenshots available. You can add screenshots via the Properties panel.";
+        screenshotsSection.append(empty);
+      } else {
+        const grid = document.createElement("div");
+        grid.className = "screenshots-grid";
+        for (const shot of shots) {
+          const tile = document.createElement("div");
+          tile.className = "screenshot-tile";
+          const img = document.createElement("img");
+          try {
+            img.src = convertFileSrc(shot.path);
+          } catch {
+            img.src = shot.path;
+          }
+          img.alt = shot.id;
+          img.loading = "lazy";
+          tile.append(img);
+          grid.append(tile);
+        }
+
+        const manageBtn = document.createElement("button");
+        manageBtn.type = "button";
+        manageBtn.className = "details-dlc-link";
+        manageBtn.textContent = "Manage my recordings and screenshots";
+        manageBtn.addEventListener("click", async () => {
+          try {
+            await ipcService.openGameRecordingSettings({ provider: game.provider, externalId: game.externalId });
+          } catch (err) {
+            showLauncherToast(normalizeAppError(err, "Could not open recording settings").message, "error");
+          }
+        });
+
+        screenshotsSection.append(grid, manageBtn);
+      }
+    } catch (err) {
+      const placeholder = document.createElement("p");
+      placeholder.className = "placeholder";
+      placeholder.textContent = "Could not load screenshots right now.";
+      screenshotsSection.append(placeholder);
+    }
+  };
+
+  // initial load
+  void fetchAndRenderScreenshots();
 
   void (async () => {
     const normalizedProvider = game.provider.trim().toLocaleLowerCase();
@@ -2738,6 +2822,17 @@ const getGameCustomizationArtworkForGame = async (
     });
   } catch {
     return null;
+  }
+};
+
+const getGameScreenshotsForGame = async (
+  game: GameResponse
+): Promise<GameScreenshotPayload[]> => {
+  try {
+    return await ipcService.getGameScreenshots({ provider: game.provider, externalId: game.externalId });
+  } catch (err) {
+    console.error("Could not load screenshots:", err);
+    return [];
   }
 };
 

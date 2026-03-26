@@ -346,6 +346,14 @@ struct GameCustomizationArtworkResponse {
     wide_cover: Option<String>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GameScreenshotResponse {
+    id: String,
+    path: String,
+    thumbnail_path: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct GameVersionBetaOptionResponse {
@@ -7588,6 +7596,7 @@ pub fn run() {
             interface::tauri::commands::game_settings::set_game_properties_settings,
             interface::tauri::commands::game_settings::get_game_customization_artwork,
             interface::tauri::commands::game_settings::get_game_installation_details,
+            interface::tauri::commands::game_settings::get_game_screenshots,
             interface::tauri::commands::game_settings::get_game_install_size_estimate,
             interface::tauri::commands::game_settings::list_game_install_locations,
             interface::tauri::commands::library::list_steam_downloads,

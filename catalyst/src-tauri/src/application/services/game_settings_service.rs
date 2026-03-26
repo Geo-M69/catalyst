@@ -231,6 +231,98 @@ pub(crate) fn get_game_properties_settings(
 	)?)
 }
 
+pub(crate) fn get_game_screenshots(
+	state: &AppState,
+	provider: String,
+	external_id: String,
+) -> AppResult<Vec<GameScreenshotResponse>> {
+	use std::time::SystemTime;
+	let connection = open_connection(&state.db_path)?;
+	cleanup_expired_sessions(&connection)?;
+	let user = get_authenticated_user(state, &connection)?;
+	let (normalized_provider, normalized_external_id) =
+		normalize_game_identity_input(&provider, &external_id)?;
+	ensure_owned_game_exists(
+		&connection,
+		&user.id,
+		&normalized_provider,
+		&normalized_external_id,
+	)?;
+
+	if normalized_provider != "steam" {
+		return Ok(Vec::new());
+	}
+
+	let Some(steam_id) = user
+		.steam_id
+		.as_deref()
+		.map(str::trim)
+		.filter(|value| !value.is_empty())
+	else {
+		return Ok(Vec::new());
+	};
+
+	let steam_root = resolve_steam_root_path(state.steam_root_override.as_deref())
+		.ok_or_else(|| AppError::not_found("steam_install_not_found", "Could not locate local Steam installation"))?;
+	let userdata_directory = resolve_steam_userdata_directory(&steam_root, steam_id)?;
+
+	let app_id = normalized_external_id.parse::<u64>().map_err(|_| {
+		AppError::validation("invalid_external_id", "Steam external_id must be a numeric app ID")
+	})?;
+
+	// Common Steam screenshots path: userdata/<steamid>/760/remote/<app_id>
+	let candidate_dir = userdata_directory.join("760").join("remote").join(app_id.to_string());
+	if !candidate_dir.is_dir() {
+		return Ok(Vec::new());
+	}
+
+	fn collect_image_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) -> std::io::Result<()> {
+		for entry in std::fs::read_dir(dir)? {
+			let entry = entry?;
+			let path = entry.path();
+			if path.is_dir() {
+				let _ = collect_image_files(&path, out);
+			} else if path.is_file() {
+				if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+					let ext = ext.to_ascii_lowercase();
+					if ext == "png" || ext == "jpg" || ext == "jpeg" {
+						out.push(path.clone());
+					}
+				}
+			}
+		}
+		Ok(())
+	}
+
+	let mut found: Vec<std::path::PathBuf> = Vec::new();
+	let _ = collect_image_files(&candidate_dir, &mut found);
+
+	// Sort by modified time desc
+	found.sort_by(|a, b| {
+		let ma = std::fs::metadata(a).and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
+		let mb = std::fs::metadata(b).and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
+		mb.cmp(&ma)
+	});
+
+	const MAX: usize = 24;
+	found.truncate(MAX);
+
+	let results = found
+		.into_iter()
+		.map(|path| GameScreenshotResponse {
+			id: path
+				.file_name()
+				.and_then(|n| n.to_str())
+				.map(|s| s.to_string())
+				.unwrap_or_default(),
+			path: path.to_string_lossy().to_string(),
+			thumbnail_path: None,
+		})
+		.collect();
+
+	Ok(results)
+}
+
 pub(crate) fn set_game_properties_settings(
 	state: &AppState,
 	provider: String,
