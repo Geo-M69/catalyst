@@ -8,12 +8,18 @@ import { createInstallDialog } from "./components/installDialog";
 import { createReviewCard, createReviewPlaceholder, Review } from "./components/reviewCard";
 import { loadReviewForGame, saveReviewForGame } from "./reviewStore";
 import {
-  type GameCompatibilityToolOption,
+  buildDetailsDropdownSnapshot,
+  resolveFranchiseLabel,
+} from "./detailsDropdownMetadata";
+import {
   createGamePropertiesPanel,
-  type GameBetaAccessCodeValidationResult,
-  type GamePropertiesPersistedSettings,
-  type GamePrivacySettings,
 } from "./components/gamePropertiesPanel";
+import type {
+  GameBetaAccessCodeValidationResult,
+  GameCompatibilityToolOption,
+  GamePrivacySettings,
+  GamePropertiesPersistedSettings,
+} from "../shared/ipc/gamePropertiesTypes";
 import { applyLibraryFilters } from "./filtering";
 import {
   HIDDEN_GAMES_COLLECTION_NAME,
@@ -21,9 +27,13 @@ import {
   type GameResponse,
 } from "./types";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { ipcService } from "../shared/ipc/client";
 import { normalizeAppError } from "../shared/ipc/errors";
+import {
+  collectSteamTagSuggestions,
+  formatLibraryRefreshAgeLabel,
+  openSteamConnectedUrl,
+} from "./libraryUiHelpers";
 import type {
   GameActivityTimelineItemPayload,
   GameActivityTimelinePayload,
@@ -169,6 +179,10 @@ const LIBRARY_SOFT_LOCK_ASPECTS: ReadonlyArray<{ label: string; ratio: number }>
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
 // runtime platform alias used below
 type RuntimePlatform = "windows" | "macos" | "linux" | "other";
+type AppHistoryState = {
+  gameId?: string;
+  view?: "game-details" | "library";
+};
 
 const resolveToastRegion = (): HTMLElement => {
   const existingRegion = document.getElementById("launcher-toast-region");
@@ -186,39 +200,6 @@ const resolveToastRegion = (): HTMLElement => {
 };
 
 const toastRegionElement = resolveToastRegion();
-
-const openSteamConnectedUrl = async (
-  steamProtocolUrl: string,
-  webFallbackUrl: string
-): Promise<void> => {
-  try {
-    await openUrl(steamProtocolUrl);
-    return;
-  } catch {
-    await openUrl(webFallbackUrl);
-  }
-};
-
-const collectSteamTagSuggestions = (games: GameResponse[]): string[] => {
-  const tagsByKey = new Map<string, string>();
-
-  for (const game of games) {
-    for (const rawTag of game.steamTags ?? []) {
-      const tag = rawTag.trim();
-      if (tag.length === 0) {
-        continue;
-      }
-      const key = tag.toLocaleLowerCase();
-      if (!tagsByKey.has(key)) {
-        tagsByKey.set(key, tag);
-      }
-    }
-  }
-
-  return [...tagsByKey.values()].sort((left, right) =>
-    left.localeCompare(right, undefined, { sensitivity: "base" })
-  );
-};
 
 // Download snapshot type moved to `libraryStore` and imported as `DownloadEtaSnapshot`.
 
@@ -266,30 +247,6 @@ const setSessionStatus = (steamConnected: boolean, isError = false): void => {
 const setLibrarySummary = (message: string): void => {
   librarySummaryElement.textContent = message;
   librarySummaryElement.classList.remove("status-error");
-};
-
-const formatLibraryRefreshAgeLabel = (elapsedMs: number): string => {
-  const elapsedSeconds = Math.floor(elapsedMs / 1000);
-  if (elapsedSeconds < 15) {
-    return "Synced just now";
-  }
-
-  if (elapsedSeconds < 60) {
-    return `Synced ${elapsedSeconds}s ago`;
-  }
-
-  const elapsedMinutes = Math.floor(elapsedSeconds / 60);
-  if (elapsedMinutes < 60) {
-    return `Synced ${elapsedMinutes}m ago`;
-  }
-
-  const elapsedHours = Math.floor(elapsedMinutes / 60);
-  if (elapsedHours < 24) {
-    return `Synced ${elapsedHours}h ago`;
-  }
-
-  const elapsedDays = Math.floor(elapsedHours / 24);
-  return `Synced ${elapsedDays}d ago`;
 };
 
 const renderLibraryLastUpdated = (): void => {
@@ -424,7 +381,7 @@ gameDetailsBackButton.addEventListener("click", () => {
 
 // Handle browser history navigation
 window.addEventListener("popstate", (ev: PopStateEvent) => {
-  const state = ev.state as any;
+  const state = ev.state as AppHistoryState | null;
   if (state && state.view === "game-details" && typeof state.gameId === "string") {
     openGameDetails(state.gameId, false);
     return;
@@ -1613,9 +1570,9 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
 
       summary.append(countP, progressWrap, iconsRow, viewLinkP);
       achievementsSection.append(heading, summary);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("getGameAchievements failed:", err);
-      const message = err?.message ?? "Could not load achievements right now.";
+      const message = err instanceof Error ? err.message : "Could not load achievements right now.";
       renderAchievementsPlaceholder(message);
     }
   })();
@@ -3553,7 +3510,8 @@ const renderDetailsDropdown = (gameId: string): void => {
   // left: cover (or header) + short description
   const coverCandidates = getSteamArtworkCandidates(game, "cover");
   const coverUrl = (coverCandidates && coverCandidates.length > 0) ? coverCandidates[0] : (game.artworkUrl ?? "");
-  const headerImage = (game as any).headerImage ?? (game.headerImage ?? undefined);
+  const metadataSnapshot = buildDetailsDropdownSnapshot(game);
+  const headerImage = metadataSnapshot.headerImage;
   const left = document.createElement("div");
   left.className = "dd-left";
   const img = document.createElement("img");
@@ -3562,20 +3520,16 @@ const renderDetailsDropdown = (gameId: string): void => {
   img.alt = `${game.name} cover`;
   const desc = document.createElement("div");
   desc.className = "dd-desc";
-  desc.textContent = (game as any).shortDescription ?? (game.shortDescription ?? (game as any).description ?? "");
+  desc.textContent = metadataSnapshot.description;
   left.append(img, desc);
 
   // center: metadata (create early so async metadata merge can update these elements)
   const center = document.createElement("div");
   center.className = "dd-center";
-  const developers = Array.isArray((game as any).developers) ? (game as any).developers.join(", ") : (game.developers ? game.developers.join(", ") : "-");
-  const publishers = Array.isArray((game as any).publishers) ? (game as any).publishers.join(", ") : (game.publishers ? game.publishers.join(", ") : "-");
-  const franText = (game as any).franchise ?? game.franchise ?? "-";
-  const releaseText = (game as any).release_date ?? (game as any).releaseDate ?? game.releaseDate ?? "-";
-  const dev = document.createElement("div"); dev.className = "meta-row"; dev.innerHTML = `<div class="meta-label">Developer</div><div>${escapeHtml(developers)}</div>`;
-  const pub = document.createElement("div"); pub.className = "meta-row"; pub.innerHTML = `<div class="meta-label">Publisher</div><div>${escapeHtml(publishers)}</div>`;
-  const fran = document.createElement("div"); fran.className = "meta-row"; fran.innerHTML = `<div class="meta-label">Franchise</div><div>${escapeHtml(String(franText))}</div>`;
-  const rel = document.createElement("div"); rel.className = "meta-row"; rel.innerHTML = `<div class="meta-label">Release Date</div><div>${escapeHtml(String(releaseText))}</div>`;
+  const dev = document.createElement("div"); dev.className = "meta-row"; dev.innerHTML = `<div class="meta-label">Developer</div><div>${escapeHtml(metadataSnapshot.developersText)}</div>`;
+  const pub = document.createElement("div"); pub.className = "meta-row"; pub.innerHTML = `<div class="meta-label">Publisher</div><div>${escapeHtml(metadataSnapshot.publishersText)}</div>`;
+  const fran = document.createElement("div"); fran.className = "meta-row"; fran.innerHTML = `<div class="meta-label">Franchise</div><div>${escapeHtml(metadataSnapshot.franchiseText)}</div>`;
+  const rel = document.createElement("div"); rel.className = "meta-row"; rel.innerHTML = `<div class="meta-label">Release Date</div><div>${escapeHtml(metadataSnapshot.releaseDateText)}</div>`;
   center.append(dev, pub, fran, rel);
 
   // If store metadata is missing or stale in the frontend, fetch it on-demand
@@ -3595,41 +3549,12 @@ const renderDetailsDropdown = (gameId: string): void => {
         if (pubEl && meta.publishers) pubEl.textContent = meta.publishers.join(', ');
         const franEl = center.querySelector('.meta-row:nth-child(3) > div:nth-child(2)');
         if (franEl) {
-          const rawFr = (meta.franchise && meta.franchise.toString().trim().length > 0) ? meta.franchise : undefined;
-          // Heuristic fallback: try to infer franchise from the game name (prefix before ':' or ' - ')
-          let inferredFr: string | undefined = undefined;
-          if (!rawFr) {
-            try {
-              const title = (game && game.name) ? String(game.name) : "";
-              if (title.includes(":")) {
-                inferredFr = title.split(":")[0].trim();
-              } else if (title.includes(" - ")) {
-                inferredFr = title.split(" - ")[0].trim();
-              } else if (title.includes(" — ")) {
-                inferredFr = title.split(" — ")[0].trim();
-              }
-              if (inferredFr && inferredFr.length === 0) inferredFr = undefined;
-            } catch {
-              inferredFr = undefined;
-            }
-          }
-          // Fallback order: explicit franchise -> inferred from title -> publisher name -> '-'
-          let publisherFallback: string | undefined = undefined;
-          if (meta && Array.isArray((meta as any).publishers) && (meta as any).publishers.length > 0) {
-            const p = (meta as any).publishers[0];
-            if (p && String(p).trim().length > 0) publisherFallback = String(p).trim();
-          }
-          if (!publisherFallback && Array.isArray((game as any).publishers) && (game as any).publishers.length > 0) {
-            const p = (game as any).publishers[0];
-            if (p && String(p).trim().length > 0) publisherFallback = String(p).trim();
-          }
-
-          const franchiseVal = rawFr ?? inferredFr ?? publisherFallback;
+          const franchiseVal = resolveFranchiseLabel(game, meta, metadataSnapshot.primaryPublisher);
           franEl.textContent = franchiseVal ?? "-";
-          if (!rawFr && franchiseVal) console.debug("franchise filled from fallback:", franchiseVal);
+          if (meta.franchise === undefined && franchiseVal) console.debug("franchise filled from fallback:", franchiseVal);
         }
         const relEl = center.querySelector('.meta-row:nth-child(4) > div:nth-child(2)');
-        if (relEl) relEl.textContent = meta.releaseDate ?? "-";
+        if (relEl) relEl.textContent = meta.releaseDate ?? metadataSnapshot.releaseDateText;
       }
     } catch (err) {
       // ignore

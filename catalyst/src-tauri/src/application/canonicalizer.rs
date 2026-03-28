@@ -1,5 +1,4 @@
 use crate::FeatureResponse;
-use chrono::Utc;
 use serde_json::Value;
 
 pub fn build_canonical_features(

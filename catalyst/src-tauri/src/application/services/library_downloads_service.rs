@@ -1,0 +1,93 @@
+use std::collections::{HashMap, HashSet};
+
+use crate::application::error::AppResult;
+use crate::AppState;
+use crate::SteamDownloadProgressResponse;
+use crate::cleanup_expired_sessions;
+use crate::collect_steam_download_progress_from_steamapps_dir;
+use crate::get_authenticated_user;
+use crate::load_owned_steam_games_by_app_id;
+use crate::open_connection;
+use crate::resolve_steam_root_paths;
+use crate::resolve_steamapps_directories;
+
+pub(crate) fn list_steam_downloads(
+    state: &AppState,
+) -> AppResult<Vec<SteamDownloadProgressResponse>> {
+    let owned_games_by_app_id = match open_connection(&state.db_path) {
+        Ok(connection) => {
+            if let Err(error) = cleanup_expired_sessions(&connection) {
+                eprintln!(
+					"Steam download tracking: failed to cleanup expired sessions ({error}); continuing without ownership map."
+				);
+                HashMap::new()
+            } else {
+                match get_authenticated_user(state, &connection) {
+                    Ok(user) => match load_owned_steam_games_by_app_id(&connection, &user.id) {
+                        Ok(games) => games,
+                        Err(error) => {
+                            eprintln!(
+								"Steam download tracking: could not load owned Steam games ({error}); continuing without ownership map."
+							);
+                            HashMap::new()
+                        }
+                    },
+                    Err(error) => {
+                        eprintln!(
+							"Steam download tracking: could not resolve authenticated user metadata ({error}); continuing without ownership map."
+						);
+                        HashMap::new()
+                    }
+                }
+            }
+        }
+        Err(error) => {
+            eprintln!(
+				"Steam download tracking: could not open app database ({error}); continuing without ownership map."
+			);
+            HashMap::new()
+        }
+    };
+
+    let steam_roots = resolve_steam_root_paths(state.steam_root_override.as_deref());
+    if steam_roots.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut downloads = Vec::new();
+    let mut seen_external_ids = HashSet::new();
+
+    for steam_root in steam_roots {
+        let steamapps_directories = match resolve_steamapps_directories(&steam_root) {
+            Ok(paths) => paths,
+            Err(error) => {
+                eprintln!(
+                    "Could not resolve Steam library paths from root {}: {}",
+                    steam_root.display(),
+                    error
+                );
+                continue;
+            }
+        };
+        for steamapps_directory in steamapps_directories {
+            if let Err(error) = collect_steam_download_progress_from_steamapps_dir(
+                &steamapps_directory,
+                &owned_games_by_app_id,
+                &mut seen_external_ids,
+                &mut downloads,
+            ) {
+                eprintln!(
+                    "Could not read Steam download progress from {}: {}",
+                    steamapps_directory.display(),
+                    error
+                );
+            }
+        }
+    }
+
+    downloads.sort_by(|left, right| {
+        left.name
+            .to_ascii_lowercase()
+            .cmp(&right.name.to_ascii_lowercase())
+    });
+    Ok(downloads)
+}

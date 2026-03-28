@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::ops::Deref;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use tauri::Manager;
 
@@ -35,9 +35,10 @@ impl AppContext {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct AppState {
     pub(crate) context: AppContext,
-    pub(crate) current_session_token: Mutex<Option<String>>,
+    pub(crate) current_session_token: Arc<Mutex<Option<String>>>,
 }
 
 impl AppState {
@@ -62,7 +63,7 @@ impl AppState {
     pub(crate) fn from_context(context: AppContext) -> Self {
         Self {
             context,
-            current_session_token: Mutex::new(None),
+            current_session_token: Arc::new(Mutex::new(None)),
         }
     }
 }

@@ -3,7 +3,6 @@ import path from 'node:path';
 
 const ROOT = process.cwd();
 const RUST_SRC_ROOT = path.join(ROOT, 'src-tauri', 'src');
-const LIB_RS = path.join(RUST_SRC_ROOT, 'lib.rs');
 const OUTPUT = path.join(ROOT, 'docs', 'command-inventory.md');
 const CHECK_MODE = process.argv.includes('--check');
 
@@ -63,25 +62,32 @@ function collectAnnotatedCommands(content, filePath) {
   return commands;
 }
 
-function collectRegisteredCommandsFromLibRs(content) {
-  const handlerMatch = content.match(/generate_handler!\s*\[([\s\S]*?)\]/m);
-  if (!handlerMatch) {
+function collectRegisteredCommandsFromContent(content) {
+  const handlerBlocks = [...content.matchAll(/generate_handler!\s*\[([\s\S]*?)\]/gm)];
+  if (handlerBlocks.length === 0) {
     return [];
   }
 
-  const handlerBody = handlerMatch[1]
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/\/\/.*$/gm, '');
+  const commands = [];
+  for (const handlerMatch of handlerBlocks) {
+    const handlerBody = handlerMatch[1]
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/.*$/gm, '');
 
-  return handlerBody
-    .split(',')
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0)
-    .map((item) => item.split(/\s+as\s+/)[0]?.trim() ?? item)
-    .map((item) => {
-      const match = item.match(/([a-zA-Z_][a-zA-Z0-9_]*)$/);
-      return match ? match[1] : item;
-    });
+    commands.push(
+      ...handlerBody
+        .split(',')
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0)
+        .map((item) => item.split(/\s+as\s+/)[0]?.trim() ?? item)
+        .map((item) => {
+          const match = item.match(/([a-zA-Z_][a-zA-Z0-9_]*)$/);
+          return match ? match[1] : item;
+        })
+    );
+  }
+
+  return commands;
 }
 
 function toSet(values) {
@@ -157,18 +163,16 @@ function normalizeForCheck(content) {
 async function main() {
   const rustFiles = await walkRustFiles(RUST_SRC_ROOT);
   const allAnnotated = [];
+  const registeredCommandsInSource = [];
 
   for (const filePath of rustFiles) {
     const content = await fs.readFile(filePath, 'utf8');
     allAnnotated.push(...collectAnnotatedCommands(content, filePath));
+    registeredCommandsInSource.push(...collectRegisteredCommandsFromContent(content));
   }
 
   allAnnotated.sort((lhs, rhs) => lhs.name.localeCompare(rhs.name));
-
-  const libRsContent = await fs.readFile(LIB_RS, 'utf8');
-  const registeredCommands = collectRegisteredCommandsFromLibRs(libRsContent).sort((lhs, rhs) =>
-    lhs.localeCompare(rhs)
-  );
+  const registeredCommands = [...new Set(registeredCommandsInSource)].sort((lhs, rhs) => lhs.localeCompare(rhs));
 
   const annotatedNames = allAnnotated.map((item) => item.name);
   const annotatedSet = toSet(annotatedNames);

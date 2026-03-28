@@ -1,6 +1,44 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { GameResponse } from "../types";
 import { getSteamArtworkCandidates, addUniqueCandidate, type SteamLibraryArtworkKind } from "../../shared/utils/artwork";
+import type {
+  AutomaticUpdatesMode,
+  BackgroundDownloadsMode,
+  GameBetaAccessCodeValidationResult,
+  GameCompatibilitySettings,
+  GameCompatibilityToolOption,
+  GameControllerSettings,
+  GameCustomizationArtworkPaths,
+  GameCustomizationSettings,
+  GameGeneralSettings,
+  GameInstallationDetails,
+  GamePrivacySettings,
+  GamePropertiesPersistedSettings,
+  GameUpdatesSettings,
+  GameVersionBetaId,
+  GameVersionBetaOption,
+  GameVersionsBetasSettings,
+  SteamInputOverrideMode,
+} from "../../shared/ipc/gamePropertiesTypes";
+export type {
+  AutomaticUpdatesMode,
+  BackgroundDownloadsMode,
+  GameBetaAccessCodeValidationResult,
+  GameCompatibilitySettings,
+  GameCompatibilityToolOption,
+  GameControllerSettings,
+  GameCustomizationArtworkPaths,
+  GameCustomizationSettings,
+  GameGeneralSettings,
+  GameInstallationDetails,
+  GamePrivacySettings,
+  GamePropertiesPersistedSettings,
+  GameUpdatesSettings,
+  GameVersionBetaId,
+  GameVersionBetaOption,
+  GameVersionsBetasSettings,
+  SteamInputOverrideMode,
+} from "../../shared/ipc/gamePropertiesTypes";
 
 export interface GamePropertiesInput {
   game: GameResponse;
@@ -28,40 +66,6 @@ export interface GamePropertiesPanelController {
   open: (input: GamePropertiesInput) => void;
 }
 
-export interface GameVersionBetaOption {
-  id: string;
-  name: string;
-  description: string;
-  lastUpdated: string;
-  buildId?: string;
-  requiresAccessCode?: boolean;
-  isDefault?: boolean;
-}
-
-export interface GameCompatibilityToolOption {
-  id: string;
-  label: string;
-}
-
-export interface GameBetaAccessCodeValidationResult {
-  valid: boolean;
-  message: string;
-  branchId?: string;
-  branchName?: string;
-}
-
-export interface GameInstallationDetails {
-  installPath?: string;
-  sizeOnDiskBytes?: number;
-}
-
-export interface GameCustomizationArtworkPaths {
-  cover?: string;
-  background?: string;
-  logo?: string;
-  wideCover?: string;
-}
-
 type GamePropertiesTabId =
   | "general"
   | "compatibility"
@@ -78,64 +82,6 @@ interface GamePropertiesTab {
   label: string;
 }
 
-export interface GameGeneralSettings {
-  language: string;
-  launchOptions: string;
-  steamOverlayEnabled: boolean;
-}
-
-export interface GameCompatibilitySettings {
-  forceSteamPlayCompatibilityTool: boolean;
-  steamPlayCompatibilityTool: string;
-}
-
-type AutomaticUpdatesMode =
-  | "use-global-setting"
-  | "wait-until-launch"
-  | "let-steam-decide"
-  | "immediately-download";
-
-type BackgroundDownloadsMode =
-  | "pause-while-playing-global"
-  | "always-allow"
-  | "never-allow";
-
-export interface GameUpdatesSettings {
-  automaticUpdatesMode: AutomaticUpdatesMode;
-  backgroundDownloadsMode: BackgroundDownloadsMode;
-}
-
-type SteamInputOverrideMode = "use-default-settings" | "disable-steam-input" | "enable-steam-input";
-
-export interface GameControllerSettings {
-  steamInputOverride: SteamInputOverrideMode;
-}
-
-export interface GamePrivacySettings {
-  hideInLibrary: boolean;
-  markAsPrivate: boolean;
-  overlayDataDeleted: boolean;
-}
-
-type GameVersionBetaId = string;
-
-export interface GameVersionsBetasSettings {
-  privateAccessCode: string;
-  selectedVersionId: GameVersionBetaId;
-}
-
-export interface GameCustomizationSettings {
-  customSortName: string;
-}
-
-export interface GamePropertiesPersistedSettings {
-  compatibility: GameCompatibilitySettings;
-  customization: GameCustomizationSettings;
-  controller: GameControllerSettings;
-  gameVersionsBetas: GameVersionsBetasSettings;
-  general: GameGeneralSettings;
-  updates: GameUpdatesSettings;
-}
 
 interface DropdownOption {
   description?: string;

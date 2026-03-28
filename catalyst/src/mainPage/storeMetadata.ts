@@ -1,25 +1,11 @@
 import { ipcService } from "../shared/ipc/client";
-import type { Feature } from "./types";
+import type { GameStoreMetadataPayload } from "../shared/ipc/contracts";
 
-export interface GameStoreMetadata {
-  developers?: string[];
-  publishers?: string[];
-  franchise?: string | null;
-  releaseDate?: string | null;
-  shortDescription?: string | null;
-  headerImage?: string | null;
-  hasAchievements?: boolean;
-  achievementsCount?: number | null;
-  hasCloudSaves?: boolean;
-  cloudDetails?: string | null;
-  controllerSupport?: string | null;
-  features?: Feature[];
-}
+export type GameStoreMetadata = GameStoreMetadataPayload;
 
 export const fetchGameStoreMetadata = async (provider: string, externalId: string): Promise<GameStoreMetadata | null> => {
   try {
-    const res = await ipcService.getGameStoreMetadata({ provider, externalId } as any);
-    return res as GameStoreMetadata;
+    return await ipcService.getGameStoreMetadata({ provider, externalId });
   } catch (err) {
     console.warn("fetchGameStoreMetadata failed", err);
     return null;

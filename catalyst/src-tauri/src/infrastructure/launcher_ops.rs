@@ -1,10 +1,6 @@
-#![allow(dead_code)]
-
 use std::path::Path;
-use std::process::Command;
 
 use crate::application::error::{AppError, AppResult};
-use crate::application::ports::effects::ProcessPort;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct LauncherOps;
@@ -41,15 +37,5 @@ impl LauncherOps {
 
     pub(crate) fn open_steam_game_recording_settings(&self) -> AppResult<()> {
         crate::open_steam_game_recording_settings().map_err(AppError::from)
-    }
-}
-
-impl ProcessPort for LauncherOps {
-    fn spawn_command(&self, command: &str, args: &[&str]) -> AppResult<()> {
-        Command::new(command)
-            .args(args)
-            .spawn()
-            .map(|_| ())
-            .map_err(|error| AppError::from(format!("Failed to spawn '{command}': {error}")))
     }
 }

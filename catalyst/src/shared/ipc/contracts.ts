@@ -3,8 +3,8 @@ import type {
   GameCompatibilityToolOption,
   GamePropertiesPersistedSettings,
   GameVersionBetaOption,
-} from "../../mainPage/components/gamePropertiesPanel";
-import type { CollectionResponse, LibraryResponse, PublicUser } from "../../mainPage/types";
+} from "./gamePropertiesTypes";
+import type { CollectionResponse, LibraryResponse, PublicUser } from "../models/library";
 
 export type AppErrorKind = "validation" | "unauthorized" | "not_found" | "conflict" | "external" | "internal";
 

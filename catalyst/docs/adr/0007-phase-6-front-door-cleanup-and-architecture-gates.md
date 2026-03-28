@@ -102,3 +102,57 @@ Follow-ups
    instead of shared globals.
 3. Add additional architecture checks as boundaries stabilize (for example,
    preventing infrastructure imports directly from interface layer where not intended).
+
+Implementation Status Update (2026-03-28)
+-----------------------------------------
+
+This ADR has now been implemented beyond the initial acceptance criteria.
+
+Completed changes:
+
+1. Enforced front-door and architecture gates:
+   - `src-tauri/src/lib.rs` remains front-door-only and is guarded.
+   - Architecture guards now include:
+     - `check-lib-front-door.mjs`
+     - `check-crate-glob-imports.mjs`
+     - `check-service-runtime-imports.mjs`
+     - `check-shared-boundaries.mjs`
+     - `check-max-file-lines.mjs`
+   - `phase0:guardrails` passes with inventory check, architecture gates, and smoke checks.
+
+2. Strengthened command boundary and async behavior:
+   - Added shared blocking command helper in
+     `src-tauri/src/interface/tauri/commands/blocking.rs`.
+   - Migrated blocking-heavy Tauri commands to `run_blocking(...)` wrappers
+     for safer UI responsiveness.
+   - Command inventory generation now verifies annotated commands against the
+     generated handler registration and docs inventory.
+
+3. Reduced service monolith risk and extracted focused modules:
+   - `library_downloads_service.rs`
+   - `library_store_metadata_service.rs`
+   - `library_review_service.rs`
+   - shared response types moved to `library_types.rs`
+
+4. Completed service-to-port migration for non-legacy services:
+   - Added application ports and infrastructure adapters for:
+     - auth
+     - steam
+     - game actions
+     - game settings
+     - library
+   - `LEGACY_EXCEPTIONS` in `check-service-runtime-imports.mjs` is now empty.
+   - Application service modules are now façade/orchestration layers over
+     explicit port contracts.
+
+5. Added frontend/shared boundary and modularization guardrails:
+   - Shared boundary gate prevents `src/shared` from importing `src/mainPage`.
+   - Introduced shared IPC models/contracts and extracted frontend helpers
+     (`libraryUiHelpers.ts`, `detailsDropdownMetadata.ts`) to reduce coupling.
+
+Current transitional state:
+
+- The architecture gates and service boundaries are now enforced.
+- The remaining transition work is to keep shrinking
+  `src-tauri/src/lib_runtime_impl.rs` by moving runtime helper functions into
+  dedicated modules/adapters while preserving behavior.

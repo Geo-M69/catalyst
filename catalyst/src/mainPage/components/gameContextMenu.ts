@@ -29,7 +29,7 @@ interface CreateGameContextMenuArgs {
 
 export interface GameContextMenuController {
   closeMenu: () => void;
-  openMenu?: (game: any, card: HTMLElement, x: number, y: number) => void;
+  openMenu?: (game: GameResponse, card: HTMLElement, x: number, y: number) => void;
 }
 
 const VIEWPORT_PADDING_PX = 8;

@@ -2,7 +2,7 @@
 
 Catalyst is a Tauri desktop app (Vanilla TS frontend + Rust backend commands).
 
-Authentication, Steam linking, session management, and library sync are implemented as Tauri commands in `src-tauri/src/lib.rs`.
+Authentication, Steam linking, session management, and library sync are implemented as Tauri commands in `src-tauri/src/interface/tauri/commands/*` and wired in `src-tauri/src/lib_runtime_impl.rs`.
 
 ## Prerequisites
 
@@ -93,17 +93,23 @@ npm run tauri build
 
 ## Phase 0 Guardrails
 
-Use these commands to keep baseline architecture checks reproducible during migration:
+Use these commands to keep architecture and command-surface checks reproducible:
 
 ```bash
 npm run inventory:commands
+npm run inventory:commands:check
+npm run guard:architecture
 npm run typecheck:new
 npm run smoke
+npm run phase0:guardrails
 ```
 
 - `inventory:commands` regenerates `docs/command-inventory.md` from Rust command annotations and handler registration.
+- `inventory:commands:check` verifies `docs/command-inventory.md` is in sync.
+- `guard:architecture` runs architectural boundary checks (`lib` front door, service import boundaries, shared boundaries, and file-size guardrails).
 - `typecheck:new` applies stricter TypeScript checks to new modular folders (`src/app`, `src/features`, `src/shared`).
 - `smoke` runs frontend build and backend `cargo check`.
+- `phase0:guardrails` runs inventory check + architecture guards + smoke in one command.
 
 On Windows, this produces an MSI installer by default (see `src-tauri/tauri.conf.json` bundle settings).
 

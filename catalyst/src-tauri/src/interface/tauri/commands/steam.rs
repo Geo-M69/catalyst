@@ -5,37 +5,47 @@ use crate::{
     GameVersionBetasResponse,
     SteamCollectionsImportResponse,
 };
+use crate::interface::tauri::commands::blocking::run_blocking;
 use tauri::State;
 
 #[tauri::command]
-pub(crate) fn list_game_versions_betas(
+pub(crate) async fn list_game_versions_betas(
     provider: String,
     external_id: String,
     state: State<'_, AppState>,
 ) -> AppResult<GameVersionBetasResponse> {
-    crate::application::services::steam_service::list_game_versions_betas(
-        state.inner(),
-        provider,
-        external_id,
-    )
+    let state = state.inner().clone();
+    run_blocking(move || {
+        crate::application::services::steam_service::list_game_versions_betas(
+            &state,
+            provider,
+            external_id,
+        )
+    })
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn validate_game_beta_access_code(
+pub(crate) async fn validate_game_beta_access_code(
     provider: String,
     external_id: String,
     access_code: String,
     state: State<'_, AppState>,
 ) -> AppResult<GameBetaAccessCodeValidationResponse> {
-    crate::application::services::steam_service::validate_game_beta_access_code(
-        state.inner(),
-        provider,
-        external_id,
-        access_code,
-    )
+    let state = state.inner().clone();
+    run_blocking(move || {
+        crate::application::services::steam_service::validate_game_beta_access_code(
+            &state,
+            provider,
+            external_id,
+            access_code,
+        )
+    })
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn import_steam_collections(state: State<'_, AppState>) -> AppResult<SteamCollectionsImportResponse> {
-    crate::application::services::steam_service::import_steam_collections(state.inner())
+pub(crate) async fn import_steam_collections(state: State<'_, AppState>) -> AppResult<SteamCollectionsImportResponse> {
+    let state = state.inner().clone();
+    run_blocking(move || crate::application::services::steam_service::import_steam_collections(&state)).await
 }

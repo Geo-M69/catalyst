@@ -1,17 +1,18 @@
 use crate::application::error::AppResult;
-use crate::application::services::library_service::{
+use crate::application::services::library_types::{
     GameActivityTimelineResponse,
-    GameFriendsActivityResponse,
-    GameStoreMetadataResponse,
     GameAchievementsResponse,
-    GameTradingCardsResponse,
     GameDlcResponse,
+    GameFriendsActivityResponse,
     GameReviewResponse,
+    GameStoreMetadataResponse,
+    GameTradingCardsResponse,
 };
 use crate::infrastructure::steam_local::SteamLocal;
 use crate::{AppState, LibraryResponse, SteamDownloadProgressResponse, SteamSyncResponse};
 use tauri::{AppHandle, State};
 use tauri::Emitter;
+use crate::interface::tauri::commands::blocking::run_blocking;
 
 #[tauri::command]
 pub(crate) fn get_library(state: State<'_, AppState>) -> AppResult<LibraryResponse> {
@@ -21,8 +22,9 @@ pub(crate) fn get_library(state: State<'_, AppState>) -> AppResult<LibraryRespon
 // `get_steam_status` command removed; Steam status is available via server-side
 // logic and no longer exposed directly to the frontend.
 #[tauri::command]
-pub(crate) fn sync_steam_library(state: State<'_, AppState>) -> AppResult<SteamSyncResponse> {
-    crate::application::services::library_service::sync_steam_library(state.inner())
+pub(crate) async fn sync_steam_library(state: State<'_, AppState>) -> AppResult<SteamSyncResponse> {
+    let state = state.inner().clone();
+    run_blocking(move || crate::application::services::library_service::sync_steam_library(&state)).await
 }
 
 #[tauri::command]
@@ -41,111 +43,140 @@ pub(crate) fn set_game_favorite(
 }
 
 #[tauri::command]
-pub(crate) fn list_steam_downloads(state: State<'_, AppState>) -> AppResult<Vec<SteamDownloadProgressResponse>> {
-    crate::application::services::library_service::list_steam_downloads(state.inner())
+pub(crate) async fn list_steam_downloads(state: State<'_, AppState>) -> AppResult<Vec<SteamDownloadProgressResponse>> {
+    let state = state.inner().clone();
+    run_blocking(move || crate::application::services::library_service::list_steam_downloads(&state)).await
 }
 
 #[tauri::command]
-pub(crate) fn get_game_store_metadata(
+pub(crate) async fn get_game_store_metadata(
     provider: String,
     external_id: String,
     state: State<'_, AppState>,
 ) -> AppResult<GameStoreMetadataResponse> {
-    crate::application::services::library_service::get_game_store_metadata(
-        state.inner(),
-        provider,
-        external_id,
-    )
+    let state = state.inner().clone();
+    run_blocking(move || {
+        crate::application::services::library_service::get_game_store_metadata(
+            &state,
+            provider,
+            external_id,
+        )
+    })
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn get_game_friends_activity(
+pub(crate) async fn get_game_friends_activity(
     provider: String,
     external_id: String,
     force_refresh: Option<bool>,
     state: State<'_, AppState>,
 ) -> AppResult<GameFriendsActivityResponse> {
-    crate::application::services::library_service::get_game_friends_activity(
-        state.inner(),
-        provider,
-        external_id,
-        force_refresh.unwrap_or(false),
-    )
+    let state = state.inner().clone();
+    run_blocking(move || {
+        crate::application::services::library_service::get_game_friends_activity(
+            &state,
+            provider,
+            external_id,
+            force_refresh.unwrap_or(false),
+        )
+    })
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn get_game_activity_timeline(
+pub(crate) async fn get_game_activity_timeline(
     provider: String,
     external_id: String,
     force_refresh: Option<bool>,
     state: State<'_, AppState>,
 ) -> AppResult<GameActivityTimelineResponse> {
-    crate::application::services::library_service::get_game_activity_timeline(
-        state.inner(),
-        provider,
-        external_id,
-        force_refresh.unwrap_or(false),
-    )
+    let state = state.inner().clone();
+    run_blocking(move || {
+        crate::application::services::library_service::get_game_activity_timeline(
+            &state,
+            provider,
+            external_id,
+            force_refresh.unwrap_or(false),
+        )
+    })
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn get_game_achievements(
+pub(crate) async fn get_game_achievements(
     provider: String,
     external_id: String,
     force_refresh: Option<bool>,
     state: State<'_, AppState>,
 ) -> AppResult<GameAchievementsResponse> {
-    crate::application::services::library_service::get_game_achievements(
-        state.inner(),
-        provider,
-        external_id,
-        force_refresh.unwrap_or(false),
-    )
+    let state = state.inner().clone();
+    run_blocking(move || {
+        crate::application::services::library_service::get_game_achievements(
+            &state,
+            provider,
+            external_id,
+            force_refresh.unwrap_or(false),
+        )
+    })
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn get_game_trading_cards(
+pub(crate) async fn get_game_trading_cards(
     provider: String,
     external_id: String,
     force_refresh: Option<bool>,
     state: State<'_, AppState>,
 ) -> AppResult<GameTradingCardsResponse> {
-    crate::application::services::library_service::get_game_trading_cards(
-        state.inner(),
-        provider,
-        external_id,
-        force_refresh.unwrap_or(false),
-    )
+    let state = state.inner().clone();
+    run_blocking(move || {
+        crate::application::services::library_service::get_game_trading_cards(
+            &state,
+            provider,
+            external_id,
+            force_refresh.unwrap_or(false),
+        )
+    })
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn get_game_dlc(
+pub(crate) async fn get_game_dlc(
     provider: String,
     external_id: String,
     force_refresh: Option<bool>,
     state: State<'_, AppState>,
 ) -> AppResult<GameDlcResponse> {
-    crate::application::services::library_service::get_game_dlc(
-        state.inner(),
-        provider,
-        external_id,
-        force_refresh.unwrap_or(false),
-    )
+    let state = state.inner().clone();
+    run_blocking(move || {
+        crate::application::services::library_service::get_game_dlc(
+            &state,
+            provider,
+            external_id,
+            force_refresh.unwrap_or(false),
+        )
+    })
+    .await
 }
 
 #[tauri::command]
-pub(crate) fn get_game_review(
+pub(crate) async fn get_game_review(
     provider: String,
     external_id: String,
     force_refresh: Option<bool>,
     state: State<'_, AppState>,
 ) -> AppResult<GameReviewResponse> {
-    crate::application::services::library_service::get_game_review(
-        state.inner(),
-        provider,
-        external_id,
-        force_refresh.unwrap_or(false),
-    )
+    let state = state.inner().clone();
+    run_blocking(move || {
+        crate::application::services::library_service::get_game_review(
+            &state,
+            provider,
+            external_id,
+            force_refresh.unwrap_or(false),
+        )
+    })
+    .await
 }
 
 /// Run the blocking local Steam scan and call the provided emitter with the result.
@@ -180,7 +211,6 @@ pub(crate) fn run_local_steam_scan_and_call_with_override<F>(
 }
 
 #[tauri::command]
-#[allow(dead_code)]
 pub(crate) fn start_local_steam_scan(
     _state: State<'_, AppState>,
     app_handle: AppHandle,

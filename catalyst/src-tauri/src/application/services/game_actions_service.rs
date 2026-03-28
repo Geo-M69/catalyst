@@ -1,201 +1,148 @@
-use crate::application::error::{AppError, AppResult};
-use crate::domain::game::parse_steam_app_id;
-use crate::infrastructure::launcher_ops::LauncherOps;
-use crate::infrastructure::steam_local::SteamLocal;
-use crate::{
-	AppState,
-	cleanup_expired_sessions,
-	ensure_owned_game_exists,
-	get_authenticated_user,
-	load_game_properties_settings,
-	normalize_game_identity_input,
-	open_connection,
-};
-use rusqlite::{OptionalExtension, params};
+use crate::AppState;
+use crate::application::error::AppResult;
+use crate::application::ports::game_actions::GameActionsPort;
+use crate::infrastructure::game_actions_port::InfrastructureGameActionsPort;
+
+struct GameActionsService<P> {
+    port: P,
+}
+
+impl<P> GameActionsService<P>
+where
+    P: GameActionsPort,
+{
+    fn new(port: P) -> Self {
+        Self { port }
+    }
+
+    fn play_game(
+        &self,
+        provider: String,
+        external_id: String,
+        launch_options: Option<String>,
+    ) -> AppResult<()> {
+        self.port.play_game(provider, external_id, launch_options)
+    }
+
+    fn install_game(
+        &self,
+        provider: String,
+        external_id: String,
+        install_path: Option<String>,
+        create_desktop_shortcut: Option<bool>,
+        create_application_shortcut: Option<bool>,
+    ) -> AppResult<()> {
+        self.port.install_game(
+            provider,
+            external_id,
+            install_path,
+            create_desktop_shortcut,
+            create_application_shortcut,
+        )
+    }
+
+    fn uninstall_game(&self, provider: String, external_id: String) -> AppResult<()> {
+        self.port.uninstall_game(provider, external_id)
+    }
+
+    fn browse_game_installed_files(&self, provider: String, external_id: String) -> AppResult<()> {
+        self.port.browse_game_installed_files(provider, external_id)
+    }
+
+    fn backup_game_files(&self, provider: String, external_id: String) -> AppResult<()> {
+        self.port.backup_game_files(provider, external_id)
+    }
+
+    fn verify_game_files(&self, provider: String, external_id: String) -> AppResult<()> {
+        self.port.verify_game_files(provider, external_id)
+    }
+
+    fn add_game_desktop_shortcut(&self, provider: String, external_id: String) -> AppResult<()> {
+        self.port.add_game_desktop_shortcut(provider, external_id)
+    }
+
+    fn open_game_recording_settings(&self, provider: String, external_id: String) -> AppResult<()> {
+        self.port.open_game_recording_settings(provider, external_id)
+    }
+}
 
 pub(crate) fn play_game(
-	state: &AppState,
-	provider: String,
-	external_id: String,
-	launch_options: Option<String>,
+    state: &AppState,
+    provider: String,
+    external_id: String,
+    launch_options: Option<String>,
 ) -> AppResult<()> {
-	let launcher = LauncherOps::new();
-	let connection = open_connection(&state.db_path)?;
-	cleanup_expired_sessions(&connection)?;
-	let user = get_authenticated_user(state, &connection)?;
-	let (provider, external_id) = normalize_game_identity_input(&provider, &external_id)?;
-	ensure_owned_game_exists(&connection, &user.id, &provider, &external_id)?;
-	let resolved_launch_options = match launch_options
-		.as_deref()
-		.map(str::trim)
-		.filter(|value| !value.is_empty())
-	{
-		Some(value) => Some(value.to_owned()),
-		None => load_game_properties_settings(&connection, &user.id, &provider, &external_id)
-			.ok()
-			.and_then(|settings| {
-				let trimmed_value = settings.general.launch_options.trim();
-				if trimmed_value.is_empty() {
-					None
-				} else {
-					Some(trimmed_value.to_owned())
-				}
-			}),
-	};
-	launcher.open_provider_game_uri(
-		&provider,
-		&external_id,
-		"play",
-		resolved_launch_options.as_deref(),
-	)
+    GameActionsService::new(InfrastructureGameActionsPort::new(state))
+        .play_game(provider, external_id, launch_options)
 }
 
 pub(crate) fn install_game(
-	state: &AppState,
-	provider: String,
-	external_id: String,
-	install_path: Option<String>,
-	create_desktop_shortcut: Option<bool>,
-	create_application_shortcut: Option<bool>,
+    state: &AppState,
+    provider: String,
+    external_id: String,
+    install_path: Option<String>,
+    create_desktop_shortcut: Option<bool>,
+    create_application_shortcut: Option<bool>,
 ) -> AppResult<()> {
-	let launcher = LauncherOps::new();
-	let connection = open_connection(&state.db_path)?;
-	cleanup_expired_sessions(&connection)?;
-	let user = get_authenticated_user(state, &connection)?;
-	let (provider, external_id) = normalize_game_identity_input(&provider, &external_id)?;
-	ensure_owned_game_exists(&connection, &user.id, &provider, &external_id)?;
-	// Steam currently controls install destination and shortcut behavior from its own flow.
-	// Keep receiving these values so the UI can evolve without breaking command contracts.
-	let _ = (
-		install_path,
-		create_desktop_shortcut,
-		create_application_shortcut,
-	);
-	launcher.open_provider_game_uri(&provider, &external_id, "install", None)
+    GameActionsService::new(InfrastructureGameActionsPort::new(state)).install_game(
+        provider,
+        external_id,
+        install_path,
+        create_desktop_shortcut,
+        create_application_shortcut,
+    )
 }
 
 pub(crate) fn uninstall_game(
-	state: &AppState,
-	provider: String,
-	external_id: String,
+    state: &AppState,
+    provider: String,
+    external_id: String,
 ) -> AppResult<()> {
-	let launcher = LauncherOps::new();
-	let connection = open_connection(&state.db_path)?;
-	cleanup_expired_sessions(&connection)?;
-	let user = get_authenticated_user(state, &connection)?;
-	let (provider, external_id) = normalize_game_identity_input(&provider, &external_id)?;
-	ensure_owned_game_exists(&connection, &user.id, &provider, &external_id)?;
-	launcher.open_provider_game_uri(&provider, &external_id, "uninstall", None)
+    GameActionsService::new(InfrastructureGameActionsPort::new(state))
+        .uninstall_game(provider, external_id)
 }
 
 pub(crate) fn browse_game_installed_files(
-	state: &AppState,
-	provider: String,
-	external_id: String,
+    state: &AppState,
+    provider: String,
+    external_id: String,
 ) -> AppResult<()> {
-	let launcher = LauncherOps::new();
-	let steam_local = SteamLocal::new(state.steam_root_override.as_deref());
-	let connection = open_connection(&state.db_path)?;
-	cleanup_expired_sessions(&connection)?;
-	let user = get_authenticated_user(state, &connection)?;
-	let (provider, external_id) = normalize_game_identity_input(&provider, &external_id)?;
-	ensure_owned_game_exists(&connection, &user.id, &provider, &external_id)?;
-
-	if provider != "steam" {
-		return Err(AppError::validation(
-			"unsupported_provider",
-			"Browsing installed files is only supported for Steam games.",
-		));
-	}
-
-	let app_id = parse_steam_app_id(&external_id)?;
-	let install_directory = steam_local.resolve_install_directory_for_app_id(app_id)?;
-	if !install_directory.is_dir() {
-		return Err(AppError::not_found(
-			"install_directory_missing",
-			format!("Install directory is unavailable: {}", install_directory.display()),
-		));
-	}
-
-	launcher.open_path_in_file_manager(&install_directory)
+    GameActionsService::new(InfrastructureGameActionsPort::new(state))
+        .browse_game_installed_files(provider, external_id)
 }
 
 pub(crate) fn backup_game_files(
-	state: &AppState,
-	provider: String,
-	external_id: String,
+    state: &AppState,
+    provider: String,
+    external_id: String,
 ) -> AppResult<()> {
-	let launcher = LauncherOps::new();
-	let connection = open_connection(&state.db_path)?;
-	cleanup_expired_sessions(&connection)?;
-	let user = get_authenticated_user(state, &connection)?;
-	let (provider, external_id) = normalize_game_identity_input(&provider, &external_id)?;
-	ensure_owned_game_exists(&connection, &user.id, &provider, &external_id)?;
-	launcher.open_provider_game_uri(&provider, &external_id, "backup", None)
+    GameActionsService::new(InfrastructureGameActionsPort::new(state))
+        .backup_game_files(provider, external_id)
 }
 
 pub(crate) fn verify_game_files(
-	state: &AppState,
-	provider: String,
-	external_id: String,
+    state: &AppState,
+    provider: String,
+    external_id: String,
 ) -> AppResult<()> {
-	let launcher = LauncherOps::new();
-	let connection = open_connection(&state.db_path)?;
-	cleanup_expired_sessions(&connection)?;
-	let user = get_authenticated_user(state, &connection)?;
-	let (provider, external_id) = normalize_game_identity_input(&provider, &external_id)?;
-	ensure_owned_game_exists(&connection, &user.id, &provider, &external_id)?;
-	launcher.open_provider_game_uri(&provider, &external_id, "validate", None)
+    GameActionsService::new(InfrastructureGameActionsPort::new(state))
+        .verify_game_files(provider, external_id)
 }
 
 pub(crate) fn add_game_desktop_shortcut(
-	state: &AppState,
-	provider: String,
-	external_id: String,
+    state: &AppState,
+    provider: String,
+    external_id: String,
 ) -> AppResult<()> {
-	let launcher = LauncherOps::new();
-	let connection = open_connection(&state.db_path)?;
-	cleanup_expired_sessions(&connection)?;
-	let user = get_authenticated_user(state, &connection)?;
-	let (provider, external_id) = normalize_game_identity_input(&provider, &external_id)?;
-	ensure_owned_game_exists(&connection, &user.id, &provider, &external_id)?;
-
-	let fallback_name = format!("Game {}", external_id);
-	let game_name = connection
-		.query_row(
-			"
-			SELECT name
-			FROM games
-			WHERE user_id = ?1 AND provider = ?2 AND external_id = ?3
-			",
-			params![&user.id, &provider, &external_id],
-			|record| record.get::<_, String>(0),
-		)
-		.optional()
-		.map_err(|error| format!("Failed to query game name for desktop shortcut: {error}"))?
-		.unwrap_or(fallback_name);
-
-	launcher.create_provider_game_desktop_shortcut(&provider, &external_id, &game_name)
+    GameActionsService::new(InfrastructureGameActionsPort::new(state))
+        .add_game_desktop_shortcut(provider, external_id)
 }
 
 pub(crate) fn open_game_recording_settings(
-	state: &AppState,
-	provider: String,
-	external_id: String,
+    state: &AppState,
+    provider: String,
+    external_id: String,
 ) -> AppResult<()> {
-	let launcher = LauncherOps::new();
-	let connection = open_connection(&state.db_path)?;
-	cleanup_expired_sessions(&connection)?;
-	let user = get_authenticated_user(state, &connection)?;
-	let (provider, external_id) = normalize_game_identity_input(&provider, &external_id)?;
-	ensure_owned_game_exists(&connection, &user.id, &provider, &external_id)?;
-
-	if provider != "steam" {
-		return Err(AppError::validation(
-			"unsupported_provider",
-			"Game recording settings are currently only available for Steam games.",
-		));
-	}
-
-	launcher.open_steam_game_recording_settings()
+    GameActionsService::new(InfrastructureGameActionsPort::new(state))
+        .open_game_recording_settings(provider, external_id)
 }

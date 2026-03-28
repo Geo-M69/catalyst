@@ -9,6 +9,10 @@
   "include": [
     "src/app/**/*.ts",
     "src/features/**/*.ts",
+    "src/mainPage/detailsDropdownMetadata.ts",
+    "src/mainPage/libraryStore.ts",
+    "src/mainPage/storeMetadata.ts",
+    "src/mainPage/steamArtwork.ts",
     "src/shared/**/*.ts"
   ]
 }

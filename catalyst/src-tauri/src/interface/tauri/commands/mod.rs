@@ -1,3 +1,4 @@
+pub(crate) mod blocking;
 pub mod auth;
 pub mod collections;
 pub mod game_actions;

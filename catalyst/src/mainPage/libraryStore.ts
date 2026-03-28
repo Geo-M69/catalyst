@@ -1,4 +1,5 @@
 import { type CollectionResponse, type GameResponse } from "./types";
+import type { SteamDownloadProgressPayload } from "../shared/ipc/contracts";
 
 export interface DownloadEtaSnapshot {
   lastBytesDownloaded: number;
@@ -20,12 +21,6 @@ export const isGameLibraryViewMode = (viewMode: LibraryViewMode): viewMode is Ex
   return viewMode !== "collections";
 };
 
-export interface DownloadEtaSnapshot {
-  lastBytesDownloaded: number;
-  lastSampleAtMs: number;
-  smoothedBytesPerSecond: number;
-}
-
 export const store = {
   allGames: [] as GameResponse[],
   gameById: new Map<string, GameResponse>(),
@@ -41,8 +36,8 @@ export const store = {
   closeGameContextMenu: null as (() => void) | null,
   downloadPollTimer: null as number | null,
   isDownloadPollInFlight: false,
-  activeDownloads: [] as any[],
-  previousActiveDownloadsByKey: new Map<string, any>(),
+  activeDownloads: [] as SteamDownloadProgressPayload[],
+  previousActiveDownloadsByKey: new Map<string, SteamDownloadProgressPayload>(),
   downloadCompletionRefreshTimer: null as number | null,
   downloadEtaByKey: new Map<string, DownloadEtaSnapshot>(),
   allCollections: [] as CollectionResponse[],
