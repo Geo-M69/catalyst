@@ -7,6 +7,7 @@ import type {
   GetGameActivityTimelineRequest,
   GetGameDlcRequest,
   GetGameFriendsActivityRequest,
+  GetGameReviewRequest,
   GetGameTradingCardsRequest,
   InstallGameRequest,
   IpcCommandName,
@@ -82,6 +83,8 @@ export const ipcService = {
     callCommand("get_game_trading_cards", payload),
   getGameDlc: (payload: GetGameDlcRequest) =>
     callCommand("get_game_dlc", payload),
+  getGameReview: (payload: GetGameReviewRequest) =>
+    callCommand("get_game_review", payload),
   getGameScreenshots: (payload: ProviderExternalIdRequest) => callCommand("get_game_screenshots", payload),
   getGamePropertiesSettings: (payload: ProviderExternalIdRequest) =>
     callCommand("get_game_properties_settings", payload),

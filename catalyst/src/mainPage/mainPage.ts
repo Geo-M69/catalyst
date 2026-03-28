@@ -5,6 +5,8 @@ import { createCollectionNameDialog } from "./components/collectionNameDialog";
 import { createGameContextMenu } from "./components/gameContextMenu";
 import { type GameGridSection, renderGameGrid } from "./components/gameGrid";
 import { createInstallDialog } from "./components/installDialog";
+import { createReviewCard, createReviewPlaceholder, Review } from "./components/reviewCard";
+import { loadReviewForGame, saveReviewForGame } from "./reviewStore";
 import {
   type GameCompatibilityToolOption,
   createGamePropertiesPanel,
@@ -32,6 +34,7 @@ import type {
   GameInstallLocationPayload,
   GameInstallationDetailsPayload,
   GamePrivacySettingsPayload,
+  GameReviewPayload,
   GameTradingCardsPayload,
   GameScreenshotPayload,
   GameVersionBetasPayload,
@@ -1185,12 +1188,117 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
 
   const reviewSection = document.createElement("section");
   reviewSection.className = "details-section";
-  reviewSection.innerHTML = `
-    <h4>Review</h4>
-    <div class="review-card placeholder">Write a review for this game (coming soon — read-only placeholder).</div>
-  `;
+  const reviewHeading = document.createElement("h4");
+  reviewHeading.textContent = "Review";
+  reviewSection.append(reviewHeading);
 
-  main.append(activitySection, notesSection, reviewSection);
+  // Try to load a persisted review for this game (localStorage for v1)
+  const persisted = loadReviewForGame(game.provider, game.externalId);
+  let reviewToShow: Review | null = null;
+  if (persisted) {
+    reviewToShow = persisted;
+  } else {
+    // Fallback sample uses current total playtime and is not a review-time snapshot.
+    reviewToShow = {
+      id: `r-${game.id}`,
+      userId: "me",
+      gameId: game.id,
+      recommended: true,
+      text: "Write your review and save it to capture playtime at review time.",
+      playtimeMinutes: typeof game.playtimeMinutes === "number" ? game.playtimeMinutes : 0,
+      playtimeCapturedAtReview: false,
+      createdAt: new Date().toISOString(),
+      likes: 1,
+      comments: 0,
+    };
+  }
+
+  let activeReviewCard = reviewToShow ? createReviewCard(reviewToShow) : createReviewPlaceholder();
+  reviewSection.append(activeReviewCard);
+
+  // Wire editing action: open an inline editor and persist playtime at save
+  document.addEventListener("open-review-edit", (ev: Event) => {
+    const ce = ev as CustomEvent<{ reviewId: string }>;
+    const id = ce?.detail?.reviewId;
+    if (!id) return;
+
+    // Replace card with an editor form
+    const form = document.createElement("form");
+    form.className = "review-edit-form";
+    form.innerHTML = `
+      <div style="display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem;">
+        <label style="font-weight:700">Recommend?</label>
+        <select name="recommended">
+          <option value="true">Recommended</option>
+          <option value="false">Not Recommended</option>
+        </select>
+      </div>
+      <div style="margin-bottom:.5rem;">
+        <textarea name="text" rows="4" style="width:100%;padding:.5rem;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:var(--color-text);"></textarea>
+      </div>
+      <div style="display:flex;gap:.5rem;justify-content:flex-end;margin-top:.5rem;">
+        <button type="button" class="secondary-button review-cancel">Cancel</button>
+        <button type="submit" class="primary-button">Save Review</button>
+      </div>
+    `;
+
+    // Pre-fill with existing if available
+    const existing = loadReviewForGame(game.provider, game.externalId);
+    const sel = form.querySelector<HTMLSelectElement>("select[name='recommended']");
+    const ta = form.querySelector<HTMLTextAreaElement>("textarea[name='text']");
+    if (existing) {
+      if (sel) sel.value = existing.recommended ? "true" : "false";
+      if (ta) ta.value = existing.text;
+    } else {
+      if (ta) ta.value = reviewToShow?.text ?? "";
+    }
+
+    activeReviewCard.replaceWith(form);
+
+    const cancelBtn = form.querySelector<HTMLButtonElement>(".review-cancel");
+    cancelBtn?.addEventListener("click", () => {
+      form.replaceWith(activeReviewCard);
+    });
+
+    form.addEventListener("submit", (submitEv) => {
+      submitEv.preventDefault();
+      const recommendedVal = sel?.value === "true";
+      const textVal = ta?.value?.trim() ?? "";
+      const currentPlaytimeMinutes = typeof game.playtimeMinutes === "number" ? game.playtimeMinutes : 0;
+      const baselineReview = existing ?? reviewToShow;
+      const baselineHasCapturedSnapshot = baselineReview?.playtimeCapturedAtReview === true;
+      const playtimeAtReviewMinutes = baselineHasCapturedSnapshot && typeof baselineReview?.playtimeMinutes === "number"
+        ? baselineReview.playtimeMinutes
+        : currentPlaytimeMinutes;
+      const createdAt = baselineHasCapturedSnapshot
+        ? (baselineReview?.createdAt ?? new Date().toISOString())
+        : new Date().toISOString();
+
+      const newReview: Review = {
+        id: id,
+        userId: "me",
+        gameId: game.id,
+        recommended: recommendedVal,
+        text: textVal,
+        // Keep original review-time snapshot when editing an existing review.
+        playtimeMinutes: playtimeAtReviewMinutes,
+        playtimeCapturedAtReview: true,
+        createdAt,
+        likes: existing?.likes ?? baselineReview?.likes ?? 0,
+        comments: existing?.comments ?? baselineReview?.comments ?? 0,
+      };
+
+      saveReviewForGame(game.provider, game.externalId, newReview);
+
+      const newCard = createReviewCard(newReview);
+      activeReviewCard = newCard;
+      reviewToShow = newReview;
+      form.replaceWith(newCard);
+      showLauncherToast("Review saved", "info");
+    });
+  });
+
+  main.append(activitySection, notesSection);
 
   // Side column
   const side = document.createElement("aside");
@@ -1318,6 +1426,7 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
   side.append(
     friendsSection,
     screenshotsSection,
+    reviewSection,
     achievementsSection,
     tradingCardsSection,
     dlcSection,
@@ -1326,6 +1435,55 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
 
   cols.append(main, side);
   gameDetailsContentElement.append(cols);
+
+  // Async: fetch Steam review so we can show true playtime_at_review when available.
+  void (async () => {
+    const normalizedProvider = game.provider.trim().toLocaleLowerCase();
+    if (normalizedProvider !== "steam") {
+      return;
+    }
+
+    const reviewPayload = await getGameReviewForGame(game, true);
+    if (store.appViewMode !== "game-details" || store.selectedGameId !== game.id) {
+      return;
+    }
+
+    const steamReviewPayload = reviewPayload?.review;
+    if (!steamReviewPayload) {
+      if (!activeReviewCard.isConnected) {
+        return;
+      }
+      const unavailableCard = document.createElement("div");
+      unavailableCard.className = "review-card placeholder";
+      unavailableCard.textContent = reviewPayload?.warning?.trim()
+        || "Steam review data is unavailable for this title/account.";
+      activeReviewCard.replaceWith(unavailableCard);
+      activeReviewCard = unavailableCard;
+      reviewToShow = null;
+      return;
+    }
+
+    const steamReview: Review = {
+      id: steamReviewPayload.id || `steam-review-${game.id}`,
+      userId: "me",
+      gameId: game.id,
+      recommended: steamReviewPayload.recommended,
+      text: steamReviewPayload.text?.trim() || "No review text available.",
+      playtimeMinutes: Math.max(0, Math.round(steamReviewPayload.playtimeMinutes ?? 0)),
+      playtimeCapturedAtReview: true,
+      createdAt: steamReviewPayload.createdAt ?? new Date().toISOString(),
+      likes: Math.max(0, Math.round(steamReviewPayload.likes ?? 0)),
+      comments: Math.max(0, Math.round(steamReviewPayload.comments ?? 0)),
+    };
+
+    reviewToShow = steamReview;
+    if (!activeReviewCard.isConnected) {
+      return;
+    }
+    const steamReviewCard = createReviewCard(steamReview);
+    activeReviewCard.replaceWith(steamReviewCard);
+    activeReviewCard = steamReviewCard;
+  })();
 
   // Async: fetch friends activity and update friendsSection if available
   void (async () => {
@@ -2803,6 +2961,21 @@ const getGameDlcForGame = async (
 ): Promise<GameDlcPayload | null> => {
   try {
     return await ipcService.getGameDlc({
+      provider: game.provider,
+      externalId: game.externalId,
+      forceRefresh,
+    });
+  } catch {
+    return null;
+  }
+};
+
+const getGameReviewForGame = async (
+  game: GameResponse,
+  forceRefresh = false
+): Promise<GameReviewPayload | null> => {
+  try {
+    return await ipcService.getGameReview({
       provider: game.provider,
       externalId: game.externalId,
       forceRefresh,

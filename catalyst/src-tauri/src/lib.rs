@@ -7582,6 +7582,7 @@ pub fn run() {
             interface::tauri::commands::library::get_game_achievements,
             interface::tauri::commands::library::get_game_trading_cards,
             interface::tauri::commands::library::get_game_dlc,
+            interface::tauri::commands::library::get_game_review,
             // `get_steam_status` is a server-side helper (not exposed to the
             // frontend) and is intentionally not registered here.
             interface::tauri::commands::library::sync_steam_library,

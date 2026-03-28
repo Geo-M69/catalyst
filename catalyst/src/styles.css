@@ -1100,6 +1100,96 @@ body.show-back-button #game-details-back-button {
   color: rgba(255,255,255,0.92);
 }
 
+.review-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  border: 1px solid var(--color-card-border);
+}
+.review-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+.review-recommend {
+  padding: 0.28rem 0.6rem;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 0.86rem;
+}
+.review-recommend.is-positive {
+  background: rgba(125, 211, 252, 0.12);
+  color: var(--color-accent-alt);
+  border: 1px solid rgba(125, 211, 252, 0.14);
+}
+.review-recommend.is-negative {
+  background: rgba(255, 134, 134, 0.08);
+  color: var(--color-error);
+  border: 1px solid rgba(255, 134, 134, 0.12);
+}
+.review-meta {
+  display: flex;
+  gap: 0.6rem;
+  color: rgba(255,255,255,0.78);
+  font-size: 0.86rem;
+}
+.review-card-body .review-card-text {
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.35;
+}
+.review-card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.6rem;
+}
+.review-stats {
+  color: rgba(255,255,255,0.78);
+  font-size: 0.86rem;
+  display: flex;
+  gap: 0.6rem;
+}
+.review-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+.review-edit-button {
+  width: auto;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: rgba(255,255,255,0.56);
+  font-size: 0.92rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  line-height: 1.2;
+  text-decoration: none;
+}
+
+.review-edit-button:hover {
+  color: rgba(255,255,255,0.78);
+  filter: none;
+  box-shadow: none;
+  transform: none;
+}
+
+.review-edit-button:focus-visible {
+  outline: 1px solid rgba(125, 211, 252, 0.6);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+.review-edit-button:active {
+  color: rgba(255,255,255,0.88);
+  filter: none;
+  transform: none;
+}
+
 .installation-list > div {
   padding: 0.42rem 0;
   border-bottom: 1px solid rgba(255,255,255,0.02);

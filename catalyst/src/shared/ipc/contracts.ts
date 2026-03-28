@@ -184,6 +184,25 @@ export interface GameDlcPayload {
   lastSyncedAt: string;
 }
 
+export interface GameReviewEntryPayload {
+  id: string;
+  recommended: boolean;
+  text: string;
+  playtimeMinutes: number;
+  createdAt: string;
+  likes: number;
+  comments: number;
+  source: string;
+}
+
+export interface GameReviewPayload {
+  provider: string;
+  externalId: string;
+  review?: GameReviewEntryPayload | null;
+  warning?: string;
+  lastSyncedAt: string;
+}
+
 export interface GameVersionBetasPayload {
   options: GameVersionBetaOption[];
   warning?: string;
@@ -230,6 +249,10 @@ export interface GetGameTradingCardsRequest extends ProviderExternalIdRequest {
 }
 
 export interface GetGameDlcRequest extends ProviderExternalIdRequest {
+  forceRefresh?: boolean;
+}
+
+export interface GetGameReviewRequest extends ProviderExternalIdRequest {
   forceRefresh?: boolean;
 }
 
@@ -286,6 +309,7 @@ export interface IpcContracts {
   get_game_achievements: { req: GetGameActivityTimelineRequest; res: GameAchievementsPayload };
   get_game_trading_cards: { req: GetGameTradingCardsRequest; res: GameTradingCardsPayload };
   get_game_dlc: { req: GetGameDlcRequest; res: GameDlcPayload };
+  get_game_review: { req: GetGameReviewRequest; res: GameReviewPayload };
   get_game_properties_settings: { req: ProviderExternalIdRequest; res: GamePropertiesPersistedSettings };
   set_game_properties_settings: { req: SetGamePropertiesSettingsRequest; res: void };
   browse_game_installed_files: { req: ProviderExternalIdRequest; res: void };
