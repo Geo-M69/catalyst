@@ -1,6 +1,49 @@
-use crate::*;
 use crate::application::error::{AppError, AppResult};
-use chrono::Duration as ChronoDuration;
+use crate::domain::game::parse_steam_app_id;
+use crate::{
+	AppState,
+	GameCompatibilityToolResponse,
+	GameCustomizationArtworkResponse,
+	GameInstallLocationResponse,
+	GameInstallationDetailsResponse,
+	GamePrivacySettingsResponse,
+	GamePropertiesSettingsPayload,
+	GameScreenshotResponse,
+	STEAM_APP_LANGUAGES_CACHE_TTL_HOURS,
+	apply_steam_game_privacy_settings,
+	apply_steam_game_properties_settings,
+	build_http_client,
+	cache_steam_app_languages,
+	cleanup_expired_sessions,
+	clear_steam_game_overlay_data,
+	detect_available_disk_space_bytes,
+	empty_game_customization_artwork_response,
+	ensure_owned_game_exists,
+	fetch_steam_app_linux_platform_support_from_store,
+	fetch_steam_install_size_estimate_from_store,
+	fetch_steam_supported_languages,
+	find_cached_steam_app_languages,
+	get_authenticated_user,
+	load_game_privacy_settings,
+	load_game_properties_settings,
+	normalize_game_identity_input,
+	normalize_game_properties_settings_payload,
+	open_connection,
+	parse_steam_manifest_size_on_disk_bytes,
+	resolve_steam_compatibility_tools,
+	resolve_steam_customization_artwork,
+	resolve_steam_manifest_path_for_app_id,
+	resolve_steam_root_path,
+	resolve_steam_root_paths,
+	resolve_steam_userdata_directory,
+	resolve_steamapps_directories,
+	save_game_privacy_settings,
+	save_game_properties_settings,
+};
+use chrono::{Duration as ChronoDuration, Utc};
+use std::collections::HashSet;
+use std::fs;
+use std::path::Path;
 
 pub(crate) fn list_game_languages(
 	state: &AppState,
@@ -151,9 +194,7 @@ pub(crate) fn set_game_privacy_settings(
 	settings.mark_as_private = mark_as_private;
 
 	if normalized_provider == "steam" {
-		let app_id = normalized_external_id
-			.parse::<u64>()
-			.map_err(|_| AppError::validation("invalid_external_id", "Steam external_id must be a numeric app ID"))?;
+		let app_id = parse_steam_app_id(&normalized_external_id)?;
 		apply_steam_game_privacy_settings(state, &user, app_id, &settings)?;
 	}
 
@@ -184,9 +225,7 @@ pub(crate) fn clear_game_overlay_data(
 	)?;
 
 	if normalized_provider == "steam" {
-		let app_id = normalized_external_id
-			.parse::<u64>()
-			.map_err(|_| AppError::validation("invalid_external_id", "Steam external_id must be a numeric app ID"))?;
+		let app_id = parse_steam_app_id(&normalized_external_id)?;
 		clear_steam_game_overlay_data(state, &user, app_id)?;
 	}
 
@@ -266,9 +305,7 @@ pub(crate) fn get_game_screenshots(
 		.ok_or_else(|| AppError::not_found("steam_install_not_found", "Could not locate local Steam installation"))?;
 	let userdata_directory = resolve_steam_userdata_directory(&steam_root, steam_id)?;
 
-	let app_id = normalized_external_id.parse::<u64>().map_err(|_| {
-		AppError::validation("invalid_external_id", "Steam external_id must be a numeric app ID")
-	})?;
+	let app_id = parse_steam_app_id(&normalized_external_id)?;
 
 	// Common Steam screenshots path: userdata/<steamid>/760/remote/<app_id>
 	let candidate_dir = userdata_directory.join("760").join("remote").join(app_id.to_string());
@@ -351,9 +388,7 @@ pub(crate) fn set_game_properties_settings(
 	)?;
 
 	if normalized_provider == "steam" {
-		let app_id = normalized_external_id
-			.parse::<u64>()
-			.map_err(|_| AppError::validation("invalid_external_id", "Steam external_id must be a numeric app ID"))?;
+		let app_id = parse_steam_app_id(&normalized_external_id)?;
 		if let Err(error) = apply_steam_game_properties_settings(
 			state,
 			&user,
@@ -587,4 +622,3 @@ pub(crate) fn list_game_install_locations(
 
 	Ok(locations)
 }
-

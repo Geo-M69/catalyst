@@ -1,6 +1,17 @@
-use crate::*;
 use crate::application::error::{AppError, AppResult};
-use rusqlite::params;
+use crate::domain::game::parse_steam_app_id;
+use crate::infrastructure::launcher_ops::LauncherOps;
+use crate::infrastructure::steam_local::SteamLocal;
+use crate::{
+	AppState,
+	cleanup_expired_sessions,
+	ensure_owned_game_exists,
+	get_authenticated_user,
+	load_game_properties_settings,
+	normalize_game_identity_input,
+	open_connection,
+};
+use rusqlite::{OptionalExtension, params};
 
 pub(crate) fn play_game(
 	state: &AppState,
@@ -8,6 +19,7 @@ pub(crate) fn play_game(
 	external_id: String,
 	launch_options: Option<String>,
 ) -> AppResult<()> {
+	let launcher = LauncherOps::new();
 	let connection = open_connection(&state.db_path)?;
 	cleanup_expired_sessions(&connection)?;
 	let user = get_authenticated_user(state, &connection)?;
@@ -30,12 +42,12 @@ pub(crate) fn play_game(
 				}
 			}),
 	};
-	Ok(open_provider_game_uri(
+	launcher.open_provider_game_uri(
 		&provider,
 		&external_id,
 		"play",
 		resolved_launch_options.as_deref(),
-	)?)
+	)
 }
 
 pub(crate) fn install_game(
@@ -46,6 +58,7 @@ pub(crate) fn install_game(
 	create_desktop_shortcut: Option<bool>,
 	create_application_shortcut: Option<bool>,
 ) -> AppResult<()> {
+	let launcher = LauncherOps::new();
 	let connection = open_connection(&state.db_path)?;
 	cleanup_expired_sessions(&connection)?;
 	let user = get_authenticated_user(state, &connection)?;
@@ -58,7 +71,7 @@ pub(crate) fn install_game(
 		create_desktop_shortcut,
 		create_application_shortcut,
 	);
-	Ok(open_provider_game_uri(&provider, &external_id, "install", None)?)
+	launcher.open_provider_game_uri(&provider, &external_id, "install", None)
 }
 
 pub(crate) fn uninstall_game(
@@ -66,12 +79,13 @@ pub(crate) fn uninstall_game(
 	provider: String,
 	external_id: String,
 ) -> AppResult<()> {
+	let launcher = LauncherOps::new();
 	let connection = open_connection(&state.db_path)?;
 	cleanup_expired_sessions(&connection)?;
 	let user = get_authenticated_user(state, &connection)?;
 	let (provider, external_id) = normalize_game_identity_input(&provider, &external_id)?;
 	ensure_owned_game_exists(&connection, &user.id, &provider, &external_id)?;
-	Ok(open_provider_game_uri(&provider, &external_id, "uninstall", None)?)
+	launcher.open_provider_game_uri(&provider, &external_id, "uninstall", None)
 }
 
 pub(crate) fn browse_game_installed_files(
@@ -79,6 +93,8 @@ pub(crate) fn browse_game_installed_files(
 	provider: String,
 	external_id: String,
 ) -> AppResult<()> {
+	let launcher = LauncherOps::new();
+	let steam_local = SteamLocal::new(state.steam_root_override.as_deref());
 	let connection = open_connection(&state.db_path)?;
 	cleanup_expired_sessions(&connection)?;
 	let user = get_authenticated_user(state, &connection)?;
@@ -92,11 +108,8 @@ pub(crate) fn browse_game_installed_files(
 		));
 	}
 
-	let app_id = external_id
-		.parse::<u64>()
-		.map_err(|_| AppError::validation("invalid_external_id", "Steam external_id must be a numeric app ID"))?;
-	let install_directory =
-		resolve_steam_install_directory_for_app_id(state.steam_root_override.as_deref(), app_id)?;
+	let app_id = parse_steam_app_id(&external_id)?;
+	let install_directory = steam_local.resolve_install_directory_for_app_id(app_id)?;
 	if !install_directory.is_dir() {
 		return Err(AppError::not_found(
 			"install_directory_missing",
@@ -104,7 +117,7 @@ pub(crate) fn browse_game_installed_files(
 		));
 	}
 
-	Ok(open_path_in_file_manager(&install_directory)?)
+	launcher.open_path_in_file_manager(&install_directory)
 }
 
 pub(crate) fn backup_game_files(
@@ -112,12 +125,13 @@ pub(crate) fn backup_game_files(
 	provider: String,
 	external_id: String,
 ) -> AppResult<()> {
+	let launcher = LauncherOps::new();
 	let connection = open_connection(&state.db_path)?;
 	cleanup_expired_sessions(&connection)?;
 	let user = get_authenticated_user(state, &connection)?;
 	let (provider, external_id) = normalize_game_identity_input(&provider, &external_id)?;
 	ensure_owned_game_exists(&connection, &user.id, &provider, &external_id)?;
-	Ok(open_provider_game_uri(&provider, &external_id, "backup", None)?)
+	launcher.open_provider_game_uri(&provider, &external_id, "backup", None)
 }
 
 pub(crate) fn verify_game_files(
@@ -125,12 +139,13 @@ pub(crate) fn verify_game_files(
 	provider: String,
 	external_id: String,
 ) -> AppResult<()> {
+	let launcher = LauncherOps::new();
 	let connection = open_connection(&state.db_path)?;
 	cleanup_expired_sessions(&connection)?;
 	let user = get_authenticated_user(state, &connection)?;
 	let (provider, external_id) = normalize_game_identity_input(&provider, &external_id)?;
 	ensure_owned_game_exists(&connection, &user.id, &provider, &external_id)?;
-	Ok(open_provider_game_uri(&provider, &external_id, "validate", None)?)
+	launcher.open_provider_game_uri(&provider, &external_id, "validate", None)
 }
 
 pub(crate) fn add_game_desktop_shortcut(
@@ -138,6 +153,7 @@ pub(crate) fn add_game_desktop_shortcut(
 	provider: String,
 	external_id: String,
 ) -> AppResult<()> {
+	let launcher = LauncherOps::new();
 	let connection = open_connection(&state.db_path)?;
 	cleanup_expired_sessions(&connection)?;
 	let user = get_authenticated_user(state, &connection)?;
@@ -159,7 +175,7 @@ pub(crate) fn add_game_desktop_shortcut(
 		.map_err(|error| format!("Failed to query game name for desktop shortcut: {error}"))?
 		.unwrap_or(fallback_name);
 
-	Ok(create_provider_game_desktop_shortcut(&provider, &external_id, &game_name)?)
+	launcher.create_provider_game_desktop_shortcut(&provider, &external_id, &game_name)
 }
 
 pub(crate) fn open_game_recording_settings(
@@ -167,6 +183,7 @@ pub(crate) fn open_game_recording_settings(
 	provider: String,
 	external_id: String,
 ) -> AppResult<()> {
+	let launcher = LauncherOps::new();
 	let connection = open_connection(&state.db_path)?;
 	cleanup_expired_sessions(&connection)?;
 	let user = get_authenticated_user(state, &connection)?;
@@ -180,6 +197,5 @@ pub(crate) fn open_game_recording_settings(
 		));
 	}
 
-	Ok(open_steam_game_recording_settings()?)
+	launcher.open_steam_game_recording_settings()
 }
-

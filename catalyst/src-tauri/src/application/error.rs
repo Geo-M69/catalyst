@@ -1,4 +1,5 @@
 use serde::Serialize;
+use crate::domain::error::DomainValidationError;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -118,5 +119,11 @@ impl From<String> for AppError {
 impl From<&str> for AppError {
     fn from(value: &str) -> Self {
         map_app_error_message(value.to_owned())
+    }
+}
+
+impl From<DomainValidationError> for AppError {
+    fn from(value: DomainValidationError) -> Self {
+        AppError::validation(value.code(), value.message())
     }
 }

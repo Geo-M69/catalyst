@@ -2,10 +2,11 @@
 
 - Status: Accepted
 - Date: 2026-03-05
+- Superseded-By: ADR 0007 (finalized architecture state)
 
 ## Context
 
-Catalyst currently operates as a functional monolith across the Tauri boundary:
+At the time this ADR was written, Catalyst operated as a functional monolith across the Tauri boundary:
 
 - Backend concerns are concentrated in `src-tauri/src/lib.rs`.
 - Frontend orchestration is concentrated in `src/mainPage/mainPage.ts`.

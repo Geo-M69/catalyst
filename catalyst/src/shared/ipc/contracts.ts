@@ -19,6 +19,20 @@ export interface SteamAuthResponse {
   syncedGames: number;
 }
 
+export interface SteamSyncPayload {
+  userId: string;
+  provider: string;
+  syncedGames: number;
+}
+
+export interface SteamCollectionsImportPayload {
+  appsTagged: number;
+  collectionsCreated: number;
+  membershipsAdded: number;
+  skippedGames: number;
+  tagsDiscovered: number;
+}
+
 export interface GamePrivacySettingsPayload {
   hideInLibrary: boolean;
   markAsPrivate: boolean;
@@ -280,8 +294,8 @@ export interface IpcContracts {
   start_steam_auth: { req: void; res: SteamAuthResponse };
   logout: { req: void; res: void };
   start_local_steam_scan: { req: void; res: void };
-  sync_steam_library: { req: void; res: void };
-  import_steam_collections: { req: void; res: void };
+  sync_steam_library: { req: void; res: SteamSyncPayload };
+  import_steam_collections: { req: void; res: SteamCollectionsImportPayload };
   get_library: { req: void; res: LibraryResponse };
   list_collections: { req: void | ListCollectionsForGameRequest; res: CollectionResponse[] };
   create_collection: { req: CreateCollectionRequest; res: CollectionResponse };

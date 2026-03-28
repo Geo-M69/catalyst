@@ -1,9 +1,39 @@
 use crate::application::error::AppResult;
-use crate::*;
+use crate::infrastructure::cache_adapter::CacheAdapter;
+use crate::{
+	AppState,
+	FeatureResponse,
+	LibraryResponse,
+	STEAM_APP_DETAILS_CACHE_TTL_HOURS,
+	SteamDownloadProgressResponse,
+	SteamSyncResponse,
+	build_http_client,
+	cache_steam_app_details,
+	cleanup_expired_sessions,
+	collect_steam_download_progress_from_steamapps_dir,
+	ensure_owned_game_exists,
+	find_cached_steam_app_details,
+	find_cached_steam_app_features,
+	get_authenticated_user,
+	list_games_by_user,
+	load_owned_steam_games_by_app_id,
+	normalize_backend_warning_message,
+	normalize_game_identity_input,
+	open_connection,
+	remove_game_favorite,
+	resolve_steam_root_paths,
+	resolve_steamapps_directories,
+	sync_steam_games_for_user,
+	upsert_game_favorite,
+};
+use chrono::{Duration as ChronoDuration, Utc};
+use rusqlite::{Connection, params};
 use scraper::{Html, Selector};
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use url::Url;
 
 const STEAM_WEB_API_FRIEND_LIST_ENDPOINT: &str =
     "https://api.steampowered.com/ISteamUser/GetFriendList/v1/";
@@ -2721,7 +2751,7 @@ pub(crate) fn get_game_friends_activity(
     let cache_key = format!("steam_friends_activity:{steam_id}:{app_id}");
     if !force_refresh {
         if let Some(cached_value) =
-            cache::get_cached(&cache_key, STEAM_FRIENDS_ACTIVITY_CACHE_TTL_SECONDS)
+            CacheAdapter::new().get_json(&cache_key, STEAM_FRIENDS_ACTIVITY_CACHE_TTL_SECONDS)
         {
             if let Ok(cached_response) =
                 serde_json::from_value::<GameFriendsActivityResponse>(cached_value)
@@ -2763,7 +2793,7 @@ pub(crate) fn get_game_friends_activity(
         )
     {
         if let Ok(serialized_response) = serde_json::to_value(&response) {
-            cache::set_cached(&cache_key, serialized_response);
+            CacheAdapter::new().set_json(&cache_key, serialized_response);
         }
         return Ok(response);
     }
@@ -2853,7 +2883,7 @@ pub(crate) fn get_game_friends_activity(
     response.last_synced_at = Utc::now().to_rfc3339();
 
     if let Ok(serialized_response) = serde_json::to_value(&response) {
-        cache::set_cached(&cache_key, serialized_response);
+        CacheAdapter::new().set_json(&cache_key, serialized_response);
     }
 
     Ok(response)
@@ -2909,7 +2939,7 @@ pub(crate) fn get_game_activity_timeline(
     );
     if !force_refresh {
         if let Some(cached_value) =
-            cache::get_cached(&cache_key, STEAM_ACTIVITY_TIMELINE_CACHE_TTL_SECONDS)
+            CacheAdapter::new().get_json(&cache_key, STEAM_ACTIVITY_TIMELINE_CACHE_TTL_SECONDS)
         {
             if let Ok(cached_response) =
                 serde_json::from_value::<GameActivityTimelineResponse>(cached_value)
@@ -3007,7 +3037,7 @@ pub(crate) fn get_game_activity_timeline(
     response.last_synced_at = Utc::now().to_rfc3339();
 
     if let Ok(serialized_response) = serde_json::to_value(&response) {
-        cache::set_cached(&cache_key, serialized_response);
+        CacheAdapter::new().set_json(&cache_key, serialized_response);
     }
 
     Ok(response)
@@ -3082,7 +3112,7 @@ pub(crate) fn get_game_achievements(
     );
     if !force_refresh {
         if let Some(cached_value) =
-            cache::get_cached(&cache_key, STEAM_ACHIEVEMENTS_CACHE_TTL_SECONDS)
+            CacheAdapter::new().get_json(&cache_key, STEAM_ACHIEVEMENTS_CACHE_TTL_SECONDS)
         {
             if let Ok(cached_response) =
                 serde_json::from_value::<GameAchievementsResponse>(cached_value)
@@ -3254,7 +3284,7 @@ pub(crate) fn get_game_achievements(
     response.last_synced_at = Utc::now().to_rfc3339();
 
     if let Ok(serialized_response) = serde_json::to_value(&response) {
-        cache::set_cached(&cache_key, serialized_response);
+        CacheAdapter::new().set_json(&cache_key, serialized_response);
     }
 
     Ok(response)
@@ -3316,7 +3346,7 @@ pub(crate) fn get_game_trading_cards(
     );
     if !force_refresh {
         if let Some(cached_value) =
-            cache::get_cached(&cache_key, STEAM_TRADING_CARDS_CACHE_TTL_SECONDS)
+            CacheAdapter::new().get_json(&cache_key, STEAM_TRADING_CARDS_CACHE_TTL_SECONDS)
         {
             if let Ok(cached_response) =
                 serde_json::from_value::<GameTradingCardsResponse>(cached_value)
@@ -3476,7 +3506,7 @@ pub(crate) fn get_game_trading_cards(
 
     response.last_synced_at = Utc::now().to_rfc3339();
     if let Ok(serialized_response) = serde_json::to_value(&response) {
-        cache::set_cached(&cache_key, serialized_response);
+        CacheAdapter::new().set_json(&cache_key, serialized_response);
     }
     Ok(response)
 }
@@ -3646,7 +3676,7 @@ pub(crate) fn get_game_review(
 
     let cache_key = format!("steam_review:{STEAM_REVIEW_CACHE_VERSION}:{steam_id}:{app_id}");
     if !force_refresh {
-        if let Some(cached_value) = cache::get_cached(&cache_key, STEAM_REVIEW_CACHE_TTL_SECONDS) {
+        if let Some(cached_value) = CacheAdapter::new().get_json(&cache_key, STEAM_REVIEW_CACHE_TTL_SECONDS) {
             if let Ok(cached_response) = serde_json::from_value::<GameReviewResponse>(cached_value)
             {
                 return Ok(cached_response);
@@ -3682,7 +3712,7 @@ pub(crate) fn get_game_review(
     response.last_synced_at = Utc::now().to_rfc3339();
 
     if let Ok(serialized_response) = serde_json::to_value(&response) {
-        cache::set_cached(&cache_key, serialized_response);
+        CacheAdapter::new().set_json(&cache_key, serialized_response);
     }
 
     Ok(response)

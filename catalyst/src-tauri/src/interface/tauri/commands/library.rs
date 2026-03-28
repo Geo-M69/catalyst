@@ -1,4 +1,3 @@
-use crate::*;
 use crate::application::error::AppResult;
 use crate::application::services::library_service::{
     GameActivityTimelineResponse,
@@ -9,7 +8,9 @@ use crate::application::services::library_service::{
     GameDlcResponse,
     GameReviewResponse,
 };
-use tauri::{State, AppHandle};
+use crate::infrastructure::steam_local::SteamLocal;
+use crate::{AppState, LibraryResponse, SteamDownloadProgressResponse, SteamSyncResponse};
+use tauri::{AppHandle, State};
 use tauri::Emitter;
 
 #[tauri::command]
@@ -166,13 +167,14 @@ pub(crate) fn run_local_steam_scan_and_call_with_override<F>(
 ) where
     F: FnOnce(Result<Vec<u64>, String>) + Send + 'static,
 {
-    match crate::detect_locally_installed_steam_app_ids(steam_root_override) {
+    let steam_local = SteamLocal::new(steam_root_override);
+    match steam_local.detect_locally_installed_app_ids() {
         Ok(set) => {
             let ids: Vec<u64> = set.into_iter().collect();
             emitter(Ok(ids));
         }
         Err(err) => {
-            emitter(Err(err));
+            emitter(Err(err.message));
         }
     }
 }
