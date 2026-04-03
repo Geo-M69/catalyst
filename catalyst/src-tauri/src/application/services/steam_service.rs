@@ -1,11 +1,11 @@
-use crate::application::contracts::steam::{
+use super::super::contracts::steam::{
     GameBetaAccessCodeValidationResponse,
     GameVersionBetasResponse,
     SteamCollectionsImportResponse,
 };
-use crate::application::error::AppResult;
-use crate::application::ports::steam::SteamPort;
-use crate::application::use_cases::steam::SteamUseCase;
+use super::super::error::AppResult;
+use super::super::ports::steam::SteamPort;
+use super::super::use_cases::steam::SteamUseCase;
 
 pub(crate) struct SteamService<P> {
     port: P,

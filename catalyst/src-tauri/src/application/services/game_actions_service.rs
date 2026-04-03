@@ -1,6 +1,6 @@
-use crate::application::error::AppResult;
-use crate::application::ports::game_actions::GameActionsPort;
-use crate::application::use_cases::game_actions::GameActionsUseCase;
+use super::super::error::AppResult;
+use super::super::ports::game_actions::GameActionsPort;
+use super::super::use_cases::game_actions::GameActionsUseCase;
 
 pub(crate) struct GameActionsService<P> {
     port: P,

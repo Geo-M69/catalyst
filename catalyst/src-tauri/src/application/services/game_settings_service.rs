@@ -1,4 +1,4 @@
-use crate::application::contracts::game_settings::{
+use super::super::contracts::game_settings::{
     GameCompatibilityToolResponse,
     GameCustomizationArtworkResponse,
     GameInstallLocationResponse,
@@ -7,9 +7,9 @@ use crate::application::contracts::game_settings::{
     GamePropertiesSettingsPayload,
     GameScreenshotResponse,
 };
-use crate::application::error::AppResult;
-use crate::application::ports::game_settings::GameSettingsPort;
-use crate::application::use_cases::game_settings::GameSettingsUseCase;
+use super::super::error::AppResult;
+use super::super::ports::game_settings::GameSettingsPort;
+use super::super::use_cases::game_settings::GameSettingsUseCase;
 
 pub(crate) struct GameSettingsService<P> {
     port: P,

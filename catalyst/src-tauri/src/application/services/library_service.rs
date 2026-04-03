@@ -1,18 +1,18 @@
-use crate::application::contracts::library::{
+use super::super::contracts::library::{
     LibraryResponse,
     SteamDownloadProgressResponse,
     SteamSyncResponse,
 };
-use crate::application::error::AppResult;
-use crate::application::ports::library::LibraryPort;
-use crate::application::contracts::library::GameAchievementsResponse;
-use crate::application::contracts::library::GameActivityTimelineResponse;
-use crate::application::contracts::library::GameDlcResponse;
-use crate::application::contracts::library::GameFriendsActivityResponse;
-use crate::application::contracts::library::GameReviewResponse;
-use crate::application::contracts::library::GameStoreMetadataResponse;
-use crate::application::contracts::library::GameTradingCardsResponse;
-use crate::application::use_cases::library::LibraryUseCase;
+use super::super::contracts::library::GameAchievementsResponse;
+use super::super::contracts::library::GameActivityTimelineResponse;
+use super::super::contracts::library::GameDlcResponse;
+use super::super::contracts::library::GameFriendsActivityResponse;
+use super::super::contracts::library::GameReviewResponse;
+use super::super::contracts::library::GameStoreMetadataResponse;
+use super::super::contracts::library::GameTradingCardsResponse;
+use super::super::error::AppResult;
+use super::super::ports::library::LibraryPort;
+use super::super::use_cases::library::LibraryUseCase;
 
 pub(crate) struct LibraryService<P> {
     port: P,

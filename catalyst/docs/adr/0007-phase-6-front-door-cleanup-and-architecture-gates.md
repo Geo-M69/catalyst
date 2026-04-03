@@ -42,11 +42,12 @@ Catalyst adopts a layered backend design with an explicit front door:
 
 4. Add architecture gates to enforce the design continuously:
    - `scripts/check-lib-front-door.mjs` ensures `lib.rs` remains front-door-only,
-   - `scripts/check-crate-glob-imports.mjs` forbids wildcard imports in application services outside tests.
+   - `scripts/check-service-ast-imports.mjs` enforces service import policy
+     (wildcard-import and direct `crate::...` restrictions) via AST checks.
 
 5. Wire these checks into repeatable npm commands:
    - `guard:lib-front-door`,
-   - `guard:crate-glob-imports`,
+   - `guard:service-ast-imports`,
    - `guard:architecture`,
    - `phase0:guardrails` includes architecture checks plus command/ smoke checks.
 
@@ -99,7 +100,7 @@ Acceptance Criteria
 
 1. `src-tauri/src/lib.rs` contains only front-door composition lines and passes
    `npm run guard:lib-front-door`.
-2. Service modules pass `npm run guard:crate-glob-imports`.
+2. Service modules pass `npm run guard:service-ast-imports`.
 3. `npm run guard:architecture` and `npm run phase0:guardrails` pass locally.
 4. Backend still compiles and runs with unchanged Tauri command behavior.
 
@@ -131,7 +132,7 @@ Completed changes:
    - `src-tauri/src/lib.rs` remains front-door-only and is guarded.
    - Architecture guards now include:
      - `check-lib-front-door.mjs`
-     - `check-crate-glob-imports.mjs`
+     - `check-service-ast-imports.mjs`
      - `check-service-runtime-imports.mjs`
      - `check-shared-boundaries.mjs`
      - `check-max-file-lines.mjs`
@@ -310,3 +311,74 @@ Guardrail expectation:
 - Architecture guardrails should prevent growth of
   `src-tauri/src/lib_runtime_impl.rs` and
   `src-tauri/src/infrastructure/library_port.rs` while extraction proceeds.
+
+Phase 1 AST Gate Rollout (2026-04-03)
+-------------------------------------
+
+To begin replacing regex-only architecture checks with parser/AST checks, a
+report-only phase has been introduced:
+
+1. Added AST-based service gate tool:
+   - `tools/architecture-gates` (Rust + `syn`) parses
+     `src-tauri/src/application/services/**/*.rs`.
+   - It reports:
+     - wildcard imports (`use ...::*`) outside `#[cfg(test)]` modules,
+     - direct `use crate::...` paths not in an explicit allowlist,
+     - direct `crate::...(...)` call paths.
+
+2. Added explicit allowlist config for shared paths:
+   - `scripts/architecture-gates.json`
+   - `application_services.allow_crate_use_paths` controls allowed direct
+     `use crate::...` imports during migration.
+
+3. Added report-mode npm gate and wired it beside existing guards:
+   - `guard:service-ast-imports:report`
+   - `guard:architecture` now runs the AST report first, while existing regex
+     checks remain authoritative in this phase.
+
+4. Baseline result in report mode:
+   - Current output reports direct `crate::application::...` imports across
+     service modules for follow-up cleanup in the next phase.
+
+Phase B Service Import Cleanup (2026-04-03)
+-------------------------------------------
+
+The report-only AST baseline has now been addressed for application services:
+
+1. Updated service-module imports to remove direct `crate::application::...`
+   paths in favor of module-local paths (`super::super::...`) where applicable.
+2. Tightened `scripts/architecture-gates.json` by removing transitional
+   allowlist entries for application-internal paths.
+3. Current AST report baseline is now clean:
+   - `npm run guard:service-ast-imports:report` reports no findings.
+   - Existing architecture guard chain still passes unchanged.
+
+Phase C AST Enforcement Cutover (2026-04-03)
+--------------------------------------------
+
+Service architecture gating is now enforced by the AST checker in CI/guardrails:
+
+1. Added enforce-mode service AST command:
+   - `guard:service-ast-imports` runs
+     `scripts/check-service-ast-imports.mjs --mode enforce`.
+2. Switched architecture guard chain to enforce mode:
+   - `guard:architecture` now runs `guard:service-ast-imports` (enforcing).
+3. Removed redundant service glob regex gate from architecture chain:
+   - `guard:crate-glob-imports` is no longer part of `guard:architecture`
+     because wildcard imports in services are already enforced by AST policy.
+4. Scoped legacy runtime regex gate to non-service application modules:
+   - `scripts/check-service-runtime-imports.mjs` now skips
+     `src-tauri/src/application/services/**` so service policy remains single-source
+     under the AST gate.
+
+Phase D Legacy Script Cleanup (2026-04-03)
+------------------------------------------
+
+With AST enforcement active and clean for application services:
+
+1. Removed legacy service wildcard regex script:
+   - deleted `scripts/check-crate-glob-imports.mjs`.
+2. Removed deprecated npm command:
+   - removed `guard:crate-glob-imports` from `package.json`.
+3. Service wildcard and direct `crate::` policy enforcement now lives
+   exclusively in `scripts/check-service-ast-imports.mjs`.

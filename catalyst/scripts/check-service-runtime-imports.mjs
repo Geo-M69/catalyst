@@ -3,6 +3,7 @@ import path from 'node:path';
 
 const ROOT = process.cwd();
 const APPLICATION_ROOT = path.join(ROOT, 'src-tauri', 'src', 'application');
+const SERVICES_ROOT = path.join(APPLICATION_ROOT, 'services');
 
 const LEGACY_EXCEPTIONS = new Set([
   'src-tauri/src/application/bootstrap.rs',
@@ -38,6 +39,9 @@ function isAllowedCallPath(pathValue) {
 
 function collectViolations(content, filePath) {
   const relativePath = path.relative(ROOT, filePath).replaceAll(path.sep, '/');
+  if (filePath.startsWith(`${SERVICES_ROOT}${path.sep}`)) {
+    return [];
+  }
   if (LEGACY_EXCEPTIONS.has(relativePath)) {
     return [];
   }
@@ -108,8 +112,9 @@ async function main() {
   violations.sort((left, right) => left.localeCompare(right));
 
   if (violations.length > 0) {
-    console.error('Architecture check failed: application modules must not import or call runtime helpers from crate root.');
+    console.error('Architecture check failed: non-service application modules must not import or call runtime helpers from crate root.');
     console.error('Only crate::application::* and crate::domain::* references are allowed in non-legacy files.');
+    console.error('Service modules are enforced by scripts/check-service-ast-imports.mjs.');
     console.error('Legacy exceptions are explicitly tracked in scripts/check-service-runtime-imports.mjs.');
     for (const violation of violations) {
       console.error(`- ${violation}`);
@@ -118,7 +123,7 @@ async function main() {
     return;
   }
 
-  console.log('Architecture check passed: non-legacy application modules avoid crate-root runtime imports and calls.');
+  console.log('Architecture check passed: non-service application modules avoid crate-root runtime imports and calls.');
 }
 
 main().catch((error) => {

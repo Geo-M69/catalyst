@@ -1,0 +1,10 @@
+{
+  "application_services": {
+    "allow_crate_use_paths": [
+      "crate::domain::collection::CollectionId",
+      "crate::domain::collection::CollectionName",
+      "crate::domain::error::DomainValidationError",
+      "crate::domain::game::GameIdentity"
+    ]
+  }
+}

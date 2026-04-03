@@ -1,7 +1,7 @@
-use crate::application::contracts::auth::{PublicUser, SteamAuthResponse};
-use crate::application::error::AppResult;
-use crate::application::ports::auth::AuthPort;
-use crate::application::use_cases::auth::AuthUseCase;
+use super::super::contracts::auth::{PublicUser, SteamAuthResponse};
+use super::super::error::AppResult;
+use super::super::ports::auth::AuthPort;
+use super::super::use_cases::auth::AuthUseCase;
 
 #[derive(Clone)]
 pub(crate) struct AuthService<P> {
