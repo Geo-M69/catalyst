@@ -10,8 +10,9 @@ pub(crate) fn get_authenticated_user(
     state: &AppState,
     connection: &Connection,
 ) -> Result<UserRow, String> {
-    let session_token = crate::infrastructure::runtime_session_state::get_state_session_token(state)?
-        .ok_or_else(|| String::from("Not authenticated"))?;
+    let session_token =
+        crate::infrastructure::runtime_session_state::get_state_session_token(state)?
+            .ok_or_else(|| String::from("Not authenticated"))?;
     let user = find_user_by_session_token(connection, &session_token)?;
 
     match user {
@@ -83,7 +84,10 @@ pub(crate) fn create_user(
         .ok_or_else(|| String::from("Failed to load newly created user"))
 }
 
-pub(crate) fn create_steam_user(connection: &Connection, steam_id: &str) -> Result<UserRow, String> {
+pub(crate) fn create_steam_user(
+    connection: &Connection,
+    steam_id: &str,
+) -> Result<UserRow, String> {
     let placeholder_email = format!("steam_{}@steam.local", Uuid::new_v4().simple());
     let placeholder_password_hash = hash(Uuid::new_v4().to_string(), DEFAULT_COST)
         .map_err(|error| format!("Failed to hash placeholder Steam password: {error}"))?;

@@ -1,12 +1,9 @@
 use chrono::{Duration as ChronoDuration, Utc};
-use std::process::Command;
 use url::Url;
 
-use crate::application::error::AppResult;
-use crate::application::contracts::library::{FeatureResponse, GameStoreMetadataResponse};
 use crate::application::canonicalizer::build_canonical_features;
-use crate::AppState;
-use crate::STEAM_APP_DETAILS_CACHE_TTL_HOURS;
+use crate::application::contracts::library::{FeatureResponse, GameStoreMetadataResponse};
+use crate::application::error::AppResult;
 use crate::build_http_client;
 use crate::cache_steam_app_details;
 use crate::cache_steam_app_features;
@@ -17,6 +14,8 @@ use crate::find_cached_steam_app_features;
 use crate::get_authenticated_user;
 use crate::normalize_game_identity_input;
 use crate::open_connection;
+use crate::AppState;
+use crate::STEAM_APP_DETAILS_CACHE_TTL_HOURS;
 
 fn empty_game_store_metadata_response() -> GameStoreMetadataResponse {
     GameStoreMetadataResponse {
@@ -99,12 +98,14 @@ pub(crate) fn get_game_store_metadata(
                 .and_then(serde_json::Value::as_str)
                 .map(ToOwned::to_owned)
                 .or_else(|| {
-                    data.get("series").and_then(serde_json::Value::as_array).map(|arr| {
-                        arr.iter()
-                            .filter_map(serde_json::Value::as_str)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    })
+                    data.get("series")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        })
                 });
 
             response.release_date = data
@@ -130,103 +131,22 @@ pub(crate) fn get_game_store_metadata(
         }
     }
 
-    // If cache is missing useful data, attempt live fetch.
-    if response.short_description.is_none() || response.developers.is_none() {
-        // Prefer steamcmd if available.
-        if let Ok(output) = Command::new("bash")
-            .arg("-lc")
-            .arg(format!(
-                "steamcmd +login anonymous +app_info_print {} +quit",
-                app_id
-            ))
-            .output()
-        {
-            if output.status.success() {
-                if let Ok(text) = String::from_utf8(output.stdout) {
-                    let re = regex::Regex::new(r#"\"([^\"]+)\"\s+\"([^\"]*)\""#).unwrap();
-                    let mut map: std::collections::HashMap<String, String> =
-                        std::collections::HashMap::new();
-                    for cap in re.captures_iter(&text) {
-                        map.insert(cap[1].to_string(), cap[2].to_string());
-                    }
-
-                    if response.developers.is_none() {
-                        if let Some(dev) = map.get("developer") {
-                            response.developers = Some(vec![dev.to_string()]);
-                        }
-                    }
-                    if response.publishers.is_none() {
-                        if let Some(pubr) = map.get("publisher") {
-                            response.publishers = Some(vec![pubr.to_string()]);
-                        }
-                    }
-                    if response.short_description.is_none() {
-                        if let Some(sd) = map.get("short_description") {
-                            response.short_description = Some(sd.to_string());
-                        }
-                    }
-                    if response.header_image.is_none() {
-                        if let Some(header) = map.get("header_image") {
-                            response.header_image = Some(header.to_string());
-                        }
-                    }
-                    if response.franchise.is_none() {
-                        if let Some(franchise) = map.get("franchise") {
-                            response.franchise = Some(franchise.to_string());
-                        }
-                    }
-
-                    let mut obj = serde_json::Map::new();
-                    let mut data_map = serde_json::Map::new();
-                    if let Some(dev) = map.get("developer") {
-                        data_map.insert(
-                            "developers".to_string(),
-                            serde_json::Value::Array(vec![serde_json::Value::String(
-                                dev.to_string(),
-                            )]),
-                        );
-                    }
-                    if let Some(pubr) = map.get("publisher") {
-                        data_map.insert(
-                            "publishers".to_string(),
-                            serde_json::Value::Array(vec![serde_json::Value::String(
-                                pubr.to_string(),
-                            )]),
-                        );
-                    }
-                    if let Some(sd) = map.get("short_description") {
-                        data_map.insert(
-                            "short_description".to_string(),
-                            serde_json::Value::String(sd.to_string()),
-                        );
-                    }
-                    if let Some(header) = map.get("header_image") {
-                        data_map.insert(
-                            "header_image".to_string(),
-                            serde_json::Value::String(header.to_string()),
-                        );
-                    }
-                    if let Some(franchise) = map.get("franchise") {
-                        data_map.insert(
-                            "franchise".to_string(),
-                            serde_json::Value::String(franchise.to_string()),
-                        );
-                    }
-                    obj.insert("data".to_string(), serde_json::Value::Object(data_map));
-                    obj.insert("success".to_string(), serde_json::Value::Bool(true));
-                    let entry = serde_json::Value::Object(obj);
-                    let _ = cache_steam_app_details(&connection, app_id, &entry);
-                    if let Some(data) = entry.get("data") {
-                        maybe_data = Some(data.clone());
-                    }
-                }
-            }
-        }
-
+    // If cache is missing useful data, attempt a live fetch through Steam's
+    // appdetails endpoint using Rust-native HTTP parsing only.
+    if response.short_description.is_none()
+        || response.developers.is_none()
+        || response.publishers.is_none()
+        || response.franchise.is_none()
+        || response.release_date.is_none()
+        || response.header_image.is_none()
+    {
         if let Ok(client) = build_http_client() {
             if response.short_description.is_none()
-                && response.developers.is_none()
-                && response.publishers.is_none()
+                || response.developers.is_none()
+                || response.publishers.is_none()
+                || response.franchise.is_none()
+                || response.release_date.is_none()
+                || response.header_image.is_none()
             {
                 let mut request_url = match url::Url::parse(crate::STEAM_APP_DETAILS_ENDPOINT) {
                     Ok(url) => url,
@@ -270,10 +190,10 @@ pub(crate) fn get_game_store_metadata(
                                                     .get("description")
                                                     .and_then(serde_json::Value::as_str)
                                                 {
-                                                    let lowered =
-                                                        description.to_ascii_lowercase();
+                                                    let lowered = description.to_ascii_lowercase();
                                                     if lowered.contains("full controller")
-                                                        || lowered.contains("full controller support")
+                                                        || lowered
+                                                            .contains("full controller support")
                                                     {
                                                         controller_support =
                                                             Some(String::from("Full"));
@@ -312,8 +232,9 @@ pub(crate) fn get_game_store_metadata(
                                             controller_support.as_deref(),
                                         );
 
-                                        if let Some(devs) =
-                                            data.get("developers").and_then(serde_json::Value::as_array)
+                                        if let Some(devs) = data
+                                            .get("developers")
+                                            .and_then(serde_json::Value::as_array)
                                         {
                                             let out: Vec<String> = devs
                                                 .iter()
@@ -324,8 +245,9 @@ pub(crate) fn get_game_store_metadata(
                                                 response.developers = Some(out);
                                             }
                                         }
-                                        if let Some(pubs) =
-                                            data.get("publishers").and_then(serde_json::Value::as_array)
+                                        if let Some(pubs) = data
+                                            .get("publishers")
+                                            .and_then(serde_json::Value::as_array)
                                         {
                                             let out: Vec<String> = pubs
                                                 .iter()

@@ -1,13 +1,17 @@
-use crate::*;
 use crate::infrastructure::runtime_vdf::{
-    VdfValue, parse_vdf_document, serialize_vdf_document, vdf_ensure_object_path_mut,
-    vdf_find_object_value, vdf_get_text_entry, vdf_remove_entry, vdf_set_text_entry,
+    parse_vdf_document, serialize_vdf_document, vdf_ensure_object_path_mut, vdf_find_object_value,
+    vdf_get_text_entry, vdf_remove_entry, vdf_set_text_entry, VdfValue,
 };
+use crate::*;
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::{collections::HashSet, fs, path::Path, time::SystemTime};
 
-fn normalize_game_properties_mode(value: String, allowed_modes: &[&str], fallback_mode: &str) -> String {
+fn normalize_game_properties_mode(
+    value: String,
+    allowed_modes: &[&str],
+    fallback_mode: &str,
+) -> String {
     let trimmed_value = value.trim();
     if trimmed_value.is_empty() {
         return fallback_mode.to_owned();
@@ -64,11 +68,7 @@ pub(crate) fn normalize_game_properties_settings_payload(
             ),
             background_downloads_mode: normalize_game_properties_mode(
                 settings.updates.background_downloads_mode,
-                &[
-                    "pause-while-playing-global",
-                    "always-allow",
-                    "never-allow",
-                ],
+                &["pause-while-playing-global", "always-allow", "never-allow"],
                 &defaults.updates.background_downloads_mode,
             ),
         },
@@ -233,8 +233,7 @@ fn compatibility_tool_from_common_directory_name(
     }
 
     let normalized_name = trimmed_name.to_ascii_lowercase();
-    if !normalized_name.starts_with("proton")
-        && !normalized_name.starts_with("steam linux runtime")
+    if !normalized_name.starts_with("proton") && !normalized_name.starts_with("steam linux runtime")
     {
         return None;
     }
@@ -278,12 +277,7 @@ fn parse_steam_custom_compatibility_tools_from_vdf(
             })
             .unwrap_or_else(|| tool_id.to_owned());
 
-        add_compatibility_tool_option(
-            &mut parsed_tools,
-            &mut seen_ids,
-            tool_id,
-            &display_label,
-        );
+        add_compatibility_tool_option(&mut parsed_tools, &mut seen_ids, tool_id, &display_label);
     }
 
     Ok(parsed_tools)
@@ -378,7 +372,11 @@ pub(crate) fn resolve_steam_compatibility_tools(
                 continue;
             }
 
-            let fallback_name = custom_tool_entry.file_name().to_string_lossy().trim().to_owned();
+            let fallback_name = custom_tool_entry
+                .file_name()
+                .to_string_lossy()
+                .trim()
+                .to_owned();
             if fallback_name.is_empty() {
                 continue;
             }
@@ -474,7 +472,10 @@ fn apply_steam_manifest_game_properties_settings(
     app_id: u64,
     settings: &GamePropertiesSettingsPayload,
 ) -> Result<(), String> {
-    let manifest_path = match resolve_steam_manifest_path_for_app_id(state.steam_root_override.as_deref(), app_id) {
+    let manifest_path = match resolve_steam_manifest_path_for_app_id(
+        state.steam_root_override.as_deref(),
+        app_id,
+    ) {
         Ok(path) => path,
         Err(error) => {
             log_steam_settings_debug(
@@ -505,9 +506,15 @@ fn apply_steam_manifest_game_properties_settings(
     }
 
     match settings.updates.background_downloads_mode.as_str() {
-        "pause-while-playing-global" => vdf_remove_entry(app_state_object, "AllowOtherDownloadsWhileRunning"),
-        "always-allow" => vdf_set_text_entry(app_state_object, "AllowOtherDownloadsWhileRunning", "1"),
-        "never-allow" => vdf_set_text_entry(app_state_object, "AllowOtherDownloadsWhileRunning", "0"),
+        "pause-while-playing-global" => {
+            vdf_remove_entry(app_state_object, "AllowOtherDownloadsWhileRunning")
+        }
+        "always-allow" => {
+            vdf_set_text_entry(app_state_object, "AllowOtherDownloadsWhileRunning", "1")
+        }
+        "never-allow" => {
+            vdf_set_text_entry(app_state_object, "AllowOtherDownloadsWhileRunning", "0")
+        }
         _ => {}
     }
 
@@ -570,12 +577,17 @@ fn vdf_remove_entries_with_case_insensitive_prefixes(
     original_len.saturating_sub(entries.len())
 }
 
-pub(crate) fn clear_steam_game_overlay_data(state: &AppState, user: &UserRow, app_id: u64) -> Result<(), String> {
+pub(crate) fn clear_steam_game_overlay_data(
+    state: &AppState,
+    user: &UserRow,
+    app_id: u64,
+) -> Result<(), String> {
     let steam_id = user
         .steam_id
         .as_deref()
         .ok_or_else(|| String::from("Steam is not linked for this account"))?;
-    let localconfig_path = resolve_steam_localconfig_path(state.steam_root_override.as_deref(), steam_id)?;
+    let localconfig_path =
+        resolve_steam_localconfig_path(state.steam_root_override.as_deref(), steam_id)?;
     let localconfig_contents = fs::read_to_string(&localconfig_path).map_err(|error| {
         format!(
             "Failed to read Steam localconfig at {}: {error}",
@@ -614,7 +626,10 @@ pub(crate) fn clear_steam_game_overlay_data(state: &AppState, user: &UserRow, ap
     })?;
     log_steam_settings_debug(
         state,
-        &format!("app {}: removed {} overlay entries", app_id, removed_entries),
+        &format!(
+            "app {}: removed {} overlay entries",
+            app_id, removed_entries
+        ),
     );
     Ok(())
 }
@@ -669,8 +684,14 @@ fn update_hidden_collection_membership(
     } else if !json_array_contains_app_id(&removed_values, app_id) {
         removed_values.push(serde_json::Value::from(app_id));
     }
-    hidden_collection_object.insert(String::from("added"), serde_json::Value::Array(added_values));
-    hidden_collection_object.insert(String::from("removed"), serde_json::Value::Array(removed_values));
+    hidden_collection_object.insert(
+        String::from("added"),
+        serde_json::Value::Array(added_values),
+    );
+    hidden_collection_object.insert(
+        String::from("removed"),
+        serde_json::Value::Array(removed_values),
+    );
 }
 
 fn update_steam_user_collections_hidden_state(
@@ -683,7 +704,9 @@ fn update_steam_user_collections_hidden_state(
         .filter(serde_json::Value::is_object)
         .unwrap_or_else(|| serde_json::json!({}));
     let Some(user_collections_object) = user_collections_value.as_object_mut() else {
-        return Err(String::from("Steam user-collections value must be a JSON object"));
+        return Err(String::from(
+            "Steam user-collections value must be a JSON object",
+        ));
     };
     let hidden_collection_value = user_collections_object
         .entry(String::from("hidden"))
@@ -838,8 +861,11 @@ fn apply_steam_game_privacy_settings_to_vdf_document(
         )
     };
 
-    let matched_count =
-        vdf_for_each_object_path_mut(vdf_document, steam_store_root_path, &mut apply_to_steam_root)?;
+    let matched_count = vdf_for_each_object_path_mut(
+        vdf_document,
+        steam_store_root_path,
+        &mut apply_to_steam_root,
+    )?;
     if matched_count > 0 {
         return Ok(());
     }
@@ -857,8 +883,11 @@ fn apply_steam_user_collections_hidden_state_to_vdf_document(
     let mut apply_to_steam_root = |steam_settings_object: &mut VdfValue| {
         update_steam_user_collections_hidden_state(steam_settings_object, app_id, hide_in_library)
     };
-    let matched_count =
-        vdf_for_each_object_path_mut(vdf_document, steam_store_root_path, &mut apply_to_steam_root)?;
+    let matched_count = vdf_for_each_object_path_mut(
+        vdf_document,
+        steam_store_root_path,
+        &mut apply_to_steam_root,
+    )?;
     if matched_count > 0 {
         return Ok(());
     }
@@ -918,14 +947,13 @@ fn update_steam_cloudstorage_hidden_collection_namespace(
             namespace_path.display()
         )
     })?;
-    let mut namespace_value = serde_json::from_str::<serde_json::Value>(&namespace_contents).map_err(
-        |error| {
+    let mut namespace_value = serde_json::from_str::<serde_json::Value>(&namespace_contents)
+        .map_err(|error| {
             format!(
                 "Failed to parse Steam cloudstorage namespace JSON at {}: {error}",
                 namespace_path.display()
             )
-        },
-    )?;
+        })?;
     let Some(namespace_entries) = namespace_value.as_array_mut() else {
         return Err(format!(
             "Steam cloudstorage namespace data at {} must be a JSON array",
@@ -938,9 +966,7 @@ fn update_steam_cloudstorage_hidden_collection_namespace(
         let Some(entry_parts) = namespace_entry.as_array_mut() else {
             continue;
         };
-        if entry_parts
-            .first()
-            .and_then(serde_json::Value::as_str)
+        if entry_parts.first().and_then(serde_json::Value::as_str)
             != Some("user-collections.hidden")
         {
             continue;
@@ -1040,14 +1066,13 @@ fn update_steam_cloudstorage_namespaces_version(
             namespaces_path.display()
         )
     })?;
-    let mut namespaces_value = serde_json::from_str::<serde_json::Value>(&namespaces_contents).map_err(
-        |error| {
+    let mut namespaces_value = serde_json::from_str::<serde_json::Value>(&namespaces_contents)
+        .map_err(|error| {
             format!(
                 "Failed to parse Steam cloudstorage namespaces JSON at {}: {error}",
                 namespaces_path.display()
             )
-        },
-    )?;
+        })?;
     let Some(namespace_entries) = namespaces_value.as_array_mut() else {
         return Err(format!(
             "Steam cloudstorage namespaces data at {} must be a JSON array",
@@ -1060,7 +1085,8 @@ fn update_steam_cloudstorage_namespaces_version(
         let Some(entry_parts) = namespace_entry.as_array_mut() else {
             continue;
         };
-        let Some(entry_namespace_id) = entry_parts.first().and_then(serde_json::Value::as_i64) else {
+        let Some(entry_namespace_id) = entry_parts.first().and_then(serde_json::Value::as_i64)
+        else {
             continue;
         };
         if entry_namespace_id != namespace_id {
@@ -1105,8 +1131,11 @@ fn apply_steam_cloudstorage_hidden_collection_state(
     if !namespace_path.is_file() {
         return Ok(());
     }
-    let namespace_version =
-        update_steam_cloudstorage_hidden_collection_namespace(&namespace_path, app_id, hide_in_library)?;
+    let namespace_version = update_steam_cloudstorage_hidden_collection_namespace(
+        &namespace_path,
+        app_id,
+        hide_in_library,
+    )?;
     let namespaces_path = cloudstorage_directory.join("cloud-storage-namespaces.json");
     if namespaces_path.is_file() {
         update_steam_cloudstorage_namespaces_version(&namespaces_path, 1, &namespace_version)?;
@@ -1132,7 +1161,8 @@ pub(crate) fn apply_steam_game_privacy_settings(
         .steam_id
         .as_deref()
         .ok_or_else(|| String::from("Steam is not linked for this account"))?;
-    let localconfig_path = resolve_steam_localconfig_path(state.steam_root_override.as_deref(), steam_id)?;
+    let localconfig_path =
+        resolve_steam_localconfig_path(state.steam_root_override.as_deref(), steam_id)?;
     log_steam_settings_debug(
         state,
         &format!(
@@ -1170,7 +1200,10 @@ pub(crate) fn apply_steam_game_privacy_settings(
     })?;
     log_steam_settings_debug(
         state,
-        &format!("app {}: wrote Steam localconfig privacy settings successfully", app_id),
+        &format!(
+            "app {}: wrote Steam localconfig privacy settings successfully",
+            app_id
+        ),
     );
 
     let sharedconfig_paths =
@@ -1206,9 +1239,12 @@ pub(crate) fn apply_steam_game_privacy_settings(
         );
     }
 
-    if let Err(error) =
-        apply_steam_cloudstorage_hidden_collection_state(state, steam_id, app_id, settings.hide_in_library)
-    {
+    if let Err(error) = apply_steam_cloudstorage_hidden_collection_state(
+        state,
+        steam_id,
+        app_id,
+        settings.hide_in_library,
+    ) {
         log_steam_settings_debug(
             state,
             &format!(
@@ -1231,7 +1267,8 @@ pub(crate) fn apply_steam_game_properties_settings(
         .steam_id
         .as_deref()
         .ok_or_else(|| String::from("Steam is not linked for this account"))?;
-    let localconfig_path = resolve_steam_localconfig_path(state.steam_root_override.as_deref(), steam_id)?;
+    let localconfig_path =
+        resolve_steam_localconfig_path(state.steam_root_override.as_deref(), steam_id)?;
     log_steam_settings_debug(
         state,
         &format!(
@@ -1283,7 +1320,10 @@ pub(crate) fn apply_steam_game_properties_settings(
     match settings.updates.automatic_updates_mode.as_str() {
         "use-global-setting" => {
             vdf_remove_entry(app_settings_object, "AutoUpdateBehavior");
-            log_steam_settings_debug(state, &format!("app {}: cleared AutoUpdateBehavior", app_id));
+            log_steam_settings_debug(
+                state,
+                &format!("app {}: cleared AutoUpdateBehavior", app_id),
+            );
         }
         "wait-until-launch" => {
             vdf_set_text_entry(app_settings_object, "AutoUpdateBehavior", "1");
@@ -1364,7 +1404,8 @@ pub(crate) fn apply_steam_game_properties_settings(
         ],
     );
     if settings.compatibility.force_steam_play_compatibility_tool {
-        let compat_mapping_entry = vdf_ensure_object_path_mut(compat_mapping_object, &[app_id_key.as_str()]);
+        let compat_mapping_entry =
+            vdf_ensure_object_path_mut(compat_mapping_object, &[app_id_key.as_str()]);
         let compat_name = map_compatibility_tool_label_to_steam_name(
             &settings.compatibility.steam_play_compatibility_tool,
         );
@@ -1372,7 +1413,10 @@ pub(crate) fn apply_steam_game_properties_settings(
             vdf_remove_entry(compat_mapping_object, &app_id_key);
             log_steam_settings_debug(
                 state,
-                &format!("app {}: cleared CompatToolMapping entry (empty compat name)", app_id),
+                &format!(
+                    "app {}: cleared CompatToolMapping entry (empty compat name)",
+                    app_id
+                ),
             );
         } else {
             vdf_set_text_entry(compat_mapping_entry, "name", &compat_name);

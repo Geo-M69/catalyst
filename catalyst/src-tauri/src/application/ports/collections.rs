@@ -18,11 +18,7 @@ pub(crate) struct CollectionLookupTarget {
 pub(crate) trait CollectionsPort {
     fn authenticated_user_id(&self) -> AppResult<String>;
 
-    fn ensure_owned_game_exists(
-        &self,
-        user_id: &str,
-        game: &GameIdentity,
-    ) -> AppResult<()>;
+    fn ensure_owned_game_exists(&self, user_id: &str, game: &GameIdentity) -> AppResult<()>;
 
     fn ensure_owned_collection_exists(
         &self,
@@ -49,11 +45,7 @@ pub(crate) trait CollectionsPort {
         name: &CollectionName,
     ) -> AppResult<CollectionRecord>;
 
-    fn delete_collection(
-        &self,
-        user_id: &str,
-        collection_id: &CollectionId,
-    ) -> AppResult<()>;
+    fn delete_collection(&self, user_id: &str, collection_id: &CollectionId) -> AppResult<()>;
 
     fn add_game_to_collection_membership(
         &self,

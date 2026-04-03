@@ -1,7 +1,5 @@
 use crate::application::contracts::steam::{
-    GameBetaAccessCodeValidationResponse,
-    GameVersionBetasResponse,
-    SteamCollectionsImportResponse,
+    GameBetaAccessCodeValidationResponse, GameVersionBetasResponse, SteamCollectionsImportResponse,
 };
 use crate::application::error::AppResult;
 use crate::application::services::steam_service::SteamService;
@@ -41,7 +39,9 @@ pub(crate) async fn validate_game_beta_access_code(
 }
 
 #[tauri::command]
-pub(crate) async fn import_steam_collections(state: State<'_, AppState>) -> AppResult<SteamCollectionsImportResponse> {
+pub(crate) async fn import_steam_collections(
+    state: State<'_, AppState>,
+) -> AppResult<SteamCollectionsImportResponse> {
     let state = state.inner().clone();
     run_blocking(move || {
         let steam_use_case = SteamService::new(InfrastructureSteamPort::new(&state));

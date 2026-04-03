@@ -1,26 +1,20 @@
 use crate::application::contracts::library::{
-    LibraryResponse,
-    SteamDownloadProgressResponse,
-    SteamSyncResponse,
+    GameAchievementsResponse, GameActivityTimelineResponse, GameDlcResponse,
+    GameFriendsActivityResponse, GameReviewResponse, GameStoreMetadataResponse,
+    GameTradingCardsResponse,
+};
+use crate::application::contracts::library::{
+    LibraryResponse, SteamDownloadProgressResponse, SteamSyncResponse,
 };
 use crate::application::error::AppResult;
 use crate::application::services::library_service::LibraryService;
-use crate::application::contracts::library::{
-    GameActivityTimelineResponse,
-    GameAchievementsResponse,
-    GameDlcResponse,
-    GameFriendsActivityResponse,
-    GameReviewResponse,
-    GameStoreMetadataResponse,
-    GameTradingCardsResponse,
-};
 use crate::application::use_cases::library::LibraryUseCase;
 use crate::infrastructure::library_port::InfrastructureLibraryPort;
 use crate::infrastructure::steam_local::SteamLocal;
-use crate::AppState;
-use tauri::{AppHandle, State};
-use tauri::Emitter;
 use crate::interface::tauri::commands::blocking::run_blocking;
+use crate::AppState;
+use tauri::Emitter;
+use tauri::{AppHandle, State};
 
 #[tauri::command]
 pub(crate) fn get_library(state: State<'_, AppState>) -> AppResult<LibraryResponse> {
@@ -36,7 +30,8 @@ pub(crate) async fn sync_steam_library(state: State<'_, AppState>) -> AppResult<
     run_blocking(move || {
         let library_use_case = LibraryService::new(InfrastructureLibraryPort::new(&state));
         library_use_case.sync_steam_library()
-    }).await
+    })
+    .await
 }
 
 #[tauri::command]
@@ -51,12 +46,15 @@ pub(crate) fn set_game_favorite(
 }
 
 #[tauri::command]
-pub(crate) async fn list_steam_downloads(state: State<'_, AppState>) -> AppResult<Vec<SteamDownloadProgressResponse>> {
+pub(crate) async fn list_steam_downloads(
+    state: State<'_, AppState>,
+) -> AppResult<Vec<SteamDownloadProgressResponse>> {
     let state = state.inner().clone();
     run_blocking(move || {
         let library_use_case = LibraryService::new(InfrastructureLibraryPort::new(&state));
         library_use_case.list_steam_downloads()
-    }).await
+    })
+    .await
 }
 
 #[tauri::command]
@@ -159,11 +157,7 @@ pub(crate) async fn get_game_dlc(
     let state = state.inner().clone();
     run_blocking(move || {
         let library_use_case = LibraryService::new(InfrastructureLibraryPort::new(&state));
-        library_use_case.get_game_dlc(
-            provider,
-            external_id,
-            force_refresh.unwrap_or(false),
-        )
+        library_use_case.get_game_dlc(provider, external_id, force_refresh.unwrap_or(false))
     })
     .await
 }
@@ -178,11 +172,7 @@ pub(crate) async fn get_game_review(
     let state = state.inner().clone();
     run_blocking(move || {
         let library_use_case = LibraryService::new(InfrastructureLibraryPort::new(&state));
-        library_use_case.get_game_review(
-            provider,
-            external_id,
-            force_refresh.unwrap_or(false),
-        )
+        library_use_case.get_game_review(provider, external_id, force_refresh.unwrap_or(false))
     })
     .await
 }
@@ -242,7 +232,6 @@ pub(crate) fn start_local_steam_scan(
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,19 +245,28 @@ mod tests {
         // Run the blocking scan in a thread so the test remains responsive.
         // Create an empty temporary directory and use it as a steam root override so
         // the scan completes quickly without touching the user's actual Steam data.
-        let temp_dir = std::env::temp_dir().join(format!("catalyst_test_{}",
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
+        let temp_dir = std::env::temp_dir().join(format!(
+            "catalyst_test_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
         ));
         let _ = std::fs::create_dir_all(&temp_dir);
 
         std::thread::spawn(move || {
-            run_local_steam_scan_and_call_with_override(Some(temp_dir.to_str().unwrap()), move |result| {
-                let _ = tx.send(result);
-            });
+            run_local_steam_scan_and_call_with_override(
+                Some(temp_dir.to_str().unwrap()),
+                move |result| {
+                    let _ = tx.send(result);
+                },
+            );
         });
 
         // Wait a reasonable time for the background scan to complete on CI/Dev machines.
-        let received = rx.recv_timeout(Duration::from_secs(30)).expect("expected scan result");
+        let received = rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("expected scan result");
         match received {
             Ok(ids) => {
                 // We don't assert on a specific value; just confirm we received a Vec.

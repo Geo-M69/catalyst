@@ -1,10 +1,6 @@
 use super::super::contracts::game_settings::{
-    GameCompatibilityToolResponse,
-    GameCustomizationArtworkResponse,
-    GameInstallLocationResponse,
-    GameInstallationDetailsResponse,
-    GamePrivacySettingsResponse,
-    GamePropertiesSettingsPayload,
+    GameCompatibilityToolResponse, GameCustomizationArtworkResponse, GameInstallLocationResponse,
+    GameInstallationDetailsResponse, GamePrivacySettingsResponse, GamePropertiesSettingsPayload,
     GameScreenshotResponse,
 };
 use super::super::error::AppResult;
@@ -56,12 +52,8 @@ where
         hide_in_library: bool,
         mark_as_private: bool,
     ) -> AppResult<()> {
-        self.port.set_game_privacy_settings(
-            provider,
-            external_id,
-            hide_in_library,
-            mark_as_private,
-        )
+        self.port
+            .set_game_privacy_settings(provider, external_id, hide_in_library, mark_as_private)
     }
 
     fn clear_game_overlay_data(&self, provider: String, external_id: String) -> AppResult<()> {
@@ -73,7 +65,8 @@ where
         provider: String,
         external_id: String,
     ) -> AppResult<GamePropertiesSettingsPayload> {
-        self.port.get_game_properties_settings(provider, external_id)
+        self.port
+            .get_game_properties_settings(provider, external_id)
     }
 
     fn set_game_properties_settings(
@@ -91,7 +84,8 @@ where
         provider: String,
         external_id: String,
     ) -> AppResult<GameCustomizationArtworkResponse> {
-        self.port.get_game_customization_artwork(provider, external_id)
+        self.port
+            .get_game_customization_artwork(provider, external_id)
     }
 
     fn get_game_screenshots(
@@ -107,7 +101,8 @@ where
         provider: String,
         external_id: String,
     ) -> AppResult<GameInstallationDetailsResponse> {
-        self.port.get_game_installation_details(provider, external_id)
+        self.port
+            .get_game_installation_details(provider, external_id)
     }
 
     fn get_game_install_size_estimate(
@@ -115,7 +110,8 @@ where
         provider: String,
         external_id: String,
     ) -> AppResult<Option<u64>> {
-        self.port.get_game_install_size_estimate(provider, external_id)
+        self.port
+            .get_game_install_size_estimate(provider, external_id)
     }
 
     fn list_game_install_locations(

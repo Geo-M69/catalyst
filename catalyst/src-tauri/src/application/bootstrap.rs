@@ -82,9 +82,8 @@ struct BootstrapPaths {
 }
 
 pub(crate) fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn Error>> {
-    setup_app_inner(app).map_err(|error| {
-        std::io::Error::new(std::io::ErrorKind::Other, error).into()
-    })
+    setup_app_inner(app)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error).into())
 }
 
 fn setup_app_inner(app: &mut tauri::App) -> Result<(), String> {

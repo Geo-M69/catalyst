@@ -1,26 +1,30 @@
-use crate::application::error::AppResult;
 use crate::application::contracts::library::{GameReviewEntryResponse, GameReviewResponse};
-use crate::infrastructure::cache_adapter::CacheAdapter;
-use crate::AppState;
+use crate::application::error::AppResult;
 use crate::build_http_client;
 use crate::cleanup_expired_sessions;
 use crate::ensure_owned_game_exists;
 use crate::get_authenticated_user;
+use crate::infrastructure::cache_adapter::CacheAdapter;
 use crate::normalize_backend_warning_message;
 use crate::normalize_game_identity_input;
 use crate::open_connection;
 use crate::resolve_steam_root_paths;
+use crate::AppState;
+use aes::Aes128;
+use cbc::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
 use chrono::{TimeZone, Utc};
 use rusqlite::Connection;
 use scraper::{Html, Selector};
 use std::collections::{HashMap, HashSet};
-use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 
 const STEAM_APP_REVIEWS_ENDPOINT: &str = "https://store.steampowered.com/appreviews/";
 const STEAM_REVIEW_CACHE_TTL_SECONDS: i64 = 15 * 60;
 const STEAM_REVIEW_CACHE_VERSION: &str = "v2";
+const CHROMIUM_COOKIE_V10_AES_KEY: [u8; 16] = [
+    0xfd, 0x62, 0x1f, 0xe5, 0xa2, 0xb4, 0x02, 0x53, 0x9d, 0xfa, 0x14, 0x7c, 0xa9, 0x27, 0x27, 0x78,
+];
+const CHROMIUM_COOKIE_V10_AES_IV: [u8; 16] = [0x20; 16];
 
 #[derive(serde::Deserialize)]
 struct SteamAppReviewsApiResponse {
@@ -309,33 +313,16 @@ fn decrypt_chromium_cookie_v10(encrypted_value: &[u8]) -> Option<String> {
         return None;
     }
 
-    let ciphertext = &encrypted_value[3..];
-    let mut child = Command::new("openssl")
-        .arg("enc")
-        .arg("-d")
-        .arg("-aes-128-cbc")
-        .arg("-K")
-        .arg("fd621fe5a2b402539dfa147ca9272778")
-        .arg("-iv")
-        .arg("20202020202020202020202020202020")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
+    let mut ciphertext = encrypted_value[3..].to_vec();
+    let decryptor = cbc::Decryptor::<Aes128>::new_from_slices(
+        &CHROMIUM_COOKIE_V10_AES_KEY,
+        &CHROMIUM_COOKIE_V10_AES_IV,
+    )
+    .ok()?;
+    let plaintext = decryptor
+        .decrypt_padded_mut::<Pkcs7>(&mut ciphertext)
         .ok()?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        if stdin.write_all(ciphertext).is_err() {
-            return None;
-        }
-    }
-
-    let output = child.wait_with_output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    let decrypted = String::from_utf8(output.stdout).ok()?;
+    let decrypted = String::from_utf8(plaintext.to_vec()).ok()?;
     let trimmed = decrypted.trim().to_owned();
     if trimmed.is_empty() {
         return None;
@@ -619,9 +606,9 @@ fn fetch_steam_profile_review_xml_for_user(
         ));
     }
 
-    let body = response
-        .text()
-        .map_err(|error| format!("Could not read Steam profile review XML response body: {error}"))?;
+    let body = response.text().map_err(|error| {
+        format!("Could not read Steam profile review XML response body: {error}")
+    })?;
     if body.trim().is_empty() {
         return Ok(None);
     }
@@ -664,8 +651,8 @@ fn fetch_steam_profile_review_xml_for_user(
         .and_then(|value| value.parse::<i64>().ok())
         .unwrap_or(0)
         .max(0);
-    let review_id =
-        extract_xml_tag_value(&body, "recommendationid").unwrap_or_else(|| format!("steam-profile-xml:{app_id}:{steam_id}"));
+    let review_id = extract_xml_tag_value(&body, "recommendationid")
+        .unwrap_or_else(|| format!("steam-profile-xml:{app_id}:{steam_id}"));
 
     Ok(Some(GameReviewEntryResponse {
         id: review_id,

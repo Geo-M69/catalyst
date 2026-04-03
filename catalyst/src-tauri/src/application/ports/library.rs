@@ -1,9 +1,3 @@
-use crate::application::contracts::library::{
-    LibraryResponse,
-    SteamDownloadProgressResponse,
-    SteamSyncResponse,
-};
-use crate::application::error::AppResult;
 use crate::application::contracts::library::GameAchievementsResponse;
 use crate::application::contracts::library::GameActivityTimelineResponse;
 use crate::application::contracts::library::GameDlcResponse;
@@ -11,6 +5,10 @@ use crate::application::contracts::library::GameFriendsActivityResponse;
 use crate::application::contracts::library::GameReviewResponse;
 use crate::application::contracts::library::GameStoreMetadataResponse;
 use crate::application::contracts::library::GameTradingCardsResponse;
+use crate::application::contracts::library::{
+    LibraryResponse, SteamDownloadProgressResponse, SteamSyncResponse,
+};
+use crate::application::error::AppResult;
 
 pub(crate) trait LibraryPort {
     fn get_library(&self) -> AppResult<LibraryResponse>;

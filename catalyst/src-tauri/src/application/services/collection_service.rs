@@ -1,9 +1,5 @@
 use super::super::error::AppResult;
-use super::super::ports::collections::{
-    CollectionLookupTarget,
-    CollectionRecord,
-    CollectionsPort,
-};
+use super::super::ports::collections::{CollectionLookupTarget, CollectionRecord, CollectionsPort};
 use crate::domain::collection::{CollectionId, CollectionName};
 use crate::domain::error::DomainValidationError;
 use crate::domain::game::GameIdentity;
@@ -55,10 +51,13 @@ where
         };
 
         if let Some(target_game) = target.as_ref() {
-            self.ports.ensure_owned_game_exists(&user_id, &target_game.game)?;
+            self.ports
+                .ensure_owned_game_exists(&user_id, &target_game.game)?;
         }
 
-        let rows = self.ports.list_collections_by_user(&user_id, target.as_ref())?;
+        let rows = self
+            .ports
+            .list_collections_by_user(&user_id, target.as_ref())?;
         Ok(rows.into_iter().map(CollectionView::from).collect())
     }
 
@@ -77,9 +76,9 @@ where
         let user_id = self.ports.authenticated_user_id()?;
         let normalized_collection_id = CollectionId::parse(&collection_id)?;
         let normalized_name = CollectionName::parse(&name)?;
-        let renamed = self
-            .ports
-            .rename_collection(&user_id, &normalized_collection_id, &normalized_name)?;
+        let renamed =
+            self.ports
+                .rename_collection(&user_id, &normalized_collection_id, &normalized_name)?;
         Ok(renamed.into())
     }
 
@@ -142,11 +141,7 @@ mod tests {
             Ok(self.user_id.clone())
         }
 
-        fn ensure_owned_game_exists(
-            &self,
-            _user_id: &str,
-            game: &GameIdentity,
-        ) -> AppResult<()> {
+        fn ensure_owned_game_exists(&self, _user_id: &str, game: &GameIdentity) -> AppResult<()> {
             if self.owned_games.contains(game) {
                 return Ok(());
             }
@@ -183,12 +178,15 @@ mod tests {
             target: Option<&CollectionLookupTarget>,
         ) -> AppResult<Vec<CollectionRecord>> {
             let memberships = self.memberships.borrow();
-            let contains_by_collection_id = memberships
-                .iter()
-                .fold(HashMap::<String, Vec<GameIdentity>>::new(), |mut acc, entry| {
-                    acc.entry(entry.0.clone()).or_default().push(entry.1.clone());
+            let contains_by_collection_id = memberships.iter().fold(
+                HashMap::<String, Vec<GameIdentity>>::new(),
+                |mut acc, entry| {
+                    acc.entry(entry.0.clone())
+                        .or_default()
+                        .push(entry.1.clone());
                     acc
-                });
+                },
+            );
 
             let mut rows = self.collections.borrow().clone();
             if let Some(target) = target {
@@ -252,11 +250,7 @@ mod tests {
             Ok(entry.clone())
         }
 
-        fn delete_collection(
-            &self,
-            _user_id: &str,
-            collection_id: &CollectionId,
-        ) -> AppResult<()> {
+        fn delete_collection(&self, _user_id: &str, collection_id: &CollectionId) -> AppResult<()> {
             let mut collections = self.collections.borrow_mut();
             let before = collections.len();
             collections.retain(|entry| entry.id != collection_id.as_str());

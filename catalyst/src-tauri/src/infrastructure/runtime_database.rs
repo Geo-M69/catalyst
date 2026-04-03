@@ -221,10 +221,7 @@ fn migrate_games_table(connection: &Connection) -> Result<(), String> {
 
     if !games_table_has_column(connection, "last_played_at")? {
         connection
-            .execute(
-                "ALTER TABLE games ADD COLUMN last_played_at TEXT",
-                [],
-            )
+            .execute("ALTER TABLE games ADD COLUMN last_played_at TEXT", [])
             .map_err(|error| {
                 format!("Failed to migrate games table with last_played_at column: {error}")
             })?;

@@ -1,16 +1,16 @@
-use crate::AppState;
 use crate::application::error::{AppError, AppResult};
 use crate::application::ports::game_actions::GameActionsPort;
-use crate::domain::game::parse_steam_app_id;
-use crate::infrastructure::launcher_ops::LauncherOps;
-use crate::infrastructure::steam_local::SteamLocal;
 use crate::cleanup_expired_sessions;
+use crate::domain::game::parse_steam_app_id;
 use crate::ensure_owned_game_exists;
 use crate::get_authenticated_user;
+use crate::infrastructure::launcher_ops::LauncherOps;
+use crate::infrastructure::steam_local::SteamLocal;
 use crate::load_game_properties_settings;
 use crate::normalize_game_identity_input;
 use crate::open_connection;
-use rusqlite::{OptionalExtension, params};
+use crate::AppState;
+use rusqlite::{params, OptionalExtension};
 
 #[derive(Clone)]
 pub(crate) struct InfrastructureGameActionsPort {
@@ -118,7 +118,10 @@ impl GameActionsPort for InfrastructureGameActionsPort {
         if !install_directory.is_dir() {
             return Err(AppError::not_found(
                 "install_directory_missing",
-                format!("Install directory is unavailable: {}", install_directory.display()),
+                format!(
+                    "Install directory is unavailable: {}",
+                    install_directory.display()
+                ),
             ));
         }
 

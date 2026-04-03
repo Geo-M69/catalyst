@@ -66,6 +66,7 @@ where
     }
 
     fn open_game_recording_settings(&self, provider: String, external_id: String) -> AppResult<()> {
-        self.port.open_game_recording_settings(provider, external_id)
+        self.port
+            .open_game_recording_settings(provider, external_id)
     }
 }

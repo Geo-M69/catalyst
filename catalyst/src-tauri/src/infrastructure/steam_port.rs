@@ -1,9 +1,5 @@
-use crate::AppState;
-use crate::STEAM_APP_BETAS_CACHE_TTL_HOURS;
 use crate::application::contracts::steam::{
-    GameBetaAccessCodeValidationResponse,
-    GameVersionBetaOptionResponse,
-    GameVersionBetasResponse,
+    GameBetaAccessCodeValidationResponse, GameVersionBetaOptionResponse, GameVersionBetasResponse,
     SteamCollectionsImportResponse,
 };
 use crate::application::error::{AppError, AppResult};
@@ -18,15 +14,18 @@ use crate::fetch_steam_game_version_betas;
 use crate::fetch_steam_game_version_betas_from_store;
 use crate::find_cached_steam_app_betas;
 use crate::get_authenticated_user;
+use crate::infrastructure::runtime_collections::{
+    import_steam_collections_for_user, merge_collections_by_app_id,
+    parse_steam_collections_from_vdf,
+};
 use crate::is_forbidden_http_error;
 use crate::normalize_backend_warning_message;
 use crate::normalize_game_identity_input;
 use crate::open_connection;
 use crate::resolve_steam_root_path;
 use crate::resolve_steam_userdata_directory;
-use crate::infrastructure::runtime_collections::{
-    import_steam_collections_for_user, merge_collections_by_app_id, parse_steam_collections_from_vdf,
-};
+use crate::AppState;
+use crate::STEAM_APP_BETAS_CACHE_TTL_HOURS;
 use chrono::{Duration as ChronoDuration, Utc};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -43,7 +42,9 @@ impl InfrastructureSteamPort {
         }
     }
 
-    fn to_contract_beta_option(value: crate::GameVersionBetaOptionResponse) -> GameVersionBetaOptionResponse {
+    fn to_contract_beta_option(
+        value: crate::GameVersionBetaOptionResponse,
+    ) -> GameVersionBetaOptionResponse {
         GameVersionBetaOptionResponse {
             id: value.id,
             name: value.name,
@@ -330,7 +331,10 @@ impl SteamPort for InfrastructureSteamPort {
             })?;
         let userdata_directory = resolve_steam_userdata_directory(&steam_root, steam_id)?;
         let config_paths = [
-            userdata_directory.join("7").join("remote").join("sharedconfig.vdf"),
+            userdata_directory
+                .join("7")
+                .join("remote")
+                .join("sharedconfig.vdf"),
             userdata_directory.join("config").join("sharedconfig.vdf"),
             userdata_directory.join("config").join("localconfig.vdf"),
         ];

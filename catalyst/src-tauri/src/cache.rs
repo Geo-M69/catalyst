@@ -5,7 +5,8 @@ use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
 use serde_json::Value;
 
-static CACHE: Lazy<Mutex<HashMap<String, (DateTime<Utc>, Value)>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static CACHE: Lazy<Mutex<HashMap<String, (DateTime<Utc>, Value)>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 pub fn get_cached(key: &str, max_age_seconds: i64) -> Option<Value> {
     let guard = CACHE.lock().ok()?;

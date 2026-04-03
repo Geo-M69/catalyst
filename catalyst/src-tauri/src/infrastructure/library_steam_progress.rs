@@ -1,23 +1,13 @@
-use crate::application::error::AppResult;
 use crate::application::contracts::library::{
-    GameAchievementEntryResponse,
-    GameAchievementsResponse,
-    GameTradingCardEntryResponse,
+    GameAchievementEntryResponse, GameAchievementsResponse, GameTradingCardEntryResponse,
     GameTradingCardsResponse,
 };
+use crate::application::error::AppResult;
 use crate::infrastructure::cache_adapter::CacheAdapter;
 use crate::{
-    AppState,
-    STEAM_APP_DETAILS_CACHE_TTL_HOURS,
-    build_http_client,
-    cache_steam_app_details,
-    cleanup_expired_sessions,
-    ensure_owned_game_exists,
-    find_cached_steam_app_details,
-    get_authenticated_user,
-    normalize_backend_warning_message,
-    normalize_game_identity_input,
-    open_connection,
+    build_http_client, cache_steam_app_details, cleanup_expired_sessions, ensure_owned_game_exists,
+    find_cached_steam_app_details, get_authenticated_user, normalize_backend_warning_message,
+    normalize_game_identity_input, open_connection, AppState, STEAM_APP_DETAILS_CACHE_TTL_HOURS,
 };
 use chrono::{Duration as ChronoDuration, Utc};
 use rusqlite::Connection;
@@ -539,7 +529,8 @@ pub(crate) fn get_game_achievements(
         if let Some(cached_value) =
             CacheAdapter::new().get_json(&cache_key, STEAM_ACHIEVEMENTS_CACHE_TTL_SECONDS)
         {
-            if let Ok(cached_response) = serde_json::from_value::<GameAchievementsResponse>(cached_value)
+            if let Ok(cached_response) =
+                serde_json::from_value::<GameAchievementsResponse>(cached_value)
             {
                 return Ok(cached_response);
             }
@@ -588,21 +579,20 @@ pub(crate) fn get_game_achievements(
                     .append_pair("l", "english")
                     .append_pair("format", "json");
 
-                let resp = client
-                    .get(request_url)
-                    .send()
-                    .map_err(|error| format!("Steam player achievements request failed: {error}"))?;
+                let resp = client.get(request_url).send().map_err(|error| {
+                    format!("Steam player achievements request failed: {error}")
+                })?;
                 if !resp.status().is_success() {
                     return Err(format!(
                         "Steam player achievements request failed with status {}",
                         resp.status()
                     ));
                 }
-                let payload = resp
-                    .json::<SteamPlayerAchievementsApiResponse>()
-                    .map_err(|error| {
-                        format!("Failed to decode Steam player achievements response: {error}")
-                    })?;
+                let payload =
+                    resp.json::<SteamPlayerAchievementsApiResponse>()
+                        .map_err(|error| {
+                            format!("Failed to decode Steam player achievements response: {error}")
+                        })?;
                 let Some(playerstats) = payload.playerstats else {
                     return Ok(());
                 };
@@ -636,7 +626,10 @@ pub(crate) fn get_game_achievements(
             let mut entries: Vec<GameAchievementEntryResponse> = Vec::new();
             for (api_name, schema_entry) in &schema_by_name {
                 let player_entry_opt = player_achievements_map.get(api_name.as_str());
-                let unlocked = player_entry_opt.and_then(|entry| entry.achieved).unwrap_or(0) == 1;
+                let unlocked = player_entry_opt
+                    .and_then(|entry| entry.achieved)
+                    .unwrap_or(0)
+                    == 1;
                 let unlocked_at = player_entry_opt
                     .and_then(|entry| entry.unlocktime)
                     .and_then(unix_seconds_to_rfc3339);
@@ -656,7 +649,9 @@ pub(crate) fn get_game_achievements(
             for (api_name, player_achievement) in &player_achievements_map {
                 if !schema_by_name.contains_key(api_name) {
                     let unlocked = player_achievement.achieved.unwrap_or(0) == 1;
-                    let unlocked_at = player_achievement.unlocktime.and_then(unix_seconds_to_rfc3339);
+                    let unlocked_at = player_achievement
+                        .unlocktime
+                        .and_then(unix_seconds_to_rfc3339);
                     entries.push(GameAchievementEntryResponse {
                         api_name: api_name.clone(),
                         name: api_name.clone(),
@@ -768,7 +763,8 @@ pub(crate) fn get_game_trading_cards(
         if let Some(cached_value) =
             CacheAdapter::new().get_json(&cache_key, STEAM_TRADING_CARDS_CACHE_TTL_SECONDS)
         {
-            if let Ok(cached_response) = serde_json::from_value::<GameTradingCardsResponse>(cached_value)
+            if let Ok(cached_response) =
+                serde_json::from_value::<GameTradingCardsResponse>(cached_value)
             {
                 return Ok(cached_response);
             }

@@ -48,8 +48,9 @@ pub(crate) fn wait_for_steam_callback(
         match listener.accept() {
             Ok((mut stream, _)) => {
                 let request_target = read_http_request_target(&mut stream)?;
-                let callback_url = Url::parse(&format!("http://{callback_public_host}{request_target}"))
-                    .map_err(|error| format!("Failed to parse callback URL: {error}"))?;
+                let callback_url =
+                    Url::parse(&format!("http://{callback_public_host}{request_target}"))
+                        .map_err(|error| format!("Failed to parse callback URL: {error}"))?;
                 let callback_params = callback_url
                     .query_pairs()
                     .map(|(key, value)| (key.to_string(), value.to_string()))
@@ -74,7 +75,10 @@ pub(crate) fn wait_for_steam_callback(
     }
 }
 
-pub(crate) fn build_steam_authorization_url(return_to: &str, realm: &str) -> Result<String, String> {
+pub(crate) fn build_steam_authorization_url(
+    return_to: &str,
+    realm: &str,
+) -> Result<String, String> {
     let mut url = Url::parse(crate::STEAM_OPENID_ENDPOINT)
         .map_err(|error| format!("Failed to parse Steam OpenID endpoint: {error}"))?;
 

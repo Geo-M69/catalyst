@@ -53,7 +53,9 @@ fn resolve_desktop_shortcuts_directory() -> Result<PathBuf, String> {
                 .filter(|value| !value.is_empty())
                 .map(PathBuf::from)
         })
-        .ok_or_else(|| String::from("Could not resolve user home directory for desktop shortcut"))?;
+        .ok_or_else(|| {
+            String::from("Could not resolve user home directory for desktop shortcut")
+        })?;
 
     let desktop_directory = home_directory.join("Desktop");
     if desktop_directory.is_dir() {
@@ -68,7 +70,10 @@ fn resolve_desktop_shortcuts_directory() -> Result<PathBuf, String> {
     } else if cfg!(target_os = "macos") {
         home_directory.join("Applications")
     } else {
-        home_directory.join(".local").join("share").join("applications")
+        home_directory
+            .join(".local")
+            .join("share")
+            .join("applications")
     };
     fs::create_dir_all(&fallback_directory).map_err(|error| {
         format!(

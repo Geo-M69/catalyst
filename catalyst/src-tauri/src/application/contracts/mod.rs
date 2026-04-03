@@ -1,4 +1,4 @@
 pub mod auth;
-pub mod library;
 pub mod game_settings;
+pub mod library;
 pub mod steam;

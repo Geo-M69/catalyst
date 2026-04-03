@@ -59,7 +59,10 @@ pub(crate) fn parse_collection_name_candidate(raw_value: &str) -> Option<String>
     if matches!(lowered.as_str(), "0" | "1" | "true" | "false") {
         return None;
     }
-    if normalized.chars().all(|character| character.is_ascii_digit()) {
+    if normalized
+        .chars()
+        .all(|character| character.is_ascii_digit())
+    {
         return None;
     }
 

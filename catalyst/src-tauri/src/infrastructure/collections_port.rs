@@ -1,8 +1,6 @@
 use crate::application::error::AppResult;
 use crate::application::ports::collections::{
-    CollectionLookupTarget,
-    CollectionRecord,
-    CollectionsPort,
+    CollectionLookupTarget, CollectionRecord, CollectionsPort,
 };
 use crate::domain::collection::{CollectionId, CollectionName};
 use crate::domain::game::GameIdentity;
@@ -38,11 +36,7 @@ impl CollectionsPort for InfrastructureCollectionsPort<'_> {
         self.session_repo().authenticated_user_id()
     }
 
-    fn ensure_owned_game_exists(
-        &self,
-        user_id: &str,
-        game: &GameIdentity,
-    ) -> AppResult<()> {
+    fn ensure_owned_game_exists(&self, user_id: &str, game: &GameIdentity) -> AppResult<()> {
         self.library_repo().ensure_owned_game_exists(user_id, game)
     }
 
@@ -60,7 +54,8 @@ impl CollectionsPort for InfrastructureCollectionsPort<'_> {
         user_id: &str,
         target: Option<&CollectionLookupTarget>,
     ) -> AppResult<Vec<CollectionRecord>> {
-        self.collection_repo().list_collections_by_user(user_id, target)
+        self.collection_repo()
+            .list_collections_by_user(user_id, target)
     }
 
     fn create_collection(
@@ -81,12 +76,9 @@ impl CollectionsPort for InfrastructureCollectionsPort<'_> {
             .rename_collection(user_id, collection_id, name)
     }
 
-    fn delete_collection(
-        &self,
-        user_id: &str,
-        collection_id: &CollectionId,
-    ) -> AppResult<()> {
-        self.collection_repo().delete_collection(user_id, collection_id)
+    fn delete_collection(&self, user_id: &str, collection_id: &CollectionId) -> AppResult<()> {
+        self.collection_repo()
+            .delete_collection(user_id, collection_id)
     }
 
     fn add_game_to_collection_membership(

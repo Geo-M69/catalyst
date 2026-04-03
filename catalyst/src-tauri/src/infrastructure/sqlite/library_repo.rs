@@ -13,7 +13,11 @@ impl<'a> SQLiteLibraryRepo<'a> {
         Self { state }
     }
 
-    pub(crate) fn ensure_owned_game_exists(&self, user_id: &str, game: &GameIdentity) -> AppResult<()> {
+    pub(crate) fn ensure_owned_game_exists(
+        &self,
+        user_id: &str,
+        game: &GameIdentity,
+    ) -> AppResult<()> {
         let connection = crate::open_connection(&self.state.db_path).map_err(AppError::from)?;
         let exists = connection
             .query_row(
@@ -22,7 +26,9 @@ impl<'a> SQLiteLibraryRepo<'a> {
                 |row| row.get::<_, i64>(0),
             )
             .optional()
-            .map_err(|error| AppError::from(format!("Failed to validate game ownership: {error}")))?;
+            .map_err(|error| {
+                AppError::from(format!("Failed to validate game ownership: {error}"))
+            })?;
 
         if exists.is_none() {
             return Err(AppError::from("Game not found for current user"));

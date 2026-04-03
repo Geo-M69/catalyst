@@ -40,7 +40,9 @@ impl<'a> SQLiteSessionRepo<'a> {
                 "DELETE FROM sessions WHERE expires_at <= ?1",
                 params![Utc::now().to_rfc3339()],
             )
-            .map_err(|error| AppError::from(format!("Failed to cleanup expired sessions: {error}")))?;
+            .map_err(|error| {
+                AppError::from(format!("Failed to cleanup expired sessions: {error}"))
+            })?;
         Ok(())
     }
 

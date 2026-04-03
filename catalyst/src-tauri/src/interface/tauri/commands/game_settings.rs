@@ -1,10 +1,6 @@
 use crate::application::contracts::game_settings::{
-    GameCompatibilityToolResponse,
-    GameCustomizationArtworkResponse,
-    GameInstallLocationResponse,
-    GameInstallationDetailsResponse,
-    GamePrivacySettingsResponse,
-    GamePropertiesSettingsPayload,
+    GameCompatibilityToolResponse, GameCustomizationArtworkResponse, GameInstallLocationResponse,
+    GameInstallationDetailsResponse, GamePrivacySettingsResponse, GamePropertiesSettingsPayload,
     GameScreenshotResponse,
 };
 use crate::application::error::AppResult;
@@ -23,7 +19,8 @@ pub(crate) async fn list_game_languages(
 ) -> AppResult<Vec<String>> {
     let state = state.inner().clone();
     run_blocking(move || {
-        let game_settings_use_case = GameSettingsService::new(InfrastructureGameSettingsPort::new(&state));
+        let game_settings_use_case =
+            GameSettingsService::new(InfrastructureGameSettingsPort::new(&state));
         game_settings_use_case.list_game_languages(provider, external_id)
     })
     .await
@@ -37,7 +34,8 @@ pub(crate) async fn list_game_compatibility_tools(
 ) -> AppResult<Vec<GameCompatibilityToolResponse>> {
     let state = state.inner().clone();
     run_blocking(move || {
-        let game_settings_use_case = GameSettingsService::new(InfrastructureGameSettingsPort::new(&state));
+        let game_settings_use_case =
+            GameSettingsService::new(InfrastructureGameSettingsPort::new(&state));
         game_settings_use_case.list_game_compatibility_tools(provider, external_id)
     })
     .await
@@ -51,7 +49,8 @@ pub(crate) async fn get_game_privacy_settings(
 ) -> AppResult<GamePrivacySettingsResponse> {
     let state = state.inner().clone();
     run_blocking(move || {
-        let game_settings_use_case = GameSettingsService::new(InfrastructureGameSettingsPort::new(&state));
+        let game_settings_use_case =
+            GameSettingsService::new(InfrastructureGameSettingsPort::new(&state));
         game_settings_use_case.get_game_privacy_settings(provider, external_id)
     })
     .await
@@ -67,7 +66,8 @@ pub(crate) async fn set_game_privacy_settings(
 ) -> AppResult<()> {
     let state = state.inner().clone();
     run_blocking(move || {
-        let game_settings_use_case = GameSettingsService::new(InfrastructureGameSettingsPort::new(&state));
+        let game_settings_use_case =
+            GameSettingsService::new(InfrastructureGameSettingsPort::new(&state));
         game_settings_use_case.set_game_privacy_settings(
             provider,
             external_id,
@@ -86,7 +86,8 @@ pub(crate) async fn clear_game_overlay_data(
 ) -> AppResult<()> {
     let state = state.inner().clone();
     run_blocking(move || {
-        let game_settings_use_case = GameSettingsService::new(InfrastructureGameSettingsPort::new(&state));
+        let game_settings_use_case =
+            GameSettingsService::new(InfrastructureGameSettingsPort::new(&state));
         game_settings_use_case.clear_game_overlay_data(provider, external_id)
     })
     .await
@@ -100,7 +101,8 @@ pub(crate) async fn get_game_properties_settings(
 ) -> AppResult<GamePropertiesSettingsPayload> {
     let state = state.inner().clone();
     run_blocking(move || {
-        let game_settings_use_case = GameSettingsService::new(InfrastructureGameSettingsPort::new(&state));
+        let game_settings_use_case =
+            GameSettingsService::new(InfrastructureGameSettingsPort::new(&state));
         game_settings_use_case.get_game_properties_settings(provider, external_id)
     })
     .await
@@ -115,7 +117,8 @@ pub(crate) async fn set_game_properties_settings(
 ) -> AppResult<()> {
     let state = state.inner().clone();
     run_blocking(move || {
-        let game_settings_use_case = GameSettingsService::new(InfrastructureGameSettingsPort::new(&state));
+        let game_settings_use_case =
+            GameSettingsService::new(InfrastructureGameSettingsPort::new(&state));
         game_settings_use_case.set_game_properties_settings(provider, external_id, settings)
     })
     .await
@@ -129,7 +132,8 @@ pub(crate) async fn get_game_customization_artwork(
 ) -> AppResult<GameCustomizationArtworkResponse> {
     let state = state.inner().clone();
     run_blocking(move || {
-        let game_settings_use_case = GameSettingsService::new(InfrastructureGameSettingsPort::new(&state));
+        let game_settings_use_case =
+            GameSettingsService::new(InfrastructureGameSettingsPort::new(&state));
         game_settings_use_case.get_game_customization_artwork(provider, external_id)
     })
     .await
@@ -143,7 +147,8 @@ pub(crate) async fn get_game_screenshots(
 ) -> AppResult<Vec<GameScreenshotResponse>> {
     let state = state.inner().clone();
     run_blocking(move || {
-        let game_settings_use_case = GameSettingsService::new(InfrastructureGameSettingsPort::new(&state));
+        let game_settings_use_case =
+            GameSettingsService::new(InfrastructureGameSettingsPort::new(&state));
         game_settings_use_case.get_game_screenshots(provider, external_id)
     })
     .await
@@ -157,7 +162,8 @@ pub(crate) async fn get_game_installation_details(
 ) -> AppResult<GameInstallationDetailsResponse> {
     let state = state.inner().clone();
     run_blocking(move || {
-        let game_settings_use_case = GameSettingsService::new(InfrastructureGameSettingsPort::new(&state));
+        let game_settings_use_case =
+            GameSettingsService::new(InfrastructureGameSettingsPort::new(&state));
         game_settings_use_case.get_game_installation_details(provider, external_id)
     })
     .await
@@ -171,7 +177,8 @@ pub(crate) async fn get_game_install_size_estimate(
 ) -> AppResult<Option<u64>> {
     let state = state.inner().clone();
     run_blocking(move || {
-        let game_settings_use_case = GameSettingsService::new(InfrastructureGameSettingsPort::new(&state));
+        let game_settings_use_case =
+            GameSettingsService::new(InfrastructureGameSettingsPort::new(&state));
         game_settings_use_case.get_game_install_size_estimate(provider, external_id)
     })
     .await
@@ -185,7 +192,8 @@ pub(crate) async fn list_game_install_locations(
 ) -> AppResult<Vec<GameInstallLocationResponse>> {
     let state = state.inner().clone();
     run_blocking(move || {
-        let game_settings_use_case = GameSettingsService::new(InfrastructureGameSettingsPort::new(&state));
+        let game_settings_use_case =
+            GameSettingsService::new(InfrastructureGameSettingsPort::new(&state));
         game_settings_use_case.list_game_install_locations(provider, external_id)
     })
     .await

@@ -32,8 +32,12 @@ impl LauncherOps {
         external_id: &str,
         game_name: &str,
     ) -> AppResult<()> {
-        runtime_launcher_ops::create_provider_game_desktop_shortcut(provider, external_id, game_name)
-            .map_err(AppError::from)
+        runtime_launcher_ops::create_provider_game_desktop_shortcut(
+            provider,
+            external_id,
+            game_name,
+        )
+        .map_err(AppError::from)
     }
 
     pub(crate) fn open_steam_game_recording_settings(&self) -> AppResult<()> {

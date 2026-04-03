@@ -104,7 +104,10 @@ fn tokenize_vdf(contents: &str) -> Vec<VdfToken> {
     tokens
 }
 
-fn parse_vdf_tokens(tokens: &[VdfToken], cursor: &mut usize) -> Result<Vec<(String, VdfValue)>, String> {
+fn parse_vdf_tokens(
+    tokens: &[VdfToken],
+    cursor: &mut usize,
+) -> Result<Vec<(String, VdfValue)>, String> {
     let mut entries = Vec::new();
 
     while *cursor < tokens.len() {
@@ -124,9 +127,7 @@ fn parse_vdf_tokens(tokens: &[VdfToken], cursor: &mut usize) -> Result<Vec<(Stri
                 let key = key.clone();
                 *cursor += 1;
                 let Some(value_token) = tokens.get(*cursor) else {
-                    return Err(format!(
-                        "Invalid VDF format: missing value for key '{key}'"
-                    ));
+                    return Err(format!("Invalid VDF format: missing value for key '{key}'"));
                 };
 
                 match value_token {
@@ -140,9 +141,7 @@ fn parse_vdf_tokens(tokens: &[VdfToken], cursor: &mut usize) -> Result<Vec<(Stri
                         entries.push((key, VdfValue::Object(object_value)));
                     }
                     VdfToken::CloseBrace => {
-                        return Err(format!(
-                            "Invalid VDF format: missing value for key '{key}'"
-                        ));
+                        return Err(format!("Invalid VDF format: missing value for key '{key}'"));
                     }
                 }
             }

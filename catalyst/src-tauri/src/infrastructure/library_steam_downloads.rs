@@ -1,8 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::application::error::AppResult;
-use crate::AppState;
-use crate::SteamDownloadProgressResponse;
 use crate::cleanup_expired_sessions;
 use crate::collect_steam_download_progress_from_steamapps_dir;
 use crate::get_authenticated_user;
@@ -10,6 +8,8 @@ use crate::load_owned_steam_games_by_app_id;
 use crate::open_connection;
 use crate::resolve_steam_root_paths;
 use crate::resolve_steamapps_directories;
+use crate::AppState;
+use crate::SteamDownloadProgressResponse;
 
 pub(crate) fn list_steam_downloads(
     state: &AppState,

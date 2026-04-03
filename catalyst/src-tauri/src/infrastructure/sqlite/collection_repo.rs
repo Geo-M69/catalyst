@@ -75,7 +75,9 @@ impl<'a> SQLiteCollectionRepo<'a> {
                 ORDER BY c.name COLLATE NOCASE ASC
                 ",
             )
-            .map_err(|error| AppError::from(format!("Failed to prepare collections query: {error}")))?;
+            .map_err(|error| {
+                AppError::from(format!("Failed to prepare collections query: {error}"))
+            })?;
 
         let rows = statement
             .query_map(params![user_id], |row| {
@@ -102,7 +104,9 @@ impl<'a> SQLiteCollectionRepo<'a> {
                     ",
                 )
                 .map_err(|error| {
-                    AppError::from(format!("Failed to prepare collection membership query: {error}"))
+                    AppError::from(format!(
+                        "Failed to prepare collection membership query: {error}"
+                    ))
                 })?;
             let membership_rows = membership_statement
                 .query_map(
@@ -153,13 +157,15 @@ impl<'a> SQLiteCollectionRepo<'a> {
                 contains_game: false,
             }),
             Err(error)
-                if error
-                    .to_string()
-                    .contains("UNIQUE constraint failed: collections.user_id, collections.name") =>
+                if error.to_string().contains(
+                    "UNIQUE constraint failed: collections.user_id, collections.name",
+                ) =>
             {
                 Err(AppError::from("Collection name already exists"))
             }
-            Err(error) => Err(AppError::from(format!("Failed to create collection: {error}"))),
+            Err(error) => Err(AppError::from(format!(
+                "Failed to create collection: {error}"
+            ))),
         }
     }
 
@@ -189,14 +195,16 @@ impl<'a> SQLiteCollectionRepo<'a> {
                 }
             }
             Err(error)
-                if error
-                    .to_string()
-                    .contains("UNIQUE constraint failed: collections.user_id, collections.name") =>
+                if error.to_string().contains(
+                    "UNIQUE constraint failed: collections.user_id, collections.name",
+                ) =>
             {
                 return Err(AppError::from("Collection name already exists"));
             }
             Err(error) => {
-                return Err(AppError::from(format!("Failed to rename collection: {error}")));
+                return Err(AppError::from(format!(
+                    "Failed to rename collection: {error}"
+                )));
             }
         }
 

@@ -1,7 +1,7 @@
-use crate::AppState;
 use crate::application::contracts::auth::PublicUser;
 use crate::application::error::{AppError, AppResult};
 use crate::application::ports::auth::{AuthPort, SteamAuthFlowOutcome};
+use crate::AppState;
 
 #[derive(Clone)]
 pub(crate) struct InfrastructureAuthPort {
@@ -50,7 +50,8 @@ impl AuthPort for InfrastructureAuthPort {
 
     fn find_user_by_session_token(&self, session_token: &str) -> AppResult<Option<PublicUser>> {
         let connection = crate::open_connection(&self.state.db_path).map_err(AppError::from)?;
-        let user = crate::find_user_by_session_token(&connection, session_token).map_err(AppError::from)?;
+        let user = crate::find_user_by_session_token(&connection, session_token)
+            .map_err(AppError::from)?;
         Ok(user.map(|row| Self::to_contract_public_user(crate::public_user_from_row(&row))))
     }
 

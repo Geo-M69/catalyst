@@ -1,20 +1,12 @@
-use crate::application::error::AppResult;
 use crate::application::contracts::library::{
-    GameActivityTimelineItemResponse,
-    GameActivityTimelineResponse,
-    GameFriendActivityEntryResponse,
-    GameFriendsActivityResponse,
+    GameActivityTimelineItemResponse, GameActivityTimelineResponse,
+    GameFriendActivityEntryResponse, GameFriendsActivityResponse,
 };
+use crate::application::error::AppResult;
 use crate::infrastructure::cache_adapter::CacheAdapter;
 use crate::{
-    AppState,
-    build_http_client,
-    cleanup_expired_sessions,
-    ensure_owned_game_exists,
-    get_authenticated_user,
-    normalize_backend_warning_message,
-    normalize_game_identity_input,
-    open_connection,
+    build_http_client, cleanup_expired_sessions, ensure_owned_game_exists, get_authenticated_user,
+    normalize_backend_warning_message, normalize_game_identity_input, open_connection, AppState,
 };
 use chrono::Utc;
 use std::collections::{HashMap, HashSet};

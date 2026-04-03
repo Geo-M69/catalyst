@@ -1,7 +1,5 @@
 use crate::application::contracts::steam::{
-    GameBetaAccessCodeValidationResponse,
-    GameVersionBetasResponse,
-    SteamCollectionsImportResponse,
+    GameBetaAccessCodeValidationResponse, GameVersionBetasResponse, SteamCollectionsImportResponse,
 };
 use crate::application::error::AppResult;
 

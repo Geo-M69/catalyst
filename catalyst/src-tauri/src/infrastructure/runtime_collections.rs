@@ -1,8 +1,8 @@
-use crate::*;
 use crate::infrastructure::runtime_vdf::{
-    VdfValue, parse_vdf_document, vdf_collect_objects_by_key, vdf_collect_text_leaves,
-    vdf_find_object_value,
+    parse_vdf_document, vdf_collect_objects_by_key, vdf_collect_text_leaves, vdf_find_object_value,
+    VdfValue,
 };
+use crate::*;
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{HashMap, HashSet};
@@ -66,7 +66,13 @@ fn get_or_create_collection_id_by_name(
             INSERT OR IGNORE INTO collections (id, user_id, name, created_at, updated_at)
             VALUES (?1, ?2, ?3, ?4, ?5)
             ",
-            params![collection_id, user_id, normalized_name, timestamp, timestamp],
+            params![
+                collection_id,
+                user_id,
+                normalized_name,
+                timestamp,
+                timestamp
+            ],
         )
         .map_err(|error| format!("Failed to create collection during Steam import: {error}"))?;
     if inserted_rows > 0 {
@@ -108,8 +114,8 @@ pub(crate) fn parse_steam_collections_from_vdf(
         };
 
         for (app_id, app_value) in app_entries {
-            let normalized_app_id =
-                app_id.trim_matches(|character: char| character.is_whitespace() || character == '\0');
+            let normalized_app_id = app_id
+                .trim_matches(|character: char| character.is_whitespace() || character == '\0');
             if normalized_app_id.is_empty()
                 || !normalized_app_id
                     .chars()
@@ -118,7 +124,8 @@ pub(crate) fn parse_steam_collections_from_vdf(
                 continue;
             }
 
-            let Some(VdfValue::Object(tag_entries)) = vdf_find_object_value(app_value, "tags") else {
+            let Some(VdfValue::Object(tag_entries)) = vdf_find_object_value(app_value, "tags")
+            else {
                 continue;
             };
             let mut collection_names = HashSet::new();
@@ -168,7 +175,8 @@ pub(crate) fn import_steam_collections_for_user(
     user_id: &str,
     collections_by_app_id: HashMap<String, HashSet<String>>,
 ) -> Result<SteamCollectionsImportResponse, String> {
-    let owned_steam_game_external_ids = load_provider_game_external_ids(connection, user_id, "steam")?;
+    let owned_steam_game_external_ids =
+        load_provider_game_external_ids(connection, user_id, "steam")?;
     let mut collection_ids_by_name: HashMap<String, String> = HashMap::new();
     let mut apps_tagged = 0usize;
     let mut collections_created = 0usize;
@@ -191,21 +199,26 @@ pub(crate) fn import_steam_collections_for_user(
                 continue;
             }
 
-            let collection_id = if let Some(existing_collection_id) =
-                collection_ids_by_name.get(&normalized_key)
-            {
-                existing_collection_id.clone()
-            } else {
-                let (collection_id, created) =
-                    get_or_create_collection_id_by_name(connection, user_id, &collection_name)?;
-                if created {
-                    collections_created += 1;
-                }
-                collection_ids_by_name.insert(normalized_key, collection_id.clone());
-                collection_id
-            };
+            let collection_id =
+                if let Some(existing_collection_id) = collection_ids_by_name.get(&normalized_key) {
+                    existing_collection_id.clone()
+                } else {
+                    let (collection_id, created) =
+                        get_or_create_collection_id_by_name(connection, user_id, &collection_name)?;
+                    if created {
+                        collections_created += 1;
+                    }
+                    collection_ids_by_name.insert(normalized_key, collection_id.clone());
+                    collection_id
+                };
 
-            if add_game_to_collection_membership(connection, user_id, &collection_id, "steam", &external_id)? {
+            if add_game_to_collection_membership(
+                connection,
+                user_id,
+                &collection_id,
+                "steam",
+                &external_id,
+            )? {
                 memberships_added += 1;
             }
         }

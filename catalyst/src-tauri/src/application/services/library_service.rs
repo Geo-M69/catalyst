@@ -1,8 +1,3 @@
-use super::super::contracts::library::{
-    LibraryResponse,
-    SteamDownloadProgressResponse,
-    SteamSyncResponse,
-};
 use super::super::contracts::library::GameAchievementsResponse;
 use super::super::contracts::library::GameActivityTimelineResponse;
 use super::super::contracts::library::GameDlcResponse;
@@ -10,6 +5,9 @@ use super::super::contracts::library::GameFriendsActivityResponse;
 use super::super::contracts::library::GameReviewResponse;
 use super::super::contracts::library::GameStoreMetadataResponse;
 use super::super::contracts::library::GameTradingCardsResponse;
+use super::super::contracts::library::{
+    LibraryResponse, SteamDownloadProgressResponse, SteamSyncResponse,
+};
 use super::super::error::AppResult;
 use super::super::ports::library::LibraryPort;
 use super::super::use_cases::library::LibraryUseCase;
@@ -45,8 +43,7 @@ where
         external_id: String,
         favorite: bool,
     ) -> AppResult<()> {
-        self.port
-            .set_game_favorite(provider, external_id, favorite)
+        self.port.set_game_favorite(provider, external_id, favorite)
     }
 
     fn get_game_friends_activity(

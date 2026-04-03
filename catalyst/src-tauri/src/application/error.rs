@@ -1,5 +1,5 @@
-use serde::Serialize;
 use crate::domain::error::DomainValidationError;
+use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]

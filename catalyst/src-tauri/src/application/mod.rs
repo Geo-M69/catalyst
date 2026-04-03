@@ -1,6 +1,6 @@
-pub mod contracts;
-pub mod canonicalizer;
 pub mod bootstrap;
+pub mod canonicalizer;
+pub mod contracts;
 pub mod error;
 pub mod ports;
 pub mod services;

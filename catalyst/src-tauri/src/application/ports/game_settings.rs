@@ -1,10 +1,6 @@
 use crate::application::contracts::game_settings::{
-    GameCompatibilityToolResponse,
-    GameCustomizationArtworkResponse,
-    GameInstallLocationResponse,
-    GameInstallationDetailsResponse,
-    GamePrivacySettingsResponse,
-    GamePropertiesSettingsPayload,
+    GameCompatibilityToolResponse, GameCustomizationArtworkResponse, GameInstallLocationResponse,
+    GameInstallationDetailsResponse, GamePrivacySettingsResponse, GamePropertiesSettingsPayload,
     GameScreenshotResponse,
 };
 use crate::application::error::AppResult;

@@ -25,7 +25,10 @@ pub(crate) fn list_collections(
 }
 
 #[tauri::command]
-pub(crate) fn create_collection(name: String, state: State<'_, AppState>) -> AppResult<CollectionResponse> {
+pub(crate) fn create_collection(
+    name: String,
+    state: State<'_, AppState>,
+) -> AppResult<CollectionResponse> {
     let service = CollectionService::new(InfrastructureCollectionsPort::new(state.inner()));
     let value = service.create_collection(name)?;
     Ok(to_collection_response(value))
@@ -43,7 +46,10 @@ pub(crate) fn rename_collection(
 }
 
 #[tauri::command]
-pub(crate) fn delete_collection(collection_id: String, state: State<'_, AppState>) -> AppResult<()> {
+pub(crate) fn delete_collection(
+    collection_id: String,
+    state: State<'_, AppState>,
+) -> AppResult<()> {
     let service = CollectionService::new(InfrastructureCollectionsPort::new(state.inner()));
     service.delete_collection(collection_id)
 }

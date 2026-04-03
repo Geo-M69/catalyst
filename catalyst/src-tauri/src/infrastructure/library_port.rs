@@ -1,31 +1,14 @@
 use crate::application::contracts::library::{
-    FeatureResponse,
-    GameAchievementsResponse,
-    GameActivityTimelineResponse,
-    GameDlcResponse,
-    GameFriendsActivityResponse,
-    GameResponse,
-    GameReviewResponse,
-    GameStoreMetadataResponse,
-    GameTradingCardsResponse,
-    LibraryResponse,
-    SteamDownloadProgressResponse,
-    SteamSyncResponse,
+    FeatureResponse, GameAchievementsResponse, GameActivityTimelineResponse, GameDlcResponse,
+    GameFriendsActivityResponse, GameResponse, GameReviewResponse, GameStoreMetadataResponse,
+    GameTradingCardsResponse, LibraryResponse, SteamDownloadProgressResponse, SteamSyncResponse,
 };
 use crate::application::error::AppResult;
 use crate::application::ports::library::LibraryPort;
 use crate::{
-    AppState,
-    build_http_client,
-    cleanup_expired_sessions,
-    ensure_owned_game_exists,
-    get_authenticated_user,
-    list_games_by_user,
-    normalize_game_identity_input,
-    open_connection,
-    remove_game_favorite,
-    sync_steam_games_for_user,
-    upsert_game_favorite,
+    build_http_client, cleanup_expired_sessions, ensure_owned_game_exists, get_authenticated_user,
+    list_games_by_user, normalize_game_identity_input, open_connection, remove_game_favorite,
+    sync_steam_games_for_user, upsert_game_favorite, AppState,
 };
 
 #[derive(Clone)]
@@ -307,7 +290,12 @@ pub(crate) fn get_game_dlc(
     external_id: String,
     force_refresh: bool,
 ) -> AppResult<GameDlcResponse> {
-    crate::infrastructure::library_steam_dlc::get_game_dlc(state, provider, external_id, force_refresh)
+    crate::infrastructure::library_steam_dlc::get_game_dlc(
+        state,
+        provider,
+        external_id,
+        force_refresh,
+    )
 }
 
 pub(crate) fn get_game_review(

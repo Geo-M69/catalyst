@@ -1,20 +1,12 @@
-use crate::application::error::AppResult;
 use crate::application::contracts::library::{GameDlcEntryResponse, GameDlcResponse};
+use crate::application::error::AppResult;
 use crate::{
-    AppState,
-    STEAM_APP_DETAILS_CACHE_TTL_HOURS,
-    build_http_client,
-    cache_steam_app_details,
-    cleanup_expired_sessions,
-    ensure_owned_game_exists,
-    find_cached_steam_app_details,
-    get_authenticated_user,
-    normalize_backend_warning_message,
-    normalize_game_identity_input,
-    open_connection,
+    build_http_client, cache_steam_app_details, cleanup_expired_sessions, ensure_owned_game_exists,
+    find_cached_steam_app_details, get_authenticated_user, normalize_backend_warning_message,
+    normalize_game_identity_input, open_connection, AppState, STEAM_APP_DETAILS_CACHE_TTL_HOURS,
 };
 use chrono::{Duration as ChronoDuration, Utc};
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use std::collections::{HashMap, HashSet};
 use url::Url;
 
@@ -261,8 +253,10 @@ fn should_replace_collapsed_dlc_entry(
         return candidate.installed;
     }
 
-    let existing_is_placeholder = dlc_entry_is_placeholder_name(&existing.name, &existing.external_id);
-    let candidate_is_placeholder = dlc_entry_is_placeholder_name(&candidate.name, &candidate.external_id);
+    let existing_is_placeholder =
+        dlc_entry_is_placeholder_name(&existing.name, &existing.external_id);
+    let candidate_is_placeholder =
+        dlc_entry_is_placeholder_name(&candidate.name, &candidate.external_id);
     if candidate_is_placeholder != existing_is_placeholder {
         return !candidate_is_placeholder;
     }
@@ -277,7 +271,9 @@ fn should_replace_collapsed_dlc_entry(
     candidate.external_id < existing.external_id
 }
 
-fn collapse_near_duplicate_dlc_entries(entries: Vec<GameDlcEntryResponse>) -> Vec<GameDlcEntryResponse> {
+fn collapse_near_duplicate_dlc_entries(
+    entries: Vec<GameDlcEntryResponse>,
+) -> Vec<GameDlcEntryResponse> {
     let mut collapsed_entries = Vec::new();
     let mut index_by_key = HashMap::<String, usize>::new();
 

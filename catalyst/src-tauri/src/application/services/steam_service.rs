@@ -1,7 +1,5 @@
 use super::super::contracts::steam::{
-    GameBetaAccessCodeValidationResponse,
-    GameVersionBetasResponse,
-    SteamCollectionsImportResponse,
+    GameBetaAccessCodeValidationResponse, GameVersionBetasResponse, SteamCollectionsImportResponse,
 };
 use super::super::error::AppResult;
 use super::super::ports::steam::SteamPort;
