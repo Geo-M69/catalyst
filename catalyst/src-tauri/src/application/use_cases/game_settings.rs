@@ -9,7 +9,7 @@ use crate::application::contracts::game_settings::{
 };
 use crate::application::error::AppResult;
 
-pub(crate) trait GameSettingsPort {
+pub(crate) trait GameSettingsUseCase {
     fn list_game_languages(&self, provider: String, external_id: String) -> AppResult<Vec<String>>;
 
     fn list_game_compatibility_tools(

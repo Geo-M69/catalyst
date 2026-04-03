@@ -1,11 +1,14 @@
-use crate::application::error::AppResult;
-use crate::{
-    AppState,
+use crate::application::contracts::steam::{
     GameBetaAccessCodeValidationResponse,
     GameVersionBetasResponse,
     SteamCollectionsImportResponse,
 };
+use crate::application::error::AppResult;
+use crate::application::services::steam_service::SteamService;
+use crate::application::use_cases::steam::SteamUseCase;
+use crate::infrastructure::steam_port::InfrastructureSteamPort;
 use crate::interface::tauri::commands::blocking::run_blocking;
+use crate::AppState;
 use tauri::State;
 
 #[tauri::command]
@@ -16,11 +19,8 @@ pub(crate) async fn list_game_versions_betas(
 ) -> AppResult<GameVersionBetasResponse> {
     let state = state.inner().clone();
     run_blocking(move || {
-        crate::application::services::steam_service::list_game_versions_betas(
-            &state,
-            provider,
-            external_id,
-        )
+        let steam_use_case = SteamService::new(InfrastructureSteamPort::new(&state));
+        steam_use_case.list_game_versions_betas(provider, external_id)
     })
     .await
 }
@@ -34,12 +34,8 @@ pub(crate) async fn validate_game_beta_access_code(
 ) -> AppResult<GameBetaAccessCodeValidationResponse> {
     let state = state.inner().clone();
     run_blocking(move || {
-        crate::application::services::steam_service::validate_game_beta_access_code(
-            &state,
-            provider,
-            external_id,
-            access_code,
-        )
+        let steam_use_case = SteamService::new(InfrastructureSteamPort::new(&state));
+        steam_use_case.validate_game_beta_access_code(provider, external_id, access_code)
     })
     .await
 }
@@ -47,5 +43,9 @@ pub(crate) async fn validate_game_beta_access_code(
 #[tauri::command]
 pub(crate) async fn import_steam_collections(state: State<'_, AppState>) -> AppResult<SteamCollectionsImportResponse> {
     let state = state.inner().clone();
-    run_blocking(move || crate::application::services::steam_service::import_steam_collections(&state)).await
+    run_blocking(move || {
+        let steam_use_case = SteamService::new(InfrastructureSteamPort::new(&state));
+        steam_use_case.import_steam_collections()
+    })
+    .await
 }

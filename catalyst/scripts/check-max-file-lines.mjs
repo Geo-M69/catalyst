@@ -6,9 +6,11 @@ const ROOT = process.cwd();
 const FILE_LIMITS = [
   { path: 'src/mainPage/mainPage.ts', maxLines: 3900 },
   { path: 'src/mainPage/components/gamePropertiesPanel.ts', maxLines: 3400 },
-  { path: 'src-tauri/src/lib_runtime_impl.rs', maxLines: 7600 },
+  // Transitional backend adapters: keep strict no-growth caps while they are decomposed.
+  { path: 'src-tauri/src/lib_runtime_impl.rs', maxLines: 6700 },
+  { path: 'src-tauri/src/infrastructure/library_port.rs', maxLines: 2900 },
   { path: 'src-tauri/src/application/services/library_service.rs', maxLines: 3000 },
-  { path: 'src-tauri/src/application/services/library_review_service.rs', maxLines: 1200 },
+  { path: 'src-tauri/src/infrastructure/library_steam_review.rs', maxLines: 1200 },
 ];
 
 async function countLines(filePath) {

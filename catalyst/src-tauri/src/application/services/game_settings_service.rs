@@ -1,16 +1,17 @@
-use crate::AppState;
-use crate::GameCompatibilityToolResponse;
-use crate::GameCustomizationArtworkResponse;
-use crate::GameInstallLocationResponse;
-use crate::GameInstallationDetailsResponse;
-use crate::GamePrivacySettingsResponse;
-use crate::GamePropertiesSettingsPayload;
-use crate::GameScreenshotResponse;
+use crate::application::contracts::game_settings::{
+    GameCompatibilityToolResponse,
+    GameCustomizationArtworkResponse,
+    GameInstallLocationResponse,
+    GameInstallationDetailsResponse,
+    GamePrivacySettingsResponse,
+    GamePropertiesSettingsPayload,
+    GameScreenshotResponse,
+};
 use crate::application::error::AppResult;
 use crate::application::ports::game_settings::GameSettingsPort;
-use crate::infrastructure::game_settings_port::InfrastructureGameSettingsPort;
+use crate::application::use_cases::game_settings::GameSettingsUseCase;
 
-struct GameSettingsService<P> {
+pub(crate) struct GameSettingsService<P> {
     port: P,
 }
 
@@ -18,10 +19,15 @@ impl<P> GameSettingsService<P>
 where
     P: GameSettingsPort,
 {
-    fn new(port: P) -> Self {
+    pub(crate) fn new(port: P) -> Self {
         Self { port }
     }
+}
 
+impl<P> GameSettingsUseCase for GameSettingsService<P>
+where
+    P: GameSettingsPort,
+{
     fn list_game_languages(&self, provider: String, external_id: String) -> AppResult<Vec<String>> {
         self.port.list_game_languages(provider, external_id)
     }
@@ -119,119 +125,4 @@ where
     ) -> AppResult<Vec<GameInstallLocationResponse>> {
         self.port.list_game_install_locations(provider, external_id)
     }
-}
-
-pub(crate) fn list_game_languages(
-    state: &AppState,
-    provider: String,
-    external_id: String,
-) -> AppResult<Vec<String>> {
-    GameSettingsService::new(InfrastructureGameSettingsPort::new(state))
-        .list_game_languages(provider, external_id)
-}
-
-pub(crate) fn list_game_compatibility_tools(
-    state: &AppState,
-    provider: String,
-    external_id: String,
-) -> AppResult<Vec<GameCompatibilityToolResponse>> {
-    GameSettingsService::new(InfrastructureGameSettingsPort::new(state))
-        .list_game_compatibility_tools(provider, external_id)
-}
-
-pub(crate) fn get_game_privacy_settings(
-    state: &AppState,
-    provider: String,
-    external_id: String,
-) -> AppResult<GamePrivacySettingsResponse> {
-    GameSettingsService::new(InfrastructureGameSettingsPort::new(state))
-        .get_game_privacy_settings(provider, external_id)
-}
-
-pub(crate) fn set_game_privacy_settings(
-    state: &AppState,
-    provider: String,
-    external_id: String,
-    hide_in_library: bool,
-    mark_as_private: bool,
-) -> AppResult<()> {
-    GameSettingsService::new(InfrastructureGameSettingsPort::new(state)).set_game_privacy_settings(
-        provider,
-        external_id,
-        hide_in_library,
-        mark_as_private,
-    )
-}
-
-pub(crate) fn clear_game_overlay_data(
-    state: &AppState,
-    provider: String,
-    external_id: String,
-) -> AppResult<()> {
-    GameSettingsService::new(InfrastructureGameSettingsPort::new(state))
-        .clear_game_overlay_data(provider, external_id)
-}
-
-pub(crate) fn get_game_properties_settings(
-    state: &AppState,
-    provider: String,
-    external_id: String,
-) -> AppResult<GamePropertiesSettingsPayload> {
-    GameSettingsService::new(InfrastructureGameSettingsPort::new(state))
-        .get_game_properties_settings(provider, external_id)
-}
-
-pub(crate) fn set_game_properties_settings(
-    state: &AppState,
-    provider: String,
-    external_id: String,
-    settings: GamePropertiesSettingsPayload,
-) -> AppResult<()> {
-    GameSettingsService::new(InfrastructureGameSettingsPort::new(state))
-        .set_game_properties_settings(provider, external_id, settings)
-}
-
-pub(crate) fn get_game_customization_artwork(
-    state: &AppState,
-    provider: String,
-    external_id: String,
-) -> AppResult<GameCustomizationArtworkResponse> {
-    GameSettingsService::new(InfrastructureGameSettingsPort::new(state))
-        .get_game_customization_artwork(provider, external_id)
-}
-
-pub(crate) fn get_game_screenshots(
-    state: &AppState,
-    provider: String,
-    external_id: String,
-) -> AppResult<Vec<GameScreenshotResponse>> {
-    GameSettingsService::new(InfrastructureGameSettingsPort::new(state))
-        .get_game_screenshots(provider, external_id)
-}
-
-pub(crate) fn get_game_installation_details(
-    state: &AppState,
-    provider: String,
-    external_id: String,
-) -> AppResult<GameInstallationDetailsResponse> {
-    GameSettingsService::new(InfrastructureGameSettingsPort::new(state))
-        .get_game_installation_details(provider, external_id)
-}
-
-pub(crate) fn get_game_install_size_estimate(
-    state: &AppState,
-    provider: String,
-    external_id: String,
-) -> AppResult<Option<u64>> {
-    GameSettingsService::new(InfrastructureGameSettingsPort::new(state))
-        .get_game_install_size_estimate(provider, external_id)
-}
-
-pub(crate) fn list_game_install_locations(
-    state: &AppState,
-    provider: String,
-    external_id: String,
-) -> AppResult<Vec<GameInstallLocationResponse>> {
-    GameSettingsService::new(InfrastructureGameSettingsPort::new(state))
-        .list_game_install_locations(provider, external_id)
 }

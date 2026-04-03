@@ -5,7 +5,7 @@ use crate::application::contracts::steam::{
 };
 use crate::application::error::AppResult;
 
-pub(crate) trait SteamPort {
+pub(crate) trait SteamUseCase {
     fn list_game_versions_betas(
         &self,
         provider: String,

@@ -1,4 +1,4 @@
-use crate::PublicUser;
+use crate::application::contracts::auth::PublicUser;
 use crate::application::error::AppResult;
 
 #[derive(Clone)]

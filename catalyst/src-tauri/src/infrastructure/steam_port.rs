@@ -1,8 +1,11 @@
 use crate::AppState;
-use crate::GameBetaAccessCodeValidationResponse;
-use crate::GameVersionBetasResponse;
-use crate::SteamCollectionsImportResponse;
 use crate::STEAM_APP_BETAS_CACHE_TTL_HOURS;
+use crate::application::contracts::steam::{
+    GameBetaAccessCodeValidationResponse,
+    GameVersionBetaOptionResponse,
+    GameVersionBetasResponse,
+    SteamCollectionsImportResponse,
+};
 use crate::application::error::{AppError, AppResult};
 use crate::application::ports::steam::SteamPort;
 use crate::build_http_client;
@@ -15,15 +18,15 @@ use crate::fetch_steam_game_version_betas;
 use crate::fetch_steam_game_version_betas_from_store;
 use crate::find_cached_steam_app_betas;
 use crate::get_authenticated_user;
-use crate::import_steam_collections_for_user;
 use crate::is_forbidden_http_error;
-use crate::merge_collections_by_app_id;
 use crate::normalize_backend_warning_message;
 use crate::normalize_game_identity_input;
 use crate::open_connection;
-use crate::parse_steam_collections_from_vdf;
 use crate::resolve_steam_root_path;
 use crate::resolve_steam_userdata_directory;
+use crate::infrastructure::runtime_collections::{
+    import_steam_collections_for_user, merge_collections_by_app_id, parse_steam_collections_from_vdf,
+};
 use chrono::{Duration as ChronoDuration, Utc};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -37,6 +40,50 @@ impl InfrastructureSteamPort {
     pub(crate) fn new(state: &AppState) -> Self {
         Self {
             state: state.clone(),
+        }
+    }
+
+    fn to_contract_beta_option(value: crate::GameVersionBetaOptionResponse) -> GameVersionBetaOptionResponse {
+        GameVersionBetaOptionResponse {
+            id: value.id,
+            name: value.name,
+            description: value.description,
+            last_updated: value.last_updated,
+            build_id: value.build_id,
+            requires_access_code: value.requires_access_code,
+            is_default: value.is_default,
+        }
+    }
+
+    fn to_contract_beta_options(
+        values: Vec<crate::GameVersionBetaOptionResponse>,
+    ) -> Vec<GameVersionBetaOptionResponse> {
+        values
+            .into_iter()
+            .map(Self::to_contract_beta_option)
+            .collect()
+    }
+
+    fn to_contract_beta_access_validation(
+        value: crate::GameBetaAccessCodeValidationResponse,
+    ) -> GameBetaAccessCodeValidationResponse {
+        GameBetaAccessCodeValidationResponse {
+            valid: value.valid,
+            message: value.message,
+            branch_id: value.branch_id,
+            branch_name: value.branch_name,
+        }
+    }
+
+    fn to_contract_steam_collections_import(
+        value: crate::SteamCollectionsImportResponse,
+    ) -> SteamCollectionsImportResponse {
+        SteamCollectionsImportResponse {
+            apps_tagged: value.apps_tagged,
+            collections_created: value.collections_created,
+            memberships_added: value.memberships_added,
+            skipped_games: value.skipped_games,
+            tags_discovered: value.tags_discovered,
         }
     }
 }
@@ -61,7 +108,7 @@ impl SteamPort for InfrastructureSteamPort {
 
         if normalized_provider != "steam" {
             return Ok(GameVersionBetasResponse {
-                options: default_game_version_beta_options(),
+                options: Self::to_contract_beta_options(default_game_version_beta_options()),
                 warning: None,
             });
         }
@@ -70,7 +117,7 @@ impl SteamPort for InfrastructureSteamPort {
             Ok(parsed) => parsed,
             Err(_) => {
                 return Ok(GameVersionBetasResponse {
-                    options: default_game_version_beta_options(),
+                    options: Self::to_contract_beta_options(default_game_version_beta_options()),
                     warning: Some(String::from("This Steam app ID is invalid.")),
                 });
             }
@@ -81,7 +128,7 @@ impl SteamPort for InfrastructureSteamPort {
         if let Some((cached_options, fetched_at)) = cached_options_entry.as_ref() {
             if *fetched_at >= stale_before {
                 return Ok(GameVersionBetasResponse {
-                    options: cached_options.clone(),
+                    options: Self::to_contract_beta_options(cached_options.clone()),
                     warning: None,
                 });
             }
@@ -96,7 +143,7 @@ impl SteamPort for InfrastructureSteamPort {
         else {
             if let Some((cached_options, _)) = cached_options_entry.as_ref() {
                 return Ok(GameVersionBetasResponse {
-                    options: cached_options.clone(),
+                    options: Self::to_contract_beta_options(cached_options.clone()),
                     warning: Some(String::from(
                         "Using cached beta branch data because STEAM_API_KEY is not configured.",
                     )),
@@ -104,7 +151,7 @@ impl SteamPort for InfrastructureSteamPort {
             }
 
             return Ok(GameVersionBetasResponse {
-                options: default_game_version_beta_options(),
+                options: Self::to_contract_beta_options(default_game_version_beta_options()),
                 warning: Some(String::from(
                     "Live beta branch data is unavailable because STEAM_API_KEY is not configured.",
                 )),
@@ -117,14 +164,14 @@ impl SteamPort for InfrastructureSteamPort {
                 if !options.is_empty() {
                     cache_steam_app_betas(&connection, app_id, &options)?;
                     return Ok(GameVersionBetasResponse {
-                        options,
+                        options: Self::to_contract_beta_options(options),
                         warning: None,
                     });
                 }
 
                 if let Some((cached_options, _)) = cached_options_entry.as_ref() {
                     return Ok(GameVersionBetasResponse {
-                        options: cached_options.clone(),
+                        options: Self::to_contract_beta_options(cached_options.clone()),
                         warning: Some(String::from(
                             "Steam returned no beta branch data. Showing cached data.",
                         )),
@@ -132,7 +179,7 @@ impl SteamPort for InfrastructureSteamPort {
                 }
 
                 Ok(GameVersionBetasResponse {
-                    options: default_game_version_beta_options(),
+                    options: Self::to_contract_beta_options(default_game_version_beta_options()),
                     warning: Some(String::from(
                         "Steam returned no beta branch data for this app.",
                     )),
@@ -145,7 +192,7 @@ impl SteamPort for InfrastructureSteamPort {
                             if !fallback_options.is_empty() {
                                 cache_steam_app_betas(&connection, app_id, &fallback_options)?;
                                 return Ok(GameVersionBetasResponse {
-                                    options: fallback_options,
+                                    options: Self::to_contract_beta_options(fallback_options),
                                     warning: Some(String::from(
                                         "Using public Steam branch metadata (partner betas API returned 403). Private branch visibility may be limited.",
                                     )),
@@ -163,7 +210,7 @@ impl SteamPort for InfrastructureSteamPort {
                 eprintln!("Failed to fetch Steam beta branches for app {app_id}: {fetch_error}");
                 if let Some((cached_options, _)) = cached_options_entry.as_ref() {
                     return Ok(GameVersionBetasResponse {
-                        options: cached_options.clone(),
+                        options: Self::to_contract_beta_options(cached_options.clone()),
                         warning: Some(format!(
                             "Could not refresh beta branch data: {} Using cached data.",
                             normalize_backend_warning_message(&fetch_error)
@@ -171,7 +218,7 @@ impl SteamPort for InfrastructureSteamPort {
                     });
                 }
                 Ok(GameVersionBetasResponse {
-                    options: default_game_version_beta_options(),
+                    options: Self::to_contract_beta_options(default_game_version_beta_options()),
                     warning: Some(normalize_backend_warning_message(&fetch_error)),
                 })
             }
@@ -249,7 +296,7 @@ impl SteamPort for InfrastructureSteamPort {
         let client = build_http_client()?;
         match fetch_steam_beta_access_code_validation(&client, app_id, api_key, trimmed_access_code)
         {
-            Ok(validation) => Ok(validation),
+            Ok(validation) => Ok(Self::to_contract_beta_access_validation(validation)),
             Err(fetch_error) => Ok(GameBetaAccessCodeValidationResponse {
                 valid: false,
                 message: if is_forbidden_http_error(&fetch_error) {
@@ -332,10 +379,11 @@ impl SteamPort for InfrastructureSteamPort {
             ));
         }
 
-        Ok(import_steam_collections_for_user(
+        let imported = import_steam_collections_for_user(
             &connection,
             &user.id,
             combined_collections_by_app_id,
-        )?)
+        )?;
+        Ok(Self::to_contract_steam_collections_import(imported))
     }
 }

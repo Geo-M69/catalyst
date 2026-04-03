@@ -3,6 +3,7 @@ use std::process::Command;
 use url::Url;
 
 use crate::application::error::AppResult;
+use crate::application::contracts::library::{FeatureResponse, GameStoreMetadataResponse};
 use crate::application::canonicalizer::build_canonical_features;
 use crate::AppState;
 use crate::STEAM_APP_DETAILS_CACHE_TTL_HOURS;
@@ -17,8 +18,8 @@ use crate::get_authenticated_user;
 use crate::normalize_game_identity_input;
 use crate::open_connection;
 
-fn empty_game_store_metadata_response() -> crate::application::services::library_types::GameStoreMetadataResponse {
-    crate::application::services::library_types::GameStoreMetadataResponse {
+fn empty_game_store_metadata_response() -> GameStoreMetadataResponse {
+    GameStoreMetadataResponse {
         developers: None,
         publishers: None,
         franchise: None,
@@ -38,7 +39,7 @@ pub(crate) fn get_game_store_metadata(
     state: &AppState,
     provider: String,
     external_id: String,
-) -> AppResult<crate::application::services::library_types::GameStoreMetadataResponse> {
+) -> AppResult<GameStoreMetadataResponse> {
     let connection = open_connection(&state.db_path)?;
     cleanup_expired_sessions(&connection)?;
     let user = get_authenticated_user(state, &connection)?;
@@ -390,7 +391,17 @@ pub(crate) fn get_game_store_metadata(
         response.controller_support.clone(),
     );
     if !features.is_empty() {
-        response.features = Some(features);
+        response.features = Some(
+            features
+                .into_iter()
+                .map(|feature| FeatureResponse {
+                    key: feature.key,
+                    label: feature.label,
+                    icon: feature.icon,
+                    tooltip: feature.tooltip,
+                })
+                .collect(),
+        );
     }
 
     Ok(response)

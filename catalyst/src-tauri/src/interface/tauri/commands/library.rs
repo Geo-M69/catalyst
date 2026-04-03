@@ -1,5 +1,11 @@
+use crate::application::contracts::library::{
+    LibraryResponse,
+    SteamDownloadProgressResponse,
+    SteamSyncResponse,
+};
 use crate::application::error::AppResult;
-use crate::application::services::library_types::{
+use crate::application::services::library_service::LibraryService;
+use crate::application::contracts::library::{
     GameActivityTimelineResponse,
     GameAchievementsResponse,
     GameDlcResponse,
@@ -8,15 +14,18 @@ use crate::application::services::library_types::{
     GameStoreMetadataResponse,
     GameTradingCardsResponse,
 };
+use crate::application::use_cases::library::LibraryUseCase;
+use crate::infrastructure::library_port::InfrastructureLibraryPort;
 use crate::infrastructure::steam_local::SteamLocal;
-use crate::{AppState, LibraryResponse, SteamDownloadProgressResponse, SteamSyncResponse};
+use crate::AppState;
 use tauri::{AppHandle, State};
 use tauri::Emitter;
 use crate::interface::tauri::commands::blocking::run_blocking;
 
 #[tauri::command]
 pub(crate) fn get_library(state: State<'_, AppState>) -> AppResult<LibraryResponse> {
-    crate::application::services::library_service::get_library(state.inner())
+    let library_use_case = LibraryService::new(InfrastructureLibraryPort::new(state.inner()));
+    library_use_case.get_library()
 }
 
 // `get_steam_status` command removed; Steam status is available via server-side
@@ -24,7 +33,10 @@ pub(crate) fn get_library(state: State<'_, AppState>) -> AppResult<LibraryRespon
 #[tauri::command]
 pub(crate) async fn sync_steam_library(state: State<'_, AppState>) -> AppResult<SteamSyncResponse> {
     let state = state.inner().clone();
-    run_blocking(move || crate::application::services::library_service::sync_steam_library(&state)).await
+    run_blocking(move || {
+        let library_use_case = LibraryService::new(InfrastructureLibraryPort::new(&state));
+        library_use_case.sync_steam_library()
+    }).await
 }
 
 #[tauri::command]
@@ -34,18 +46,17 @@ pub(crate) fn set_game_favorite(
     favorite: bool,
     state: State<'_, AppState>,
 ) -> AppResult<()> {
-    crate::application::services::library_service::set_game_favorite(
-        state.inner(),
-        provider,
-        external_id,
-        favorite,
-    )
+    let library_use_case = LibraryService::new(InfrastructureLibraryPort::new(state.inner()));
+    library_use_case.set_game_favorite(provider, external_id, favorite)
 }
 
 #[tauri::command]
 pub(crate) async fn list_steam_downloads(state: State<'_, AppState>) -> AppResult<Vec<SteamDownloadProgressResponse>> {
     let state = state.inner().clone();
-    run_blocking(move || crate::application::services::library_service::list_steam_downloads(&state)).await
+    run_blocking(move || {
+        let library_use_case = LibraryService::new(InfrastructureLibraryPort::new(&state));
+        library_use_case.list_steam_downloads()
+    }).await
 }
 
 #[tauri::command]
@@ -56,11 +67,8 @@ pub(crate) async fn get_game_store_metadata(
 ) -> AppResult<GameStoreMetadataResponse> {
     let state = state.inner().clone();
     run_blocking(move || {
-        crate::application::services::library_service::get_game_store_metadata(
-            &state,
-            provider,
-            external_id,
-        )
+        let library_use_case = LibraryService::new(InfrastructureLibraryPort::new(&state));
+        library_use_case.get_game_store_metadata(provider, external_id)
     })
     .await
 }
@@ -74,8 +82,8 @@ pub(crate) async fn get_game_friends_activity(
 ) -> AppResult<GameFriendsActivityResponse> {
     let state = state.inner().clone();
     run_blocking(move || {
-        crate::application::services::library_service::get_game_friends_activity(
-            &state,
+        let library_use_case = LibraryService::new(InfrastructureLibraryPort::new(&state));
+        library_use_case.get_game_friends_activity(
             provider,
             external_id,
             force_refresh.unwrap_or(false),
@@ -93,8 +101,8 @@ pub(crate) async fn get_game_activity_timeline(
 ) -> AppResult<GameActivityTimelineResponse> {
     let state = state.inner().clone();
     run_blocking(move || {
-        crate::application::services::library_service::get_game_activity_timeline(
-            &state,
+        let library_use_case = LibraryService::new(InfrastructureLibraryPort::new(&state));
+        library_use_case.get_game_activity_timeline(
             provider,
             external_id,
             force_refresh.unwrap_or(false),
@@ -112,8 +120,8 @@ pub(crate) async fn get_game_achievements(
 ) -> AppResult<GameAchievementsResponse> {
     let state = state.inner().clone();
     run_blocking(move || {
-        crate::application::services::library_service::get_game_achievements(
-            &state,
+        let library_use_case = LibraryService::new(InfrastructureLibraryPort::new(&state));
+        library_use_case.get_game_achievements(
             provider,
             external_id,
             force_refresh.unwrap_or(false),
@@ -131,8 +139,8 @@ pub(crate) async fn get_game_trading_cards(
 ) -> AppResult<GameTradingCardsResponse> {
     let state = state.inner().clone();
     run_blocking(move || {
-        crate::application::services::library_service::get_game_trading_cards(
-            &state,
+        let library_use_case = LibraryService::new(InfrastructureLibraryPort::new(&state));
+        library_use_case.get_game_trading_cards(
             provider,
             external_id,
             force_refresh.unwrap_or(false),
@@ -150,8 +158,8 @@ pub(crate) async fn get_game_dlc(
 ) -> AppResult<GameDlcResponse> {
     let state = state.inner().clone();
     run_blocking(move || {
-        crate::application::services::library_service::get_game_dlc(
-            &state,
+        let library_use_case = LibraryService::new(InfrastructureLibraryPort::new(&state));
+        library_use_case.get_game_dlc(
             provider,
             external_id,
             force_refresh.unwrap_or(false),
@@ -169,8 +177,8 @@ pub(crate) async fn get_game_review(
 ) -> AppResult<GameReviewResponse> {
     let state = state.inner().clone();
     run_blocking(move || {
-        crate::application::services::library_service::get_game_review(
-            &state,
+        let library_use_case = LibraryService::new(InfrastructureLibraryPort::new(&state));
+        library_use_case.get_game_review(
             provider,
             external_id,
             force_refresh.unwrap_or(false),

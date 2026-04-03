@@ -1,4 +1,73 @@
-use crate::FeatureResponse;
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FeatureResponse {
+    pub key: String,
+    pub label: String,
+    pub icon: Option<String>,
+    pub tooltip: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GameResponse {
+    pub id: String,
+    pub provider: String,
+    pub external_id: String,
+    pub name: String,
+    pub kind: String,
+    pub playtime_minutes: i64,
+    pub installed: bool,
+    pub artwork_url: Option<String>,
+    pub last_synced_at: String,
+    pub last_played_at: Option<String>,
+    pub favorite: bool,
+    pub steam_tags: Vec<String>,
+    pub genres: Vec<String>,
+    pub collections: Vec<String>,
+    pub hide_in_library: bool,
+    pub developers: Vec<String>,
+    pub publishers: Vec<String>,
+    pub franchise: Option<String>,
+    pub release_date: Option<String>,
+    pub short_description: Option<String>,
+    pub header_image: Option<String>,
+    pub has_achievements: bool,
+    pub has_cloud_saves: bool,
+    pub controller_support: Option<String>,
+    pub achievements_count: Option<i64>,
+    pub cloud_details: Option<String>,
+    pub features: Vec<FeatureResponse>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LibraryResponse {
+    pub user_id: String,
+    pub total: usize,
+    pub games: Vec<GameResponse>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SteamSyncResponse {
+    pub user_id: String,
+    pub provider: String,
+    pub synced_games: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SteamDownloadProgressResponse {
+    pub game_id: String,
+    pub provider: String,
+    pub external_id: String,
+    pub name: String,
+    pub state: String,
+    pub bytes_downloaded: Option<u64>,
+    pub bytes_total: Option<u64>,
+    pub progress_percent: Option<f64>,
+    pub progress_source: Option<String>,
+}
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]

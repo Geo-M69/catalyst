@@ -1,15 +1,23 @@
-use crate::application::error::{AppError, AppResult};
-use crate::application::ports::game_settings::GameSettingsPort;
-use crate::domain::game::parse_steam_app_id;
-use crate::{
-	AppState,
+use crate::application::contracts::game_settings::{
+	GameCompatibilitySettingsPayload,
 	GameCompatibilityToolResponse,
+	GameControllerSettingsPayload,
 	GameCustomizationArtworkResponse,
+	GameCustomizationSettingsPayload,
+	GameGeneralSettingsPayload,
 	GameInstallLocationResponse,
 	GameInstallationDetailsResponse,
 	GamePrivacySettingsResponse,
 	GamePropertiesSettingsPayload,
 	GameScreenshotResponse,
+	GameUpdatesSettingsPayload,
+	GameVersionsBetasSettingsPayload,
+};
+use crate::application::error::{AppError, AppResult};
+use crate::application::ports::game_settings::GameSettingsPort;
+use crate::domain::game::parse_steam_app_id;
+use crate::{
+	AppState,
 	STEAM_APP_LANGUAGES_CACHE_TTL_HOURS,
 	apply_steam_game_privacy_settings,
 	apply_steam_game_properties_settings,
@@ -57,6 +65,114 @@ impl InfrastructureGameSettingsPort {
 			state: state.clone(),
 		}
 	}
+
+	fn to_contract_compatibility_tool(
+		value: crate::GameCompatibilityToolResponse,
+	) -> GameCompatibilityToolResponse {
+		GameCompatibilityToolResponse {
+			id: value.id,
+			label: value.label,
+		}
+	}
+
+	fn to_contract_compatibility_tools(
+		values: Vec<crate::GameCompatibilityToolResponse>,
+	) -> Vec<GameCompatibilityToolResponse> {
+		values
+			.into_iter()
+			.map(Self::to_contract_compatibility_tool)
+			.collect()
+	}
+
+	fn to_contract_privacy_settings(
+		value: crate::GamePrivacySettingsResponse,
+	) -> GamePrivacySettingsResponse {
+		GamePrivacySettingsResponse {
+			hide_in_library: value.hide_in_library,
+			mark_as_private: value.mark_as_private,
+			overlay_data_deleted: value.overlay_data_deleted,
+		}
+	}
+
+	fn to_contract_properties_settings(
+		value: crate::GamePropertiesSettingsPayload,
+	) -> GamePropertiesSettingsPayload {
+		GamePropertiesSettingsPayload {
+			general: GameGeneralSettingsPayload {
+				language: value.general.language,
+				launch_options: value.general.launch_options,
+				steam_overlay_enabled: value.general.steam_overlay_enabled,
+			},
+			compatibility: GameCompatibilitySettingsPayload {
+				force_steam_play_compatibility_tool: value
+					.compatibility
+					.force_steam_play_compatibility_tool,
+				steam_play_compatibility_tool: value
+					.compatibility
+					.steam_play_compatibility_tool,
+			},
+			updates: GameUpdatesSettingsPayload {
+				automatic_updates_mode: value.updates.automatic_updates_mode,
+				background_downloads_mode: value.updates.background_downloads_mode,
+			},
+			controller: GameControllerSettingsPayload {
+				steam_input_override: value.controller.steam_input_override,
+			},
+			customization: GameCustomizationSettingsPayload {
+				custom_sort_name: value.customization.custom_sort_name,
+			},
+			game_versions_betas: GameVersionsBetasSettingsPayload {
+				private_access_code: value.game_versions_betas.private_access_code,
+				selected_version_id: value.game_versions_betas.selected_version_id,
+			},
+		}
+	}
+
+	fn to_runtime_properties_settings(
+		value: GamePropertiesSettingsPayload,
+	) -> crate::GamePropertiesSettingsPayload {
+		crate::GamePropertiesSettingsPayload {
+			general: crate::GameGeneralSettingsPayload {
+				language: value.general.language,
+				launch_options: value.general.launch_options,
+				steam_overlay_enabled: value.general.steam_overlay_enabled,
+			},
+			compatibility: crate::GameCompatibilitySettingsPayload {
+				force_steam_play_compatibility_tool: value
+					.compatibility
+					.force_steam_play_compatibility_tool,
+				steam_play_compatibility_tool: value
+					.compatibility
+					.steam_play_compatibility_tool,
+			},
+			updates: crate::GameUpdatesSettingsPayload {
+				automatic_updates_mode: value.updates.automatic_updates_mode,
+				background_downloads_mode: value.updates.background_downloads_mode,
+			},
+			controller: crate::GameControllerSettingsPayload {
+				steam_input_override: value.controller.steam_input_override,
+			},
+			customization: crate::GameCustomizationSettingsPayload {
+				custom_sort_name: value.customization.custom_sort_name,
+			},
+			game_versions_betas: crate::GameVersionsBetasSettingsPayload {
+				private_access_code: value.game_versions_betas.private_access_code,
+				selected_version_id: value.game_versions_betas.selected_version_id,
+			},
+		}
+	}
+
+	fn to_contract_customization_artwork(
+		value: crate::GameCustomizationArtworkResponse,
+	) -> GameCustomizationArtworkResponse {
+		GameCustomizationArtworkResponse {
+			cover: value.cover,
+			background: value.background,
+			logo: value.logo,
+			wide_cover: value.wide_cover,
+		}
+	}
+
 }
 
 impl GameSettingsPort for InfrastructureGameSettingsPort {
@@ -247,10 +363,11 @@ pub(crate) fn list_game_compatibility_tools(
 		}
 	};
 
-	Ok(resolve_steam_compatibility_tools(
+	let tools = resolve_steam_compatibility_tools(
 		state.steam_root_override.as_deref(),
 		include_linux_runtime_tools,
-	)?)
+	)?;
+	Ok(InfrastructureGameSettingsPort::to_contract_compatibility_tools(tools))
 }
 
 pub(crate) fn get_game_privacy_settings(
@@ -270,12 +387,13 @@ pub(crate) fn get_game_privacy_settings(
 		&normalized_external_id,
 	)?;
 
-	Ok(load_game_privacy_settings(
+	let settings = load_game_privacy_settings(
 		&connection,
 		&user.id,
 		&normalized_provider,
 		&normalized_external_id,
-	)?)
+	)?;
+	Ok(InfrastructureGameSettingsPort::to_contract_privacy_settings(settings))
 }
 
 pub(crate) fn set_game_privacy_settings(
@@ -375,12 +493,15 @@ pub(crate) fn get_game_properties_settings(
 		&normalized_external_id,
 	)?;
 
-	Ok(load_game_properties_settings(
+	let settings = load_game_properties_settings(
 		&connection,
 		&user.id,
 		&normalized_provider,
 		&normalized_external_id,
-	)?)
+	)?;
+	Ok(InfrastructureGameSettingsPort::to_contract_properties_settings(
+		settings,
+	))
 }
 
 pub(crate) fn get_game_screenshots(
@@ -491,7 +612,9 @@ pub(crate) fn set_game_properties_settings(
 		&normalized_external_id,
 	)?;
 
-	let normalized_settings = normalize_game_properties_settings_payload(settings);
+	let runtime_settings =
+		InfrastructureGameSettingsPort::to_runtime_properties_settings(settings);
+	let normalized_settings = normalize_game_properties_settings_payload(runtime_settings);
 	save_game_properties_settings(
 		&connection,
 		&user.id,
@@ -536,7 +659,9 @@ pub(crate) fn get_game_customization_artwork(
 	)?;
 
 	if normalized_provider != "steam" || normalized_external_id.parse::<u64>().is_err() {
-		return Ok(empty_game_customization_artwork_response());
+		return Ok(InfrastructureGameSettingsPort::to_contract_customization_artwork(
+			empty_game_customization_artwork_response(),
+		));
 	}
 
 	let Some(steam_id) = user
@@ -545,13 +670,18 @@ pub(crate) fn get_game_customization_artwork(
 		.map(str::trim)
 		.filter(|value| !value.is_empty())
 	else {
-		return Ok(empty_game_customization_artwork_response());
+		return Ok(InfrastructureGameSettingsPort::to_contract_customization_artwork(
+			empty_game_customization_artwork_response(),
+		));
 	};
 
-	Ok(resolve_steam_customization_artwork(
+	let artwork = resolve_steam_customization_artwork(
 		state.steam_root_override.as_deref(),
 		steam_id,
 		&normalized_external_id,
+	);
+	Ok(InfrastructureGameSettingsPort::to_contract_customization_artwork(
+		artwork,
 	))
 }
 

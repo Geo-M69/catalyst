@@ -1,5 +1,5 @@
 use crate::application::error::AppResult;
-use crate::application::services::library_types::{GameReviewEntryResponse, GameReviewResponse};
+use crate::application::contracts::library::{GameReviewEntryResponse, GameReviewResponse};
 use crate::infrastructure::cache_adapter::CacheAdapter;
 use crate::AppState;
 use crate::build_http_client;

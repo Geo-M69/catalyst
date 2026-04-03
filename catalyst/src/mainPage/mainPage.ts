@@ -3749,12 +3749,37 @@ const refreshLibrary = async (syncBeforeLoad = false, importSteamCollections = f
     return;
   }
 
+  const runWithTimeout = async <T>(
+    task: Promise<T>,
+    timeoutMs: number,
+    timeoutMessage: string
+  ): Promise<T> => {
+    let timeoutId: number | null = null;
+    const timeoutTask = new Promise<never>((_, reject) => {
+      timeoutId = window.setTimeout(() => {
+        reject(new Error(timeoutMessage));
+      }, timeoutMs);
+    });
+
+    try {
+      return await Promise.race([task, timeoutTask]);
+    } finally {
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+    }
+  };
+
   try {
     setLibraryLoadingState(true);
 
     if (syncBeforeLoad && store.steamLinked) {
       try {
-        await ipcService.syncSteamLibrary();
+        await runWithTimeout(
+          ipcService.syncSteamLibrary(),
+          90_000,
+          "Steam sync timed out. Loading cached library."
+        );
       } catch (error) {
         const appError = normalizeAppError(error, "Steam sync failed. Loading cached library.");
         console.error(`[library/sync] ${appError.kind}:${appError.code} ${appError.message}`);
