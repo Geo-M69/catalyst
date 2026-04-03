@@ -29,3 +29,6 @@ PLAN.md
 
 # Ignore the game plan document added during brainstorming
 GAME LIBRARY PLAN.md
+
+# Local rust build output for architecture tool
+tools/architecture-gates/target/
