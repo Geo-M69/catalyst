@@ -1,5 +1,10 @@
 import type { GameResponse } from "../types";
-import { getSteamArtworkCandidates, addCandidates } from "../../shared/utils/artwork";
+import { getSteamArtworkCandidates } from "../../shared/utils/artwork";
+
+const MAX_ARTWORK_CANDIDATES = 2;
+const FAILED_ARTWORK_CACHE_MAX_ENTRIES = 2000;
+const FAILED_ARTWORK_CACHE_TTL_MS = 10 * 60 * 1000;
+const failedArtworkCandidateTimestamps = new Map<string, number>();
 
 const dateFormatter = new Intl.DateTimeFormat(undefined, {
   year: "numeric",
@@ -54,11 +59,71 @@ const appendPlaceholder = (container: HTMLElement, gameName: string): void => {
   container.append(placeholder);
 };
 
+const pruneFailedArtworkCache = (now: number): void => {
+  for (const [candidate, failedAt] of failedArtworkCandidateTimestamps) {
+    if ((now - failedAt) > FAILED_ARTWORK_CACHE_TTL_MS) {
+      failedArtworkCandidateTimestamps.delete(candidate);
+    }
+  }
+
+  if (failedArtworkCandidateTimestamps.size <= FAILED_ARTWORK_CACHE_MAX_ENTRIES) {
+    return;
+  }
+
+  const entriesByFailureAge = [...failedArtworkCandidateTimestamps.entries()]
+    .sort((left, right) => left[1] - right[1]);
+  const entriesToDelete = failedArtworkCandidateTimestamps.size - FAILED_ARTWORK_CACHE_MAX_ENTRIES;
+  for (let index = 0; index < entriesToDelete; index += 1) {
+    const entry = entriesByFailureAge[index];
+    if (!entry) {
+      break;
+    }
+    failedArtworkCandidateTimestamps.delete(entry[0]);
+  }
+};
+
+const markArtworkCandidateAsFailed = (candidate: string): void => {
+  const now = Date.now();
+  failedArtworkCandidateTimestamps.set(candidate, now);
+  pruneFailedArtworkCache(now);
+};
+
+const isArtworkCandidateRecentlyFailed = (candidate: string): boolean => {
+  const now = Date.now();
+  const failedAt = failedArtworkCandidateTimestamps.get(candidate);
+  if (failedAt === undefined) {
+    return false;
+  }
+
+  if ((now - failedAt) > FAILED_ARTWORK_CACHE_TTL_MS) {
+    failedArtworkCandidateTimestamps.delete(candidate);
+    return false;
+  }
+
+  return true;
+};
+
 const getArtworkCandidates = (game: GameResponse): string[] => {
   const candidates: string[] = [];
   const seen = new Set<string>();
-  addCandidates(getSteamArtworkCandidates(game, "wide-cover"), seen, candidates);
-  addCandidates(getSteamArtworkCandidates(game, "cover"), seen, candidates);
+
+  for (const candidate of getSteamArtworkCandidates(game, "wide-cover")) {
+    const normalizedCandidate = candidate.trim();
+    if (!normalizedCandidate || seen.has(normalizedCandidate)) {
+      continue;
+    }
+
+    seen.add(normalizedCandidate);
+    if (isArtworkCandidateRecentlyFailed(normalizedCandidate)) {
+      continue;
+    }
+
+    candidates.push(normalizedCandidate);
+    if (candidates.length >= MAX_ARTWORK_CANDIDATES) {
+      break;
+    }
+  }
+
   return candidates;
 };
 
@@ -100,9 +165,17 @@ export const createGameCard = (game: GameResponse): HTMLElement => {
     image.className = "game-card-image";
     image.alt = `${game.name} cover art`;
     image.loading = "lazy";
+    image.decoding = "async";
+    image.fetchPriority = "low";
+
     let candidateIndex = 0;
 
     image.addEventListener("error", () => {
+      const failedCandidate = artworkCandidates[candidateIndex];
+      if (failedCandidate) {
+        markArtworkCandidateAsFailed(failedCandidate);
+      }
+
       candidateIndex += 1;
       if (candidateIndex < artworkCandidates.length) {
         image.src = artworkCandidates[candidateIndex];

@@ -2432,6 +2432,17 @@ body.show-back-button #game-details-back-button {
   row-gap: 1.4rem;
 }
 
+.game-grid-virtualized {
+  display: block;
+}
+
+.game-grid-virtual-spacer {
+  display: block;
+  width: 100%;
+  height: 0;
+  pointer-events: none;
+}
+
 .game-grid-sections {
   display: grid;
   gap: 1.05rem;
@@ -2662,6 +2673,9 @@ body.show-back-button #game-details-back-button {
   display: flex;
   flex-direction: column;
   position: relative;
+  contain: layout paint style;
+  content-visibility: auto;
+  contain-intrinsic-size: 102px;
   transition: transform 180ms ease;
 }
 
