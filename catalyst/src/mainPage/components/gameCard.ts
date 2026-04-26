@@ -6,9 +6,27 @@ const FAILED_ARTWORK_CACHE_MAX_ENTRIES = 2000;
 const FAILED_ARTWORK_CACHE_TTL_MS = 10 * 60 * 1000;
 const LOADED_ARTWORK_CACHE_MAX_ENTRIES = 4000;
 const LOADED_ARTWORK_CACHE_TTL_MS = 20 * 60 * 1000;
+const ARTWORK_CACHE_PRUNE_MUTATION_INTERVAL = 40;
+const ARTWORK_CACHE_PRUNE_INTERVAL_MS = 15 * 1000;
+const ENABLE_GAME_CARD_ARTWORK_PREFETCH = true;
 const failedArtworkCandidateTimestamps = new Map<string, number>();
 const loadedArtworkCandidateTimestamps = new Map<string, number>();
 const inFlightArtworkPrefetches = new Set<string>();
+
+interface CachePruneState {
+  lastPrunedAt: number;
+  mutationsSincePrune: number;
+}
+
+const failedArtworkPruneState: CachePruneState = {
+  lastPrunedAt: 0,
+  mutationsSincePrune: 0,
+};
+
+const loadedArtworkPruneState: CachePruneState = {
+  lastPrunedAt: 0,
+  mutationsSincePrune: 0,
+};
 
 const dateFormatter = new Intl.DateTimeFormat(undefined, {
   year: "numeric",
@@ -67,8 +85,17 @@ const pruneTimestampCache = (
   cache: Map<string, number>,
   maxEntries: number,
   ttlMs: number,
-  now: number
+  now: number,
+  pruneState: CachePruneState
 ): void => {
+  pruneState.mutationsSincePrune += 1;
+  const shouldPrune = cache.size > maxEntries
+    || pruneState.mutationsSincePrune >= ARTWORK_CACHE_PRUNE_MUTATION_INTERVAL
+    || (now - pruneState.lastPrunedAt) >= ARTWORK_CACHE_PRUNE_INTERVAL_MS;
+  if (!shouldPrune) {
+    return;
+  }
+
   for (const [candidate, timestamp] of cache) {
     if ((now - timestamp) > ttlMs) {
       cache.delete(candidate);
@@ -89,6 +116,9 @@ const pruneTimestampCache = (
     }
     cache.delete(entry[0]);
   }
+
+  pruneState.lastPrunedAt = now;
+  pruneState.mutationsSincePrune = 0;
 };
 
 const pruneFailedArtworkCache = (now: number): void => {
@@ -96,7 +126,8 @@ const pruneFailedArtworkCache = (now: number): void => {
     failedArtworkCandidateTimestamps,
     FAILED_ARTWORK_CACHE_MAX_ENTRIES,
     FAILED_ARTWORK_CACHE_TTL_MS,
-    now
+    now,
+    failedArtworkPruneState
   );
 };
 
@@ -105,7 +136,8 @@ const pruneLoadedArtworkCache = (now: number): void => {
     loadedArtworkCandidateTimestamps,
     LOADED_ARTWORK_CACHE_MAX_ENTRIES,
     LOADED_ARTWORK_CACHE_TTL_MS,
-    now
+    now,
+    loadedArtworkPruneState
   );
 };
 
@@ -116,6 +148,10 @@ const markArtworkCandidateAsFailed = (candidate: string): void => {
 };
 
 const markArtworkCandidateAsLoaded = (candidate: string): void => {
+  if (!ENABLE_GAME_CARD_ARTWORK_PREFETCH) {
+    return;
+  }
+
   const now = Date.now();
   loadedArtworkCandidateTimestamps.set(candidate, now);
   pruneLoadedArtworkCache(now);
@@ -176,7 +212,7 @@ const prefetchArtworkCandidate = (candidate: string): void => {
   }, { once: true });
 
   image.addEventListener("error", () => {
-    markArtworkCandidateAsFailed(candidate);
+    // Prefetch failures are often transient and should not suppress real loads.
     cleanup();
   }, { once: true });
 
@@ -208,6 +244,10 @@ const getArtworkCandidates = (game: GameResponse): string[] => {
 };
 
 export const prefetchGameCardArtwork = (game: GameResponse): void => {
+  if (!ENABLE_GAME_CARD_ARTWORK_PREFETCH) {
+    return;
+  }
+
   const primaryCandidate = getArtworkCandidates(game)[0];
   if (!primaryCandidate) {
     return;
@@ -253,7 +293,6 @@ export const createGameCard = (game: GameResponse): HTMLElement => {
     const image = document.createElement("img");
     image.className = "game-card-image";
     image.alt = `${game.name} cover art`;
-    image.loading = "eager";
     image.decoding = "async";
     image.fetchPriority = "auto";
 

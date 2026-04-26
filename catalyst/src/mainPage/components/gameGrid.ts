@@ -17,6 +17,7 @@ interface RenderGameGridArgs {
 interface CachedGameCard {
   element: HTMLElement;
   gameReference: GameResponse;
+  lastTouchedAt: number;
 }
 
 interface GridMetrics {
@@ -75,10 +76,10 @@ const DEFAULT_CARD_HEIGHT_ESTIMATE_PX = 102;
 const DEFAULT_CARD_WIDTH_MIN_PX = 180;
 const GRID_CARD_BORDER_ESTIMATE_PX = 1;
 const OVERSCAN_ROWS_MIN = 3;
-const OVERSCAN_ROWS_MAX = 16;
-const OVERSCAN_VISIBLE_CARD_RATIO = 0.75;
+const OVERSCAN_ROWS_MAX = 14;
+const OVERSCAN_VISIBLE_CARD_RATIO = 0.7;
 const OVERSCAN_PIXELS_MIN = 320;
-const OVERSCAN_PIXELS_MAX = 1800;
+const OVERSCAN_PIXELS_MAX = 1600;
 const OVERSCAN_VELOCITY_BOOST_START_PX_PER_MS = 0.3;
 const OVERSCAN_VELOCITY_BOOST_END_PX_PER_MS = 2.0;
 const OVERSCAN_VELOCITY_BOOST_MAX_MULTIPLIER = 1.7;
@@ -96,9 +97,50 @@ const SCROLL_SPEED_SMOOTHING = 0.22;
 const SCROLL_SPEED_SAMPLE_MAX_DELTA_MS = 180;
 const SCROLL_SPEED_IDLE_DECAY_DELAY_MS = 100;
 const SCROLL_SPEED_IDLE_DECAY_TAU_MS = 260;
+const SCROLLING_VISUAL_SUPPRESSION_IDLE_MS = 140;
+const CARD_CACHE_MAX_ENTRIES = 520;
+const GRID_PERF_DEBUG_STORAGE_KEY = "catalyst.debug.gridPerf";
+const GRID_PERF_DEBUG_QUERY_PARAM = "debugGridPerf";
+const GRID_PERF_LOG_INTERVAL_MS = 1500;
+const GRID_PERF_LONGTASK_LOG_THROTTLE_MS = 500;
 
 const collapsedSectionIds = new Set<string>();
 const rendererByContainer = new WeakMap<HTMLElement, GameGridRenderer>();
+
+declare global {
+  interface Window {
+    __CATALYST_DEBUG_GRID_PERF__?: boolean;
+  }
+}
+
+const parseBooleanDebugValue = (value: string | null): boolean => {
+  if (!value) {
+    return false;
+  }
+
+  const normalized = value.trim().toLocaleLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "on";
+};
+
+const resolveGridPerfDebugEnabled = (): boolean => {
+  if (window.__CATALYST_DEBUG_GRID_PERF__ === true) {
+    return true;
+  }
+
+  const queryValue = new URLSearchParams(window.location.search).get(GRID_PERF_DEBUG_QUERY_PARAM);
+  if (parseBooleanDebugValue(queryValue)) {
+    return true;
+  }
+
+  try {
+    const storedValue = localStorage.getItem(GRID_PERF_DEBUG_STORAGE_KEY);
+    return parseBooleanDebugValue(storedValue);
+  } catch {
+    return false;
+  }
+};
+
+const GRID_PERF_DEBUG_ENABLED = resolveGridPerfDebugEnabled();
 
 const resolveSectionId = (section: GameGridSection): string => {
   const normalizedId = section.id.trim();
@@ -400,6 +442,32 @@ class GameGridRenderer {
 
   private readonly cardCache = new Map<string, CachedGameCard>();
 
+  private cardCacheUsageCounter = 0;
+
+  private perfWindowStartedAtMs = performance.now();
+
+  private perfWindowSampleCount = 0;
+
+  private perfWindowTotalRenderMs = 0;
+
+  private perfWindowMaxRenderMs = 0;
+
+  private perfWindowMaxVisibleCards = 0;
+
+  private perfWindowEvictedCards = 0;
+
+  private perfWindowLongTaskCount = 0;
+
+  private perfWindowLongTaskTotalMs = 0;
+
+  private perfWindowLongTaskMaxMs = 0;
+
+  private scrollingVisualSuppressionTimer: number | null = null;
+
+  private readonly longTaskObserver: PerformanceObserver | null = null;
+
+  private lastLongTaskLoggedAtMs = 0;
+
   private viewportRenderRaf: number | null = null;
 
   private lastKnownScrollTop = 0;
@@ -411,6 +479,7 @@ class GameGridRenderer {
   private smoothedScrollSpeedPxPerMs = 0;
 
   private readonly onScroll = (): void => {
+    this.markScrollingVisualSuppression();
     const nextScrollTop = this.container.scrollTop;
     const scrollDelta = nextScrollTop - this.lastKnownScrollTop;
     const now = performance.now();
@@ -440,6 +509,18 @@ class GameGridRenderer {
     this.scheduleViewportRender();
   };
 
+  private markScrollingVisualSuppression(): void {
+    this.container.classList.add("is-scrolling");
+    if (this.scrollingVisualSuppressionTimer !== null) {
+      window.clearTimeout(this.scrollingVisualSuppressionTimer);
+    }
+
+    this.scrollingVisualSuppressionTimer = window.setTimeout(() => {
+      this.scrollingVisualSuppressionTimer = null;
+      this.container.classList.remove("is-scrolling");
+    }, SCROLLING_VISUAL_SUPPRESSION_IDLE_MS);
+  }
+
   private readonly onResize = (): void => {
     this.scheduleViewportRender();
   };
@@ -467,6 +548,8 @@ class GameGridRenderer {
       attributes: true,
       attributeFilter: ["style", "class"],
     });
+
+    this.longTaskObserver = this.createLongTaskObserver();
   }
 
   render({ games, emptyMessage, sections }: Omit<RenderGameGridArgs, "container">): void {
@@ -559,6 +642,8 @@ class GameGridRenderer {
       return;
     }
 
+    const renderStartMs = performance.now();
+
     const metrics = resolveGridMetrics(plainState.grid, this.container);
     const scrollSpeedPxPerMs = this.resolveEffectiveScrollSpeedPxPerMs();
     const overscan = resolveDynamicOverscan(this.container, metrics, scrollSpeedPxPerMs);
@@ -587,6 +672,7 @@ class GameGridRenderer {
 
     patchChildren(plainState.grid, visibleCards);
     this.prefetchGamesNearRange(plainState.games, range, metrics, prefetchBudget, scrollSpeedPxPerMs);
+    this.recordPerfSample("plain", performance.now() - renderStartMs, visibleCards.length);
   }
 
   private ensureSectionsState(): SectionsRenderState {
@@ -758,6 +844,9 @@ class GameGridRenderer {
       return;
     }
 
+    const renderStartMs = performance.now();
+    let visibleCardsTotal = 0;
+
     const viewportStart = this.container.scrollTop;
     const viewportEnd = viewportStart + this.container.clientHeight;
     const containerRect = this.container.getBoundingClientRect();
@@ -818,6 +907,7 @@ class GameGridRenderer {
       }
 
       patchChildren(sectionState.grid, visibleCards);
+      visibleCardsTotal += visibleCards.length;
 
       if (prefetchBudget > 0) {
         const prefetched = this.prefetchGamesNearRange(
@@ -830,6 +920,8 @@ class GameGridRenderer {
         prefetchBudget -= prefetched;
       }
     }
+
+    this.recordPerfSample("sections", performance.now() - renderStartMs, visibleCardsTotal);
   }
 
   private prefetchGamesNearRange(
@@ -921,6 +1013,7 @@ class GameGridRenderer {
   private getOrCreateCard(game: GameResponse): HTMLElement {
     const cached = this.cardCache.get(game.id);
     if (cached && cached.gameReference === game) {
+      cached.lastTouchedAt = this.nextCardCacheUsageCounter();
       return cached.element;
     }
 
@@ -928,8 +1021,159 @@ class GameGridRenderer {
     this.cardCache.set(game.id, {
       element: nextCard,
       gameReference: game,
+      lastTouchedAt: this.nextCardCacheUsageCounter(),
     });
+    this.trimCardCacheToLimit();
     return nextCard;
+  }
+
+  private nextCardCacheUsageCounter(): number {
+    this.cardCacheUsageCounter += 1;
+    return this.cardCacheUsageCounter;
+  }
+
+  private trimCardCacheToLimit(): void {
+    if (this.cardCache.size <= CARD_CACHE_MAX_ENTRIES) {
+      return;
+    }
+
+    const overflow = this.cardCache.size - CARD_CACHE_MAX_ENTRIES;
+    const evictable: Array<{ id: string; lastTouchedAt: number }> = [];
+    for (const [id, cached] of this.cardCache.entries()) {
+      if (cached.element.isConnected) {
+        continue;
+      }
+
+      evictable.push({
+        id,
+        lastTouchedAt: cached.lastTouchedAt,
+      });
+    }
+
+    if (evictable.length === 0) {
+      return;
+    }
+
+    evictable.sort((left, right) => left.lastTouchedAt - right.lastTouchedAt);
+    const evictionCount = Math.min(overflow, evictable.length);
+    for (let index = 0; index < evictionCount; index += 1) {
+      const entry = evictable[index];
+      if (!entry) {
+        continue;
+      }
+      this.cardCache.delete(entry.id);
+      this.perfWindowEvictedCards += 1;
+    }
+  }
+
+  private recordPerfSample(mode: "plain" | "sections", renderMs: number, visibleCards: number): void {
+    if (!GRID_PERF_DEBUG_ENABLED) {
+      return;
+    }
+
+    this.perfWindowSampleCount += 1;
+    this.perfWindowTotalRenderMs += renderMs;
+    this.perfWindowMaxRenderMs = Math.max(this.perfWindowMaxRenderMs, renderMs);
+    this.perfWindowMaxVisibleCards = Math.max(this.perfWindowMaxVisibleCards, visibleCards);
+
+    const now = performance.now();
+    const elapsedMs = now - this.perfWindowStartedAtMs;
+    if (elapsedMs < GRID_PERF_LOG_INTERVAL_MS) {
+      return;
+    }
+
+    const averageRenderMs = this.perfWindowSampleCount > 0
+      ? this.perfWindowTotalRenderMs / this.perfWindowSampleCount
+      : 0;
+
+    const payload: Record<string, number | string> = {
+      mode,
+      sampleWindowMs: Math.round(elapsedMs),
+      samples: this.perfWindowSampleCount,
+      avgRenderMs: Number(averageRenderMs.toFixed(2)),
+      maxRenderMs: Number(this.perfWindowMaxRenderMs.toFixed(2)),
+      maxVisibleCards: this.perfWindowMaxVisibleCards,
+      scrollTop: Math.round(this.container.scrollTop),
+      scrollSpeedPxPerMs: Number(this.resolveEffectiveScrollSpeedPxPerMs().toFixed(3)),
+      cacheSize: this.cardCache.size,
+      evictedCards: this.perfWindowEvictedCards,
+      longTaskCount: this.perfWindowLongTaskCount,
+      longTaskTotalMs: Number(this.perfWindowLongTaskTotalMs.toFixed(2)),
+      longTaskMaxMs: Number(this.perfWindowLongTaskMaxMs.toFixed(2)),
+      longTaskObserverActive: this.longTaskObserver !== null ? "yes" : "no",
+    };
+
+    const memory = (
+      performance as Performance & {
+        memory?: {
+          usedJSHeapSize: number;
+        };
+      }
+    ).memory;
+    if (memory && Number.isFinite(memory.usedJSHeapSize)) {
+      payload["usedJsHeapMb"] = Number((memory.usedJSHeapSize / (1024 * 1024)).toFixed(1));
+    }
+
+    console.debug("[grid-perf]", payload);
+
+    this.perfWindowStartedAtMs = now;
+    this.perfWindowSampleCount = 0;
+    this.perfWindowTotalRenderMs = 0;
+    this.perfWindowMaxRenderMs = 0;
+    this.perfWindowMaxVisibleCards = 0;
+    this.perfWindowEvictedCards = 0;
+    this.perfWindowLongTaskCount = 0;
+    this.perfWindowLongTaskTotalMs = 0;
+    this.perfWindowLongTaskMaxMs = 0;
+  }
+
+  private createLongTaskObserver(): PerformanceObserver | null {
+    if (!GRID_PERF_DEBUG_ENABLED || typeof PerformanceObserver === "undefined") {
+      return null;
+    }
+
+    try {
+      const observer = new PerformanceObserver((list) => {
+        let entriesCount = 0;
+        let totalDurationMs = 0;
+        let maxDurationMs = 0;
+
+        for (const entry of list.getEntries()) {
+          entriesCount += 1;
+          totalDurationMs += entry.duration;
+          maxDurationMs = Math.max(maxDurationMs, entry.duration);
+        }
+
+        if (entriesCount <= 0) {
+          return;
+        }
+
+        this.perfWindowLongTaskCount += entriesCount;
+        this.perfWindowLongTaskTotalMs += totalDurationMs;
+        this.perfWindowLongTaskMaxMs = Math.max(this.perfWindowLongTaskMaxMs, maxDurationMs);
+
+        const now = performance.now();
+        if ((now - this.lastLongTaskLoggedAtMs) < GRID_PERF_LONGTASK_LOG_THROTTLE_MS) {
+          return;
+        }
+
+        this.lastLongTaskLoggedAtMs = now;
+        console.debug("[grid-longtask]", {
+          entries: entriesCount,
+          totalDurationMs: Number(totalDurationMs.toFixed(2)),
+          maxDurationMs: Number(maxDurationMs.toFixed(2)),
+          scrollTop: Math.round(this.container.scrollTop),
+          mode: this.sectionsState ? "sections" : "plain",
+        });
+      });
+
+      observer.observe({
+        entryTypes: ["longtask"],
+      });
+      return observer;
+    } catch {
+      return null;
+    }
   }
 
   private pruneCardCache(activeIds: Set<string>): void {

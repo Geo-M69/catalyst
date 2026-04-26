@@ -186,6 +186,7 @@ const WHEEL_DELTA_LINE_HEIGHT_PX = 16;
 const GRID_WHEEL_SMOOTHING_LERP = 0.16;
 const GRID_WHEEL_SMOOTHING_MAX_STEP_PX = 180;
 const GRID_WHEEL_SMOOTHING_MIN_WHEEL_DELTA_PX = 8;
+const ENABLE_LINUX_GRID_WHEEL_SMOOTHING = false;
 const GRID_CARD_WIDTH_STORAGE_KEY = "catalyst.library.gridCardMinWidthPx";
 const APP_NAME = "Catalyst";
 const DOWNLOAD_POLL_INTERVAL_MS = 2500;
@@ -2038,7 +2039,7 @@ const isLikelyTrackpadWheelEvent = (event: WheelEvent): boolean => {
 };
 
 const registerLinuxGridWheelSmoothing = (): (() => void) => {
-  if (resolveRuntimePlatform() !== "linux") {
+  if (!ENABLE_LINUX_GRID_WHEEL_SMOOTHING || resolveRuntimePlatform() !== "linux") {
     return () => {};
   }
 

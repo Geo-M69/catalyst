@@ -2673,9 +2673,7 @@ body.show-back-button #game-details-back-button {
   display: flex;
   flex-direction: column;
   position: relative;
-  contain: layout paint style;
-  content-visibility: auto;
-  contain-intrinsic-size: 102px;
+  contain: layout style;
   transition: transform 180ms ease;
 }
 
@@ -2750,6 +2748,32 @@ body.show-back-button #game-details-back-button {
   opacity: 1;
   transform: translateY(0);
   pointer-events: auto;
+}
+
+.library-grid-scroll.is-scrolling .game-card,
+.library-grid-scroll.is-scrolling .game-card-image,
+.library-grid-scroll.is-scrolling .game-card-placeholder,
+.library-grid-scroll.is-scrolling .game-card-body {
+  transition: none !important;
+}
+
+.library-grid-scroll.is-scrolling .game-card:hover,
+.library-grid-scroll.is-scrolling .game-card:focus-within {
+  transform: none;
+}
+
+.library-grid-scroll.is-scrolling .game-card:hover .game-card-image,
+.library-grid-scroll.is-scrolling .game-card:focus-within .game-card-image,
+.library-grid-scroll.is-scrolling .game-card:hover .game-card-placeholder,
+.library-grid-scroll.is-scrolling .game-card:focus-within .game-card-placeholder {
+  transform: none;
+}
+
+.library-grid-scroll.is-scrolling .game-card:hover .game-card-body,
+.library-grid-scroll.is-scrolling .game-card:focus-within .game-card-body {
+  opacity: 0;
+  transform: translateY(10px);
+  pointer-events: none;
 }
 
 .game-card-title {
