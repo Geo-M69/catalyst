@@ -193,6 +193,7 @@ const DOWNLOAD_ETA_SAMPLE_MIN_SECONDS = 0.5;
 const DOWNLOAD_ETA_STALE_MS = 15000;
 const TOAST_DURATION_MS = 3200;
 const DLC_CDN_CAPSULE_URL = "https://cdn.cloudflare.steamstatic.com/steam/apps";
+const FRIENDS_ACTIVITY_PARTIAL_WARNING_PATTERN = /\bfirst\s+\d+\s+friends\b/i;
 const STARTUP_TIMEOUT_MS = 20_000;
 const STARTUP_CLOSE_DURATION_MS = 320;
 const LIBRARY_SOFT_LOCK_ASPECTS: ReadonlyArray<{ label: string; ratio: number }> = [
@@ -1804,6 +1805,22 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
       return;
     }
     renderFriendsActivity(friendsActivity);
+
+    const hasPartialFriendsWarning =
+      !forceFriendsActivityRefresh
+      && FRIENDS_ACTIVITY_PARTIAL_WARNING_PATTERN.test(friendsActivity.warning ?? "");
+    if (hasPartialFriendsWarning) {
+      void (async () => {
+        const refreshedFriendsActivity = await getGameFriendsActivityForGame(game, true);
+        if (detailsViewStore.appViewMode !== "game-details" || detailsViewStore.selectedGameId !== game.id) {
+          return;
+        }
+        if (!refreshedFriendsActivity) {
+          return;
+        }
+        renderFriendsActivity(refreshedFriendsActivity);
+      })();
+    }
   })();
 
   // Notes are currently static; installation details removed per UI update.

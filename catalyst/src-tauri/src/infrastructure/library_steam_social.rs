@@ -9,7 +9,9 @@ use crate::{
     normalize_backend_warning_message, normalize_game_identity_input, open_connection, AppState,
 };
 use chrono::Utc;
-use std::collections::{HashMap, HashSet};
+use rusqlite::{params, Connection, OptionalExtension};
+use std::collections::{hash_map::DefaultHasher, HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 
 const STEAM_WEB_API_FRIEND_LIST_ENDPOINT: &str =
     "https://api.steampowered.com/ISteamUser/GetFriendList/v1/";
@@ -25,6 +27,7 @@ const STEAM_WEB_API_GAME_SCHEMA_ENDPOINT: &str =
     "https://api.steampowered.com/ISteamUserStats/GetSchemaForGame/v2/";
 const STEAM_FRIENDS_ACTIVITY_CACHE_TTL_SECONDS: i64 = 15 * 60;
 const STEAM_FRIENDS_ACTIVITY_MAX_FRIENDS_TO_SCAN: usize = 48;
+const STEAM_FRIENDS_ACTIVITY_CACHE_VERSION: &str = "v3";
 const STEAM_ACTIVITY_TIMELINE_CACHE_TTL_SECONDS: i64 = 15 * 60;
 const STEAM_ACTIVITY_TIMELINE_MAX_NEWS_ITEMS: usize = 12;
 const STEAM_ACTIVITY_TIMELINE_MAX_ACHIEVEMENTS: usize = 12;
@@ -215,6 +218,109 @@ fn append_warning(existing_warning: &mut Option<String>, next_warning: impl Into
             *existing_warning = Some(next_warning.to_owned());
         }
     }
+}
+
+fn find_cached_game_friends_activity(
+    connection: &Connection,
+    steam_id: &str,
+    app_id: u64,
+    stale_before: chrono::DateTime<Utc>,
+    required_friend_list_fingerprint: Option<&str>,
+) -> Result<Option<GameFriendsActivityResponse>, String> {
+    let app_id_text = app_id.to_string();
+    let cached_entry = connection
+        .query_row(
+            "
+            SELECT response_json, fetched_at, friend_list_fingerprint
+            FROM steam_friends_activity_cache
+            WHERE steam_id = ?1 AND app_id = ?2
+            ",
+            params![steam_id, app_id_text],
+            |row| {
+                let response_json: String = row.get(0)?;
+                let fetched_at: String = row.get(1)?;
+                let friend_list_fingerprint: String = row.get(2)?;
+                Ok((response_json, fetched_at, friend_list_fingerprint))
+            },
+        )
+        .optional()
+        .map_err(|error| format!("Failed to query cached friends activity: {error}"))?;
+
+    let Some((response_json, fetched_at_raw, cached_friend_list_fingerprint)) = cached_entry else {
+        return Ok(None);
+    };
+
+    let fetched_at = chrono::DateTime::parse_from_rfc3339(fetched_at_raw.trim())
+        .map_err(|error| format!("Failed to parse cached friends activity timestamp: {error}"))?
+        .with_timezone(&Utc);
+    if fetched_at < stale_before {
+        return Ok(None);
+    }
+    if let Some(required_fingerprint) = required_friend_list_fingerprint {
+        if cached_friend_list_fingerprint.trim() != required_fingerprint {
+            return Ok(None);
+        }
+    }
+
+    let response = serde_json::from_str::<GameFriendsActivityResponse>(&response_json)
+        .map_err(|error| format!("Failed to decode cached friends activity payload: {error}"))?;
+    Ok(Some(response))
+}
+
+fn cache_game_friends_activity(
+    connection: &Connection,
+    steam_id: &str,
+    app_id: u64,
+    friend_list_fingerprint: &str,
+    response: &GameFriendsActivityResponse,
+) -> Result<(), String> {
+    let app_id_text = app_id.to_string();
+    let response_json = serde_json::to_string(response)
+        .map_err(|error| format!("Failed to encode friends activity cache payload: {error}"))?;
+    let fetched_at = Utc::now().to_rfc3339();
+    connection
+        .execute(
+            "
+            INSERT INTO steam_friends_activity_cache (
+              steam_id,
+              app_id,
+              friend_list_fingerprint,
+              response_json,
+              fetched_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            ON CONFLICT(steam_id, app_id) DO UPDATE SET
+              friend_list_fingerprint = excluded.friend_list_fingerprint,
+              response_json = excluded.response_json,
+              fetched_at = excluded.fetched_at
+            ",
+            params![
+                steam_id,
+                app_id_text,
+                friend_list_fingerprint,
+                response_json,
+                fetched_at
+            ],
+        )
+        .map_err(|error| format!("Failed to cache friends activity payload: {error}"))?;
+    Ok(())
+}
+
+fn build_friend_list_fingerprint(
+    friend_ids: &[String],
+    visibility: SteamFriendListVisibility,
+) -> String {
+    let mut sorted_friend_ids = friend_ids.to_vec();
+    sorted_friend_ids.sort_unstable();
+
+    let mut hasher = DefaultHasher::new();
+    visibility.as_str().hash(&mut hasher);
+    sorted_friend_ids.len().hash(&mut hasher);
+    for friend_id in sorted_friend_ids {
+        friend_id.hash(&mut hasher);
+    }
+
+    format!("{:016x}", hasher.finish())
 }
 
 fn empty_game_activity_timeline_response(
@@ -1106,7 +1212,24 @@ pub(crate) fn get_game_friends_activity(
         ));
     };
 
-    let cache_key = format!("steam_friends_activity:{steam_id}:{app_id}");
+    let cache_key =
+        format!("steam_friends_activity:{STEAM_FRIENDS_ACTIVITY_CACHE_VERSION}:{steam_id}:{app_id}");
+    let persist_friends_activity_cache =
+        |friend_list_fingerprint: &str, response: &GameFriendsActivityResponse| {
+        if let Ok(serialized_response) = serde_json::to_value(response) {
+            CacheAdapter::new().set_json(&cache_key, serialized_response);
+        }
+        if let Err(error) = cache_game_friends_activity(
+            &connection,
+            steam_id,
+            app_id,
+            friend_list_fingerprint,
+            response,
+        ) {
+            eprintln!("Failed to persist Steam friends activity cache: {error}");
+        }
+    };
+
     if !force_refresh {
         if let Some(cached_value) =
             CacheAdapter::new().get_json(&cache_key, STEAM_FRIENDS_ACTIVITY_CACHE_TTL_SECONDS)
@@ -1115,6 +1238,21 @@ pub(crate) fn get_game_friends_activity(
                 serde_json::from_value::<GameFriendsActivityResponse>(cached_value)
             {
                 return Ok(cached_response);
+            }
+        }
+
+        let stale_before =
+            Utc::now() - chrono::Duration::seconds(STEAM_FRIENDS_ACTIVITY_CACHE_TTL_SECONDS);
+        match find_cached_game_friends_activity(&connection, steam_id, app_id, stale_before, None) {
+            Ok(Some(cached_response)) => {
+                if let Ok(serialized_response) = serde_json::to_value(&cached_response) {
+                    CacheAdapter::new().set_json(&cache_key, serialized_response);
+                }
+                return Ok(cached_response);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                eprintln!("Failed to read persisted Steam friends activity cache: {error}");
             }
         }
     }
@@ -1127,14 +1265,45 @@ pub(crate) fn get_game_friends_activity(
         friend_list_outcome.visibility,
         friend_list_outcome.warning,
     );
+    let friend_list_fingerprint = build_friend_list_fingerprint(
+        &friend_list_outcome.friend_ids,
+        friend_list_outcome.visibility,
+    );
+    if !force_refresh {
+        let stale_before =
+            Utc::now() - chrono::Duration::seconds(STEAM_FRIENDS_ACTIVITY_CACHE_TTL_SECONDS);
+        match find_cached_game_friends_activity(
+            &connection,
+            steam_id,
+            app_id,
+            stale_before,
+            Some(friend_list_fingerprint.as_str()),
+        ) {
+            Ok(Some(cached_response)) => {
+                if let Ok(serialized_response) = serde_json::to_value(&cached_response) {
+                    CacheAdapter::new().set_json(&cache_key, serialized_response);
+                }
+                return Ok(cached_response);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                eprintln!("Failed to read persisted Steam friends activity cache: {error}");
+            }
+        }
+    }
     let total_friend_count = friend_list_outcome.friend_ids.len();
+    let max_friends_to_scan = if force_refresh {
+        total_friend_count
+    } else {
+        STEAM_FRIENDS_ACTIVITY_MAX_FRIENDS_TO_SCAN
+    };
     let friend_ids = friend_list_outcome
         .friend_ids
         .into_iter()
-        .take(STEAM_FRIENDS_ACTIVITY_MAX_FRIENDS_TO_SCAN)
+        .take(max_friends_to_scan)
         .collect::<Vec<_>>();
 
-    if total_friend_count > STEAM_FRIENDS_ACTIVITY_MAX_FRIENDS_TO_SCAN {
+    if !force_refresh && total_friend_count > STEAM_FRIENDS_ACTIVITY_MAX_FRIENDS_TO_SCAN {
         append_warning(
             &mut response.warning,
             format!(
@@ -1150,9 +1319,7 @@ pub(crate) fn get_game_friends_activity(
             SteamFriendListVisibility::Public
         )
     {
-        if let Ok(serialized_response) = serde_json::to_value(&response) {
-            CacheAdapter::new().set_json(&cache_key, serialized_response);
-        }
+        persist_friends_activity_cache(&friend_list_fingerprint, &response);
         return Ok(response);
     }
 
@@ -1240,9 +1407,7 @@ pub(crate) fn get_game_friends_activity(
     response.owned_friends = owned_friends;
     response.last_synced_at = Utc::now().to_rfc3339();
 
-    if let Ok(serialized_response) = serde_json::to_value(&response) {
-        CacheAdapter::new().set_json(&cache_key, serialized_response);
-    }
+    persist_friends_activity_cache(&friend_list_fingerprint, &response);
 
     Ok(response)
 }

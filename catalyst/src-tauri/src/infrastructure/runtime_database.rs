@@ -158,6 +158,18 @@ pub(crate) fn initialize_database(db_path: &Path) -> Result<(), String> {
               fetched_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS steam_friends_activity_cache (
+              steam_id TEXT NOT NULL,
+              app_id TEXT NOT NULL,
+              friend_list_fingerprint TEXT NOT NULL DEFAULT '',
+              response_json TEXT NOT NULL,
+              fetched_at TEXT NOT NULL,
+              PRIMARY KEY (steam_id, app_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_steam_friends_activity_cache_fetched_at
+              ON steam_friends_activity_cache(fetched_at);
+
                         CREATE TABLE IF NOT EXISTS game_genres (
                             user_id TEXT NOT NULL,
                             provider TEXT NOT NULL,
@@ -194,6 +206,7 @@ pub(crate) fn initialize_database(db_path: &Path) -> Result<(), String> {
         )
         .map_err(|error| format!("Failed to run SQLite migrations: {error}"))?;
     migrate_games_table(&connection)?;
+    migrate_steam_friends_activity_cache_table(&connection)?;
 
     Ok(())
 }
@@ -231,17 +244,42 @@ fn migrate_games_table(connection: &Connection) -> Result<(), String> {
 }
 
 fn games_table_has_column(connection: &Connection, expected_column: &str) -> Result<bool, String> {
+    table_has_column(connection, "games", expected_column)
+}
+
+fn migrate_steam_friends_activity_cache_table(connection: &Connection) -> Result<(), String> {
+    if !table_has_column(connection, "steam_friends_activity_cache", "friend_list_fingerprint")? {
+        connection
+            .execute(
+                "ALTER TABLE steam_friends_activity_cache ADD COLUMN friend_list_fingerprint TEXT NOT NULL DEFAULT ''",
+                [],
+            )
+            .map_err(|error| {
+                format!(
+                    "Failed to migrate steam_friends_activity_cache with friend_list_fingerprint column: {error}"
+                )
+            })?;
+    }
+    Ok(())
+}
+
+fn table_has_column(
+    connection: &Connection,
+    table_name: &str,
+    expected_column: &str,
+) -> Result<bool, String> {
+    let pragma_query = format!("PRAGMA table_info({table_name})");
     let mut statement = connection
-        .prepare("PRAGMA table_info(games)")
-        .map_err(|error| format!("Failed to inspect games table schema: {error}"))?;
+        .prepare(&pragma_query)
+        .map_err(|error| format!("Failed to inspect {table_name} table schema: {error}"))?;
 
     let rows = statement
         .query_map([], |row| row.get::<_, String>(1))
-        .map_err(|error| format!("Failed to query games table schema: {error}"))?;
+        .map_err(|error| format!("Failed to query {table_name} table schema: {error}"))?;
 
     for row in rows {
         let column_name =
-            row.map_err(|error| format!("Failed to decode games table schema row: {error}"))?;
+            row.map_err(|error| format!("Failed to decode {table_name} table schema row: {error}"))?;
         if column_name == expected_column {
             return Ok(true);
         }
