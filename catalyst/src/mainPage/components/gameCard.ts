@@ -4,7 +4,11 @@ import { getSteamArtworkCandidates } from "../../shared/utils/artwork";
 const MAX_ARTWORK_CANDIDATES = 2;
 const FAILED_ARTWORK_CACHE_MAX_ENTRIES = 2000;
 const FAILED_ARTWORK_CACHE_TTL_MS = 10 * 60 * 1000;
+const LOADED_ARTWORK_CACHE_MAX_ENTRIES = 4000;
+const LOADED_ARTWORK_CACHE_TTL_MS = 20 * 60 * 1000;
 const failedArtworkCandidateTimestamps = new Map<string, number>();
+const loadedArtworkCandidateTimestamps = new Map<string, number>();
+const inFlightArtworkPrefetches = new Set<string>();
 
 const dateFormatter = new Intl.DateTimeFormat(undefined, {
   year: "numeric",
@@ -59,33 +63,62 @@ const appendPlaceholder = (container: HTMLElement, gameName: string): void => {
   container.append(placeholder);
 };
 
-const pruneFailedArtworkCache = (now: number): void => {
-  for (const [candidate, failedAt] of failedArtworkCandidateTimestamps) {
-    if ((now - failedAt) > FAILED_ARTWORK_CACHE_TTL_MS) {
-      failedArtworkCandidateTimestamps.delete(candidate);
+const pruneTimestampCache = (
+  cache: Map<string, number>,
+  maxEntries: number,
+  ttlMs: number,
+  now: number
+): void => {
+  for (const [candidate, timestamp] of cache) {
+    if ((now - timestamp) > ttlMs) {
+      cache.delete(candidate);
     }
   }
 
-  if (failedArtworkCandidateTimestamps.size <= FAILED_ARTWORK_CACHE_MAX_ENTRIES) {
+  if (cache.size <= maxEntries) {
     return;
   }
 
-  const entriesByFailureAge = [...failedArtworkCandidateTimestamps.entries()]
+  const entriesByAge = [...cache.entries()]
     .sort((left, right) => left[1] - right[1]);
-  const entriesToDelete = failedArtworkCandidateTimestamps.size - FAILED_ARTWORK_CACHE_MAX_ENTRIES;
+  const entriesToDelete = cache.size - maxEntries;
   for (let index = 0; index < entriesToDelete; index += 1) {
-    const entry = entriesByFailureAge[index];
+    const entry = entriesByAge[index];
     if (!entry) {
       break;
     }
-    failedArtworkCandidateTimestamps.delete(entry[0]);
+    cache.delete(entry[0]);
   }
+};
+
+const pruneFailedArtworkCache = (now: number): void => {
+  pruneTimestampCache(
+    failedArtworkCandidateTimestamps,
+    FAILED_ARTWORK_CACHE_MAX_ENTRIES,
+    FAILED_ARTWORK_CACHE_TTL_MS,
+    now
+  );
+};
+
+const pruneLoadedArtworkCache = (now: number): void => {
+  pruneTimestampCache(
+    loadedArtworkCandidateTimestamps,
+    LOADED_ARTWORK_CACHE_MAX_ENTRIES,
+    LOADED_ARTWORK_CACHE_TTL_MS,
+    now
+  );
 };
 
 const markArtworkCandidateAsFailed = (candidate: string): void => {
   const now = Date.now();
   failedArtworkCandidateTimestamps.set(candidate, now);
   pruneFailedArtworkCache(now);
+};
+
+const markArtworkCandidateAsLoaded = (candidate: string): void => {
+  const now = Date.now();
+  loadedArtworkCandidateTimestamps.set(candidate, now);
+  pruneLoadedArtworkCache(now);
 };
 
 const isArtworkCandidateRecentlyFailed = (candidate: string): boolean => {
@@ -101,6 +134,53 @@ const isArtworkCandidateRecentlyFailed = (candidate: string): boolean => {
   }
 
   return true;
+};
+
+const isArtworkCandidateRecentlyLoaded = (candidate: string): boolean => {
+  const now = Date.now();
+  const loadedAt = loadedArtworkCandidateTimestamps.get(candidate);
+  if (loadedAt === undefined) {
+    return false;
+  }
+
+  if ((now - loadedAt) > LOADED_ARTWORK_CACHE_TTL_MS) {
+    loadedArtworkCandidateTimestamps.delete(candidate);
+    return false;
+  }
+
+  return true;
+};
+
+const prefetchArtworkCandidate = (candidate: string): void => {
+  if (
+    inFlightArtworkPrefetches.has(candidate)
+    || isArtworkCandidateRecentlyLoaded(candidate)
+    || isArtworkCandidateRecentlyFailed(candidate)
+  ) {
+    return;
+  }
+
+  inFlightArtworkPrefetches.add(candidate);
+
+  const image = new Image();
+  image.decoding = "async";
+  image.fetchPriority = "low";
+
+  const cleanup = (): void => {
+    inFlightArtworkPrefetches.delete(candidate);
+  };
+
+  image.addEventListener("load", () => {
+    markArtworkCandidateAsLoaded(candidate);
+    cleanup();
+  }, { once: true });
+
+  image.addEventListener("error", () => {
+    markArtworkCandidateAsFailed(candidate);
+    cleanup();
+  }, { once: true });
+
+  image.src = candidate;
 };
 
 const getArtworkCandidates = (game: GameResponse): string[] => {
@@ -127,13 +207,22 @@ const getArtworkCandidates = (game: GameResponse): string[] => {
   return candidates;
 };
 
+export const prefetchGameCardArtwork = (game: GameResponse): void => {
+  const primaryCandidate = getArtworkCandidates(game)[0];
+  if (!primaryCandidate) {
+    return;
+  }
+
+  prefetchArtworkCandidate(primaryCandidate);
+};
+
 export const createGameCard = (game: GameResponse): HTMLElement => {
   const card = document.createElement("article");
   card.className = "game-card";
   card.tabIndex = 0;
-  card.dataset.gameId = game.id;
-  card.dataset.gameProvider = game.provider;
-  card.dataset.gameExternalId = game.externalId;
+  card.dataset["gameId"] = game.id;
+  card.dataset["gameProvider"] = game.provider;
+  card.dataset["gameExternalId"] = game.externalId;
   card.setAttribute("aria-label", `${game.name} (${game.provider})`);
 
   // Dispatch a global event to request opening the game details view. Main page
@@ -164,11 +253,18 @@ export const createGameCard = (game: GameResponse): HTMLElement => {
     const image = document.createElement("img");
     image.className = "game-card-image";
     image.alt = `${game.name} cover art`;
-    image.loading = "lazy";
+    image.loading = "eager";
     image.decoding = "async";
-    image.fetchPriority = "low";
+    image.fetchPriority = "auto";
 
     let candidateIndex = 0;
+
+    image.addEventListener("load", () => {
+      const loadedCandidate = artworkCandidates[candidateIndex];
+      if (loadedCandidate) {
+        markArtworkCandidateAsLoaded(loadedCandidate);
+      }
+    });
 
     image.addEventListener("error", () => {
       const failedCandidate = artworkCandidates[candidateIndex];
@@ -178,16 +274,24 @@ export const createGameCard = (game: GameResponse): HTMLElement => {
 
       candidateIndex += 1;
       if (candidateIndex < artworkCandidates.length) {
-        image.src = artworkCandidates[candidateIndex];
-        return;
+        const nextCandidate = artworkCandidates[candidateIndex];
+        if (nextCandidate) {
+          image.src = nextCandidate;
+          return;
+        }
       }
 
       image.remove();
       appendPlaceholder(media, game.name);
     });
 
-    image.src = artworkCandidates[candidateIndex];
-    media.append(image);
+    const firstCandidate = artworkCandidates[candidateIndex];
+    if (firstCandidate) {
+      image.src = firstCandidate;
+      media.append(image);
+    } else {
+      appendPlaceholder(media, game.name);
+    }
   } else {
     appendPlaceholder(media, game.name);
   }

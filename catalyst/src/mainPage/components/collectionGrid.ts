@@ -37,7 +37,7 @@ export const renderCollectionGrid = ({
 }: RenderCollectionGridArgs): void => {
   const cleanupContainer = container as CollectionGridContainer;
   cleanupContainer.__collectionGridCleanup?.();
-  cleanupContainer.__collectionGridCleanup = undefined;
+  delete cleanupContainer.__collectionGridCleanup;
 
   container.replaceChildren();
 

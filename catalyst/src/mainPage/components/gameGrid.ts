@@ -1,4 +1,4 @@
-import { createGameCard } from "./gameCard";
+import { createGameCard, prefetchGameCardArtwork } from "./gameCard";
 import type { GameResponse } from "../types";
 
 export interface GameGridSection {
@@ -25,6 +25,11 @@ interface GridMetrics {
   columns: number;
   rowGap: number;
   rowStride: number;
+}
+
+interface DynamicOverscan {
+  pixels: number;
+  rows: number;
 }
 
 interface SectionRenderState {
@@ -69,8 +74,28 @@ interface SectionsRenderState {
 const DEFAULT_CARD_HEIGHT_ESTIMATE_PX = 102;
 const DEFAULT_CARD_WIDTH_MIN_PX = 180;
 const GRID_CARD_BORDER_ESTIMATE_PX = 1;
-const OVERSCAN_ROWS = 3;
-const VISIBILITY_OVERSCAN_PX = 320;
+const OVERSCAN_ROWS_MIN = 3;
+const OVERSCAN_ROWS_MAX = 16;
+const OVERSCAN_VISIBLE_CARD_RATIO = 0.75;
+const OVERSCAN_PIXELS_MIN = 320;
+const OVERSCAN_PIXELS_MAX = 1800;
+const OVERSCAN_VELOCITY_BOOST_START_PX_PER_MS = 0.3;
+const OVERSCAN_VELOCITY_BOOST_END_PX_PER_MS = 2.0;
+const OVERSCAN_VELOCITY_BOOST_MAX_MULTIPLIER = 1.7;
+const PREFETCH_AHEAD_ROWS = 3;
+const PREFETCH_BEHIND_ROWS = 1;
+const PREFETCH_ROWS_VELOCITY_BOOST_MAX_MULTIPLIER = 1.5;
+const PREFETCH_BUDGET_VISIBLE_CARD_RATIO = 0.5;
+const PREFETCH_BUDGET_MIN_GAMES_PER_FRAME = 10;
+const PREFETCH_BUDGET_BASE_MAX_GAMES_PER_FRAME = 22;
+const PREFETCH_BUDGET_ABSOLUTE_MAX_GAMES_PER_FRAME = 40;
+const PREFETCH_VELOCITY_BOOST_START_PX_PER_MS = 0.3;
+const PREFETCH_VELOCITY_BOOST_END_PX_PER_MS = 2.1;
+const PREFETCH_VELOCITY_BOOST_MAX_MULTIPLIER = 2.0;
+const SCROLL_SPEED_SMOOTHING = 0.22;
+const SCROLL_SPEED_SAMPLE_MAX_DELTA_MS = 180;
+const SCROLL_SPEED_IDLE_DECAY_DELAY_MS = 100;
+const SCROLL_SPEED_IDLE_DECAY_TAU_MS = 260;
 
 const collapsedSectionIds = new Set<string>();
 const rendererByContainer = new WeakMap<HTMLElement, GameGridRenderer>();
@@ -179,6 +204,24 @@ const clamp = (value: number, min: number, max: number): number => {
   return Math.max(min, Math.min(value, max));
 };
 
+const resolveVelocityBoostFactor = (
+  speedPxPerMs: number,
+  startSpeedPxPerMs: number,
+  endSpeedPxPerMs: number,
+  maxMultiplier: number
+): number => {
+  if (maxMultiplier <= 1 || endSpeedPxPerMs <= startSpeedPxPerMs || speedPxPerMs <= startSpeedPxPerMs) {
+    return 1;
+  }
+
+  const normalized = clamp(
+    (speedPxPerMs - startSpeedPxPerMs) / (endSpeedPxPerMs - startSpeedPxPerMs),
+    0,
+    1
+  );
+  return 1 + (normalized * (maxMultiplier - 1));
+};
+
 const resolveGridCardMinWidth = (container: HTMLElement): number => {
   const explicitValue = Number.parseFloat(getComputedStyle(container).getPropertyValue("--game-grid-card-min-width"));
   if (Number.isFinite(explicitValue) && explicitValue > 0) {
@@ -215,11 +258,82 @@ const resolveGridMetrics = (grid: HTMLElement, container: HTMLElement): GridMetr
   };
 };
 
+const resolveDynamicOverscan = (
+  container: HTMLElement,
+  metrics: GridMetrics,
+  scrollSpeedPxPerMs: number
+): DynamicOverscan => {
+  if (container.clientHeight <= 0 || metrics.rowStride <= 0 || metrics.columns <= 0) {
+    return {
+      pixels: OVERSCAN_PIXELS_MIN,
+      rows: OVERSCAN_ROWS_MIN,
+    };
+  }
+
+  const visibleRows = Math.max(Math.ceil(container.clientHeight / metrics.rowStride), 1);
+  const visibleCards = visibleRows * metrics.columns;
+  const targetOverscanCards = Math.max(Math.ceil(visibleCards * OVERSCAN_VISIBLE_CARD_RATIO), metrics.columns);
+  const baseRows = clamp(
+    Math.ceil(targetOverscanCards / metrics.columns),
+    OVERSCAN_ROWS_MIN,
+    OVERSCAN_ROWS_MAX
+  );
+  const velocityBoost = resolveVelocityBoostFactor(
+    scrollSpeedPxPerMs,
+    OVERSCAN_VELOCITY_BOOST_START_PX_PER_MS,
+    OVERSCAN_VELOCITY_BOOST_END_PX_PER_MS,
+    OVERSCAN_VELOCITY_BOOST_MAX_MULTIPLIER
+  );
+  const rows = clamp(
+    Math.ceil(baseRows * velocityBoost),
+    OVERSCAN_ROWS_MIN,
+    OVERSCAN_ROWS_MAX
+  );
+  const pixels = clamp(
+    Math.ceil(rows * metrics.rowStride),
+    OVERSCAN_PIXELS_MIN,
+    OVERSCAN_PIXELS_MAX
+  );
+
+  return { pixels, rows };
+};
+
+const resolvePrefetchBudget = (
+  container: HTMLElement,
+  metrics: GridMetrics,
+  scrollSpeedPxPerMs: number
+): number => {
+  if (container.clientHeight <= 0 || metrics.rowStride <= 0 || metrics.columns <= 0) {
+    return PREFETCH_BUDGET_MIN_GAMES_PER_FRAME;
+  }
+
+  const visibleRows = Math.max(Math.ceil(container.clientHeight / metrics.rowStride), 1);
+  const visibleCards = visibleRows * metrics.columns;
+  const baseBudget = clamp(
+    Math.ceil(visibleCards * PREFETCH_BUDGET_VISIBLE_CARD_RATIO),
+    PREFETCH_BUDGET_MIN_GAMES_PER_FRAME,
+    PREFETCH_BUDGET_BASE_MAX_GAMES_PER_FRAME
+  );
+  const velocityBoost = resolveVelocityBoostFactor(
+    scrollSpeedPxPerMs,
+    PREFETCH_VELOCITY_BOOST_START_PX_PER_MS,
+    PREFETCH_VELOCITY_BOOST_END_PX_PER_MS,
+    PREFETCH_VELOCITY_BOOST_MAX_MULTIPLIER
+  );
+
+  return clamp(
+    Math.ceil(baseBudget * velocityBoost),
+    PREFETCH_BUDGET_MIN_GAMES_PER_FRAME,
+    PREFETCH_BUDGET_ABSOLUTE_MAX_GAMES_PER_FRAME
+  );
+};
+
 const resolveSliceRange = (
   itemCount: number,
   metrics: GridMetrics,
   viewportStart: number,
-  viewportEnd: number
+  viewportEnd: number,
+  overscanRows: number
 ): VirtualSliceRange => {
   if (itemCount === 0) {
     return {
@@ -246,8 +360,8 @@ const resolveSliceRange = (
     };
   }
 
-  let startRow = Math.floor(safeViewportStart / metrics.rowStride) - OVERSCAN_ROWS;
-  let endRow = Math.ceil(safeViewportEnd / metrics.rowStride) - 1 + OVERSCAN_ROWS;
+  let startRow = Math.floor(safeViewportStart / metrics.rowStride) - overscanRows;
+  let endRow = Math.ceil(safeViewportEnd / metrics.rowStride) - 1 + overscanRows;
 
   startRow = clamp(startRow, 0, Math.max(totalRows - 1, 0));
   endRow = clamp(endRow, startRow, Math.max(totalRows - 1, 0));
@@ -288,7 +402,41 @@ class GameGridRenderer {
 
   private viewportRenderRaf: number | null = null;
 
+  private lastKnownScrollTop = 0;
+
+  private scrollDirection: -1 | 0 | 1 = 0;
+
+  private lastScrollSampleAtMs = performance.now();
+
+  private smoothedScrollSpeedPxPerMs = 0;
+
   private readonly onScroll = (): void => {
+    const nextScrollTop = this.container.scrollTop;
+    const scrollDelta = nextScrollTop - this.lastKnownScrollTop;
+    const now = performance.now();
+    const elapsedMs = now - this.lastScrollSampleAtMs;
+
+    if (elapsedMs > 0 && elapsedMs <= SCROLL_SPEED_SAMPLE_MAX_DELTA_MS) {
+      const instantaneousSpeedPxPerMs = Math.abs(scrollDelta) / elapsedMs;
+      if (this.smoothedScrollSpeedPxPerMs <= 0) {
+        this.smoothedScrollSpeedPxPerMs = instantaneousSpeedPxPerMs;
+      } else {
+        this.smoothedScrollSpeedPxPerMs = (
+          this.smoothedScrollSpeedPxPerMs * (1 - SCROLL_SPEED_SMOOTHING)
+        ) + (instantaneousSpeedPxPerMs * SCROLL_SPEED_SMOOTHING);
+      }
+    }
+
+    this.lastScrollSampleAtMs = now;
+
+    if (nextScrollTop > this.lastKnownScrollTop) {
+      this.scrollDirection = 1;
+    } else if (nextScrollTop < this.lastKnownScrollTop) {
+      this.scrollDirection = -1;
+    } else {
+      this.scrollDirection = 0;
+    }
+    this.lastKnownScrollTop = nextScrollTop;
     this.scheduleViewportRender();
   };
 
@@ -302,6 +450,8 @@ class GameGridRenderer {
 
   constructor(container: HTMLElement) {
     this.container = container;
+    this.lastKnownScrollTop = container.scrollTop;
+    this.lastScrollSampleAtMs = performance.now();
     this.container.addEventListener("scroll", this.onScroll, { passive: true });
     window.addEventListener("resize", this.onResize);
 
@@ -410,9 +560,18 @@ class GameGridRenderer {
     }
 
     const metrics = resolveGridMetrics(plainState.grid, this.container);
-    const viewportStart = this.container.scrollTop - VISIBILITY_OVERSCAN_PX;
-    const viewportEnd = this.container.scrollTop + this.container.clientHeight + VISIBILITY_OVERSCAN_PX;
-    const range = resolveSliceRange(plainState.games.length, metrics, viewportStart, viewportEnd);
+    const scrollSpeedPxPerMs = this.resolveEffectiveScrollSpeedPxPerMs();
+    const overscan = resolveDynamicOverscan(this.container, metrics, scrollSpeedPxPerMs);
+    const prefetchBudget = resolvePrefetchBudget(this.container, metrics, scrollSpeedPxPerMs);
+    const viewportStart = this.container.scrollTop - overscan.pixels;
+    const viewportEnd = this.container.scrollTop + this.container.clientHeight + overscan.pixels;
+    const range = resolveSliceRange(
+      plainState.games.length,
+      metrics,
+      viewportStart,
+      viewportEnd,
+      overscan.rows
+    );
 
     plainState.topSpacer.style.height = `${range.topHeight}px`;
     plainState.bottomSpacer.style.height = `${range.bottomHeight}px`;
@@ -427,6 +586,7 @@ class GameGridRenderer {
     }
 
     patchChildren(plainState.grid, visibleCards);
+    this.prefetchGamesNearRange(plainState.games, range, metrics, prefetchBudget, scrollSpeedPxPerMs);
   }
 
   private ensureSectionsState(): SectionsRenderState {
@@ -601,6 +761,8 @@ class GameGridRenderer {
     const viewportStart = this.container.scrollTop;
     const viewportEnd = viewportStart + this.container.clientHeight;
     const containerRect = this.container.getBoundingClientRect();
+    const scrollSpeedPxPerMs = this.resolveEffectiveScrollSpeedPxPerMs();
+    let prefetchBudget = 0;
 
     for (const sectionId of sectionsState.sectionOrder) {
       const sectionState = sectionsState.sectionsById.get(sectionId);
@@ -609,6 +771,10 @@ class GameGridRenderer {
       }
 
       const metrics = resolveGridMetrics(sectionState.grid, this.container);
+      const overscan = resolveDynamicOverscan(this.container, metrics, scrollSpeedPxPerMs);
+      if (prefetchBudget <= 0) {
+        prefetchBudget = resolvePrefetchBudget(this.container, metrics, scrollSpeedPxPerMs);
+      }
       const totalGames = sectionState.games.length;
 
       const totalRows = totalGames > 0 ? Math.ceil(totalGames / metrics.columns) : 0;
@@ -628,10 +794,16 @@ class GameGridRenderer {
         - containerRect.top
       ) + this.container.scrollTop;
 
-      const localViewportStart = (viewportStart - contentTopInScrollSpace) - VISIBILITY_OVERSCAN_PX;
-      const localViewportEnd = (viewportEnd - contentTopInScrollSpace) + VISIBILITY_OVERSCAN_PX;
+      const localViewportStart = (viewportStart - contentTopInScrollSpace) - overscan.pixels;
+      const localViewportEnd = (viewportEnd - contentTopInScrollSpace) + overscan.pixels;
 
-      const range = resolveSliceRange(totalGames, metrics, localViewportStart, localViewportEnd);
+      const range = resolveSliceRange(
+        totalGames,
+        metrics,
+        localViewportStart,
+        localViewportEnd,
+        overscan.rows
+      );
 
       sectionState.topSpacer.style.height = `${range.topHeight}px`;
       sectionState.bottomSpacer.style.height = `${range.bottomHeight}px`;
@@ -646,7 +818,104 @@ class GameGridRenderer {
       }
 
       patchChildren(sectionState.grid, visibleCards);
+
+      if (prefetchBudget > 0) {
+        const prefetched = this.prefetchGamesNearRange(
+          sectionState.games,
+          range,
+          metrics,
+          prefetchBudget,
+          scrollSpeedPxPerMs
+        );
+        prefetchBudget -= prefetched;
+      }
     }
+  }
+
+  private prefetchGamesNearRange(
+    games: GameResponse[],
+    range: VirtualSliceRange,
+    metrics: GridMetrics,
+    budget: number,
+    scrollSpeedPxPerMs: number
+  ): number {
+    if (games.length === 0 || budget <= 0) {
+      return 0;
+    }
+
+    const rowBoost = resolveVelocityBoostFactor(
+      scrollSpeedPxPerMs,
+      PREFETCH_VELOCITY_BOOST_START_PX_PER_MS,
+      PREFETCH_VELOCITY_BOOST_END_PX_PER_MS,
+      PREFETCH_ROWS_VELOCITY_BOOST_MAX_MULTIPLIER
+    );
+    const aheadRows = Math.max(Math.ceil(PREFETCH_AHEAD_ROWS * rowBoost), PREFETCH_AHEAD_ROWS);
+    const behindRows = Math.max(
+      Math.ceil(PREFETCH_BEHIND_ROWS * Math.min(rowBoost, 1.4)),
+      PREFETCH_BEHIND_ROWS
+    );
+    const aheadCount = Math.max(aheadRows * metrics.columns, 0);
+    const behindCount = Math.max(behindRows * metrics.columns, 0);
+    if (aheadCount <= 0 && behindCount <= 0) {
+      return 0;
+    }
+
+    const startIndex = clamp(range.startIndex, 0, games.length);
+    const endIndexExclusive = clamp(range.endIndexExclusive, 0, games.length);
+
+    const aheadStart = endIndexExclusive;
+    const aheadEndExclusive = Math.min(games.length, aheadStart + aheadCount);
+    const behindStart = Math.max(0, startIndex - behindCount);
+
+    let prefetched = 0;
+    const prefetchGameAt = (index: number): void => {
+      if (prefetched >= budget) {
+        return;
+      }
+
+      const game = games[index];
+      if (!game) {
+        return;
+      }
+
+      prefetchGameCardArtwork(game);
+      prefetched += 1;
+    };
+
+    // Idle/initial renders default to prefetching ahead.
+    if (this.scrollDirection >= 0) {
+      for (let index = aheadStart; index < aheadEndExclusive && prefetched < budget; index += 1) {
+        prefetchGameAt(index);
+      }
+
+      for (let index = behindStart; index < startIndex && prefetched < budget; index += 1) {
+        prefetchGameAt(index);
+      }
+    } else {
+      for (let index = startIndex - 1; index >= behindStart && prefetched < budget; index -= 1) {
+        prefetchGameAt(index);
+      }
+
+      for (let index = aheadStart; index < aheadEndExclusive && prefetched < budget; index += 1) {
+        prefetchGameAt(index);
+      }
+    }
+
+    return prefetched;
+  }
+
+  private resolveEffectiveScrollSpeedPxPerMs(): number {
+    const now = performance.now();
+    const idleMs = now - this.lastScrollSampleAtMs;
+    if (idleMs <= SCROLL_SPEED_IDLE_DECAY_DELAY_MS) {
+      return this.smoothedScrollSpeedPxPerMs;
+    }
+
+    const decayExponent = -(
+      (idleMs - SCROLL_SPEED_IDLE_DECAY_DELAY_MS)
+      / SCROLL_SPEED_IDLE_DECAY_TAU_MS
+    );
+    return this.smoothedScrollSpeedPxPerMs * Math.exp(decayExponent);
   }
 
   private getOrCreateCard(game: GameResponse): HTMLElement {
@@ -707,5 +976,10 @@ export const renderGameGrid = ({ container, games, emptyMessage, sections }: Ren
     rendererByContainer.set(container, renderer);
   }
 
-  renderer.render({ games, emptyMessage, sections });
+  if (sections) {
+    renderer.render({ games, emptyMessage, sections });
+    return;
+  }
+
+  renderer.render({ games, emptyMessage });
 };

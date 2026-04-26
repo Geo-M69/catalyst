@@ -340,12 +340,17 @@ const createCustomSelect = <T extends string>(
     if (optionButtons.length === 0) {
       return;
     }
-    const selectedOption = optionButtons.find((optionButton) => optionButton.classList.contains("is-selected")) ?? optionButtons[0];
-    selectedOption.focus();
+    const selectedOption = optionButtons.find((optionButton) => optionButton.classList.contains("is-selected"));
+    const fallbackOption = optionButtons[0];
+    const optionToFocus = selectedOption ?? fallbackOption;
+    if (!optionToFocus) {
+      return;
+    }
+    optionToFocus.focus();
   };
 
   const setValue = (value: T, notifyChange = true): boolean => {
-    const selectedOption = optionButtons.find((optionButton) => optionButton.dataset.value === value);
+    const selectedOption = optionButtons.find((optionButton) => optionButton.dataset["value"] === value);
     if (!selectedOption && value !== defaultValue) {
       return false;
     }
@@ -369,13 +374,13 @@ const createCustomSelect = <T extends string>(
   };
 
   const bindOptionButton = (optionButton: HTMLButtonElement): void => {
-    if (optionButton.dataset.bound === "true") {
+    if (optionButton.dataset["bound"] === "true") {
       return;
     }
 
-    optionButton.dataset.bound = "true";
+    optionButton.dataset["bound"] = "true";
     optionButton.addEventListener("click", () => {
-      const optionValue = optionButton.dataset.value;
+      const optionValue = optionButton.dataset["value"];
       if (optionValue === undefined) {
         return;
       }
@@ -397,7 +402,7 @@ const createCustomSelect = <T extends string>(
       optionButton.type = "button";
       optionButton.className = "filter-select-option";
       optionButton.setAttribute("role", "option");
-      optionButton.dataset.value = option.value;
+      optionButton.dataset["value"] = option.value;
       optionButton.textContent = option.label;
       bindOptionButton(optionButton);
       fragment.append(optionButton);
@@ -408,11 +413,12 @@ const createCustomSelect = <T extends string>(
 
     const candidateValue = preferredValue ?? currentValue;
     const hasCandidateValue = candidateValue === defaultValue
-      || optionButtons.some((optionButton) => optionButton.dataset.value === candidateValue);
+      || optionButtons.some((optionButton) => optionButton.dataset["value"] === candidateValue);
+    const firstOption = options[0];
     const nextValue = hasCandidateValue
       ? candidateValue
-      : options.length > 0
-        ? options[0].value
+      : firstOption
+        ? firstOption.value
         : defaultValue;
     const shouldNotify = notifyChange && nextValue !== currentValue;
     void setValue(nextValue, shouldNotify);
@@ -462,26 +468,30 @@ const createCustomSelect = <T extends string>(
     if (event.key === "ArrowDown") {
       event.preventDefault();
       const nextIndex = Math.min(focusedIndex + 1, optionButtons.length - 1);
-      optionButtons[nextIndex].focus();
+      const nextOption = optionButtons[nextIndex];
+      nextOption?.focus();
       return;
     }
 
     if (event.key === "ArrowUp") {
       event.preventDefault();
       const previousIndex = Math.max(focusedIndex - 1, 0);
-      optionButtons[previousIndex].focus();
+      const previousOption = optionButtons[previousIndex];
+      previousOption?.focus();
       return;
     }
 
     if (event.key === "Home") {
       event.preventDefault();
-      optionButtons[0].focus();
+      const firstOption = optionButtons[0];
+      firstOption?.focus();
       return;
     }
 
     if (event.key === "End") {
       event.preventDefault();
-      optionButtons[optionButtons.length - 1].focus();
+      const lastOption = optionButtons[optionButtons.length - 1];
+      lastOption?.focus();
       return;
     }
 
@@ -504,7 +514,7 @@ const createCustomSelect = <T extends string>(
     throw new Error("Custom select options must be buttons");
   }
   const initialOptions = (initialOptionNodes as HTMLButtonElement[]).map((optionButton) => {
-    const value = optionButton.dataset.value;
+    const value = optionButton.dataset["value"];
     if (value === undefined) {
       throw new Error("Custom select option is missing a value");
     }
@@ -761,7 +771,7 @@ export const createFilterPanel = (
 
   const updateSectionActivity = (): void => {
     for (const section of filterSections) {
-      const keys = (section.dataset.filterKeys ?? "")
+      const keys = (section.dataset["filterKeys"] ?? "")
         .split(",")
         .map((key) => key.trim())
         .filter(isFilterKey);
@@ -847,7 +857,7 @@ export const createFilterPanel = (
   });
 
   for (const sectionToggle of sectionToggles) {
-    const sectionContentId = sectionToggle.dataset.target;
+    const sectionContentId = sectionToggle.dataset["target"];
     if (!sectionContentId) {
       continue;
     }
