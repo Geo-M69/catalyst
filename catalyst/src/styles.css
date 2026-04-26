@@ -321,6 +321,241 @@ button:disabled {
   overflow: auto;
 }
 
+.startup-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 520;
+  display: grid;
+  place-items: center;
+  padding: clamp(1.2rem, 3vh, 2.2rem);
+  background: #080808;
+  overflow: hidden;
+  isolation: isolate;
+  opacity: 1;
+  transition: opacity 300ms ease;
+}
+
+.startup-gate::before,
+.startup-gate::after {
+  content: "";
+  position: absolute;
+  inset: -38%;
+  pointer-events: none;
+  background-repeat: repeat;
+  will-change: transform, opacity;
+}
+
+.startup-gate::before {
+  opacity: 0.22;
+  background-image:
+    radial-gradient(circle, rgba(255, 255, 255, 0.12) 1px, transparent 1.3px),
+    radial-gradient(circle, rgba(255, 255, 255, 0.08) 1px, transparent 1.5px);
+  background-size: 7px 7px, 13px 13px;
+  background-position: 0 0, 3px 4px;
+  animation: startup-noise-layer-a 9s linear infinite;
+}
+
+.startup-gate::after {
+  opacity: 0.13;
+  background-image:
+    radial-gradient(circle, rgba(255, 255, 255, 0.1) 1.2px, transparent 1.7px),
+    radial-gradient(circle, rgba(255, 255, 255, 0.06) 0.9px, transparent 1.4px);
+  background-size: 11px 11px, 17px 17px;
+  background-position: 1px 2px, 6px 8px;
+  mix-blend-mode: screen;
+  animation: startup-noise-layer-b 13s linear infinite;
+}
+
+@keyframes startup-noise-layer-a {
+  0% {
+    transform: translate3d(-6%, -4%, 0) scale(1.02);
+    opacity: 0.19;
+  }
+
+  50% {
+    transform: translate3d(6%, 4%, 0) scale(1.03);
+    opacity: 0.24;
+  }
+
+  100% {
+    transform: translate3d(-6%, -4%, 0) scale(1.02);
+    opacity: 0.19;
+  }
+}
+
+@keyframes startup-noise-layer-b {
+  0% {
+    transform: translate3d(5%, -6%, 0) scale(1.01);
+    opacity: 0.1;
+  }
+
+  50% {
+    transform: translate3d(-5%, 6%, 0) scale(1.04);
+    opacity: 0.15;
+  }
+
+  100% {
+    transform: translate3d(5%, -6%, 0) scale(1.01);
+    opacity: 0.1;
+  }
+}
+
+.startup-gate.is-closing {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.startup-gate-card {
+  position: relative;
+  z-index: 1;
+  width: min(520px, calc(100vw - 2.4rem));
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 16px;
+  background: rgba(8, 8, 8, 0.84);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.52);
+  backdrop-filter: blur(8px);
+  padding: clamp(1rem, 2.4vw, 1.45rem);
+  display: grid;
+  gap: 0.72rem;
+}
+
+.startup-gate-brand {
+  margin: 0;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.startup-gate-title {
+  margin: 0;
+  font-family: var(--font-inter);
+  font-size: clamp(1.2rem, 2.2vw, 1.6rem);
+  font-weight: 630;
+  letter-spacing: 0.01em;
+}
+
+.startup-gate-status {
+  margin: 0;
+  font-size: 0.91rem;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.startup-gate-progress {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.11);
+}
+
+.startup-gate-progress-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -46%;
+  width: 46%;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0),
+    rgba(255, 255, 255, 0.86) 48%,
+    rgba(255, 255, 255, 0)
+  );
+  animation: startup-progress-sweep 1200ms cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+@keyframes startup-progress-sweep {
+  0% {
+    transform: translateX(0);
+    opacity: 0.25;
+  }
+
+  20% {
+    opacity: 0.92;
+  }
+
+  100% {
+    transform: translateX(320%);
+    opacity: 0.25;
+  }
+}
+
+.startup-gate-steps {
+  list-style: none;
+  margin: 0.12rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.46rem;
+}
+
+.startup-gate-step {
+  display: flex;
+  align-items: center;
+  gap: 0.44rem;
+  font-size: 0.82rem;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.startup-gate-step::before {
+  content: "";
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  background: transparent;
+  transition: transform 150ms ease, background-color 150ms ease, border-color 150ms ease;
+}
+
+.startup-gate-step[data-state="active"] {
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.startup-gate-step[data-state="active"]::before {
+  border-color: rgba(255, 255, 255, 0.95);
+  background: rgba(255, 255, 255, 0.84);
+  transform: scale(1.06);
+}
+
+.startup-gate-step[data-state="done"]::before {
+  border-color: rgba(255, 255, 255, 0.92);
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.startup-gate-step[data-state="error"]::before {
+  border-color: rgba(255, 255, 255, 0.92);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.56);
+}
+
+.startup-gate-retry {
+  width: auto;
+  justify-self: start;
+  margin-top: 0.4rem;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.startup-gate.is-error .startup-gate-status {
+  color: rgba(255, 255, 255, 0.94);
+}
+
+.startup-gate.is-error .startup-gate-progress {
+  opacity: 0.28;
+}
+
+.library-page .library-aspect-shell {
+  opacity: 1;
+  transform: scale(1);
+  transition: opacity 300ms ease, transform 300ms ease;
+}
+
+.library-page.startup-pending .library-aspect-shell {
+  opacity: 0;
+  transform: scale(0.995);
+  pointer-events: none;
+}
+
 .library-aspect-shell {
   --library-aspect-width: 100vw;
   --library-aspect-height: 100svh;

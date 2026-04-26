@@ -104,6 +104,12 @@ const detailsSettingsButton = document.getElementById("details-settings-button")
 const detailsFavoriteButton = document.getElementById("details-favorite-button");
 const detailsPropertiesButton = document.getElementById("details-properties-button");
 const detailsDropdown = document.getElementById("details-dropdown");
+const startupGateElement = document.getElementById("startup-gate");
+const startupGateStatusElement = document.getElementById("startup-gate-status");
+const startupStepSessionElement = document.getElementById("startup-step-session");
+const startupStepConfigElement = document.getElementById("startup-step-config");
+const startupStepLibraryElement = document.getElementById("startup-step-library");
+const startupRetryButtonElement = document.getElementById("startup-gate-retry");
 
 if (
   !(sessionAccountElement instanceof HTMLElement)
@@ -136,6 +142,12 @@ if (
   || !(detailsFavoriteButton instanceof HTMLButtonElement)
   || !(detailsPropertiesButton instanceof HTMLButtonElement)
   || !(detailsDropdown instanceof HTMLElement)
+  || !(startupGateElement instanceof HTMLElement)
+  || !(startupGateStatusElement instanceof HTMLElement)
+  || !(startupStepSessionElement instanceof HTMLElement)
+  || !(startupStepConfigElement instanceof HTMLElement)
+  || !(startupStepLibraryElement instanceof HTMLElement)
+  || !(startupRetryButtonElement instanceof HTMLButtonElement)
 ) {
   throw new Error("Main page is missing required DOM elements");
 }
@@ -181,6 +193,8 @@ const DOWNLOAD_ETA_SAMPLE_MIN_SECONDS = 0.5;
 const DOWNLOAD_ETA_STALE_MS = 15000;
 const TOAST_DURATION_MS = 3200;
 const DLC_CDN_CAPSULE_URL = "https://cdn.cloudflare.steamstatic.com/steam/apps";
+const STARTUP_TIMEOUT_MS = 20_000;
+const STARTUP_CLOSE_DURATION_MS = 320;
 const LIBRARY_SOFT_LOCK_ASPECTS: ReadonlyArray<{ label: string; ratio: number }> = [
   { label: "16:9", ratio: 16 / 9 },
   { label: "21:9", ratio: 21 / 9 },
@@ -190,9 +204,100 @@ const LIBRARY_SOFT_LOCK_ASPECTS: ReadonlyArray<{ label: string; ratio: number }>
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
 // runtime platform alias used below
 type RuntimePlatform = "windows" | "macos" | "linux" | "other";
+type StartupStepState = "pending" | "active" | "done" | "error";
+type SessionRefreshResult = "ready" | "redirecting" | "failed";
 type AppHistoryState = {
   gameId?: string;
   view?: "game-details" | "library";
+};
+
+let startupAttemptToken = 0;
+
+const runTaskWithTimeout = async <T>(
+  task: Promise<T>,
+  timeoutMs: number,
+  timeoutMessage: string
+): Promise<T> => {
+  let timeoutId: number | null = null;
+  const timeoutTask = new Promise<never>((_, reject) => {
+    timeoutId = window.setTimeout(() => {
+      reject(new Error(timeoutMessage));
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([task, timeoutTask]);
+  } finally {
+    if (timeoutId !== null) {
+      window.clearTimeout(timeoutId);
+    }
+  }
+};
+
+const waitForLibraryLoadToFinish = async (): Promise<void> => {
+  if (!librarySyncStore.isLoadingLibrary) {
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    const pollInterval = window.setInterval(() => {
+      if (!librarySyncStore.isLoadingLibrary) {
+        window.clearInterval(pollInterval);
+        resolve();
+      }
+    }, 120);
+  });
+};
+
+const getErrorMessage = (error: unknown, fallback: string): string => {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+
+  if (
+    typeof error === "object"
+    && error !== null
+    && "message" in error
+    && typeof (error as { message?: unknown }).message === "string"
+    && (error as { message: string }).message.trim()
+  ) {
+    return (error as { message: string }).message;
+  }
+
+  return fallback;
+};
+
+const setStartupStepState = (stepElement: HTMLElement, state: StartupStepState): void => {
+  stepElement.dataset.state = state;
+};
+
+const setStartupStatus = (message: string, isError = false): void => {
+  startupGateStatusElement.textContent = message;
+  startupGateElement.classList.toggle("is-error", isError);
+};
+
+const showStartupGate = (): void => {
+  startupGateElement.hidden = false;
+  startupGateElement.classList.remove("is-closing", "is-error");
+  startupRetryButtonElement.hidden = true;
+  startupRetryButtonElement.disabled = false;
+  document.body.classList.add("startup-pending");
+};
+
+const hideStartupGate = (): void => {
+  startupGateElement.classList.remove("is-error");
+  startupGateElement.classList.add("is-closing");
+  document.body.classList.remove("startup-pending");
+  window.setTimeout(() => {
+    startupGateElement.hidden = true;
+  }, STARTUP_CLOSE_DURATION_MS);
+};
+
+const resetStartupUi = (): void => {
+  setStartupStepState(startupStepSessionElement, "pending");
+  setStartupStepState(startupStepConfigElement, "pending");
+  setStartupStepState(startupStepLibraryElement, "pending");
+  setStartupStatus("Starting up...");
 };
 
 const resolveToastRegion = (): HTMLElement => {
@@ -517,7 +622,6 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
   activitySection.innerHTML = `
     <h3>Activity</h3>
     <div class="details-subsection game-activity-timeline">
-      <h4>Timeline</h4>
       <p class="placeholder">Loading recent activity…</p>
     </div>
   `;
@@ -550,12 +654,10 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
 
   const renderActivityPlaceholder = (message: string): void => {
     activityTimelineSection.replaceChildren();
-    const heading = document.createElement("h4");
-    heading.textContent = "Timeline";
     const placeholder = document.createElement("p");
     placeholder.className = "placeholder";
     placeholder.textContent = message;
-    activityTimelineSection.append(heading, placeholder);
+    activityTimelineSection.append(placeholder);
   };
 
   const createTimelineAchievementCard = (item: GameActivityTimelineItemPayload): HTMLElement => {
@@ -702,9 +804,6 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
     defaultWideCoverCandidates: string[]
   ): void => {
     activityTimelineSection.replaceChildren();
-    const heading = document.createElement("h4");
-    heading.textContent = "Timeline";
-    activityTimelineSection.append(heading);
 
     if (timeline.warning?.trim()) {
       const warning = document.createElement("p");
@@ -3243,38 +3342,28 @@ sessionAccountSignOutButton.addEventListener("click", () => {
   })();
 });
 
-const refreshLibrary = async (syncBeforeLoad = false, importSteamCollections = false): Promise<void> => {
+const refreshLibrary = async (
+  syncBeforeLoad = false,
+  importSteamCollections = false,
+  throwOnError = false
+): Promise<void> => {
+  if (librarySyncStore.isLoadingLibrary) {
+    if (!throwOnError) {
+      return;
+    }
+    await waitForLibraryLoadToFinish();
+  }
+
   if (librarySyncStore.isLoadingLibrary) {
     return;
   }
-
-  const runWithTimeout = async <T>(
-    task: Promise<T>,
-    timeoutMs: number,
-    timeoutMessage: string
-  ): Promise<T> => {
-    let timeoutId: number | null = null;
-    const timeoutTask = new Promise<never>((_, reject) => {
-      timeoutId = window.setTimeout(() => {
-        reject(new Error(timeoutMessage));
-      }, timeoutMs);
-    });
-
-    try {
-      return await Promise.race([task, timeoutTask]);
-    } finally {
-      if (timeoutId !== null) {
-        window.clearTimeout(timeoutId);
-      }
-    }
-  };
 
   try {
     setLibraryLoadingState(true);
 
     if (syncBeforeLoad && sessionStore.steamLinked) {
       try {
-        await runWithTimeout(
+        await runTaskWithTimeout(
           ipcService.syncSteamLibrary(),
           90_000,
           "Steam sync timed out. Loading cached library."
@@ -3328,26 +3417,32 @@ const refreshLibrary = async (syncBeforeLoad = false, importSteamCollections = f
     librarySummaryElement.classList.add("status-error");
     const appError = normalizeAppError(error, "Could not load library.");
     console.error(`[library/load] ${appError.kind}:${appError.code} ${appError.message}`);
+    if (throwOnError) {
+      throw new Error(appError.message);
+    }
   } finally {
     setLibraryLoadingState(false);
   }
 };
 
-const refreshSession = async (): Promise<boolean> => {
+const refreshSession = async (throwOnError = false): Promise<SessionRefreshResult> => {
   try {
     const session = await ipcService.getSession();
     if (!session) {
       window.location.replace("/index.html");
-      return false;
+      return "redirecting";
     }
 
     setSessionStatus(session.steamLinked);
-    return true;
+    return "ready";
   } catch (error) {
     const appError = normalizeAppError(error, "Could not load session data.");
     console.error(`[session/load] ${appError.kind}:${appError.code} ${appError.message}`);
     setSessionStatus(false, true);
-    return false;
+    if (throwOnError) {
+      throw new Error(appError.message);
+    }
+    return "failed";
   }
 };
 
@@ -3360,6 +3455,86 @@ refreshLibraryButton.addEventListener("click", () => {
   })();
 });
 
+const applyStartupCoreConfiguration = (): void => {
+  setLibraryViewMode("games", false);
+  setLibrarySummary("Loading library...");
+  renderLibraryLastUpdated();
+  renderDownloadActivity();
+};
+
+const markActiveStartupStepAsError = (): void => {
+  const steps = [startupStepSessionElement, startupStepConfigElement, startupStepLibraryElement];
+  const activeStep = steps.find((stepElement) => stepElement.dataset.state === "active");
+  if (activeStep) {
+    setStartupStepState(activeStep, "error");
+  }
+};
+
+const runStartupInitialization = async (): Promise<void> => {
+  const attemptToken = ++startupAttemptToken;
+  showStartupGate();
+  resetStartupUi();
+  const ensureCurrentStartupAttempt = (): void => {
+    if (attemptToken !== startupAttemptToken) {
+      throw new Error("Startup attempt was superseded.");
+    }
+  };
+
+  try {
+    const startupResult = await runTaskWithTimeout((async (): Promise<SessionRefreshResult> => {
+      setStartupStepState(startupStepSessionElement, "active");
+      setStartupStatus("Restoring your session...");
+      const sessionStatus = await refreshSession(true);
+      ensureCurrentStartupAttempt();
+      if (sessionStatus === "redirecting") {
+        setStartupStepState(startupStepSessionElement, "done");
+        setStartupStatus("Redirecting to sign in...");
+        return "redirecting";
+      }
+
+      setStartupStepState(startupStepSessionElement, "done");
+      setStartupStepState(startupStepConfigElement, "active");
+      setStartupStatus("Loading core configuration...");
+      applyStartupCoreConfiguration();
+      setStartupStepState(startupStepConfigElement, "done");
+
+      setStartupStepState(startupStepLibraryElement, "active");
+      setStartupStatus("Syncing Steam library and loading required data...");
+      await refreshLibrary(true, true, true);
+      ensureCurrentStartupAttempt();
+      setStartupStepState(startupStepLibraryElement, "done");
+      return "ready";
+    })(), STARTUP_TIMEOUT_MS, "Startup timed out. Please retry.");
+
+    if (attemptToken !== startupAttemptToken) {
+      return;
+    }
+
+    if (startupResult === "redirecting") {
+      return;
+    }
+
+    setStartupStatus("Library is ready.");
+    hideStartupGate();
+  } catch (error) {
+    if (attemptToken !== startupAttemptToken) {
+      return;
+    }
+
+    markActiveStartupStepAsError();
+    setStartupStatus(getErrorMessage(error, "Startup failed. Please retry."), true);
+    startupRetryButtonElement.hidden = false;
+    startupRetryButtonElement.disabled = false;
+    if (startupAttemptToken === attemptToken) {
+      startupAttemptToken += 1;
+    }
+  }
+};
+
+startupRetryButtonElement.addEventListener("click", () => {
+  void runStartupInitialization();
+});
+
 window.addEventListener("resize", applyLibraryAspectSoftLock);
 window.addEventListener("beforeunload", stopDownloadPolling);
 window.addEventListener("beforeunload", stopLibraryLastUpdatedTimer);
@@ -3369,17 +3544,7 @@ const initialize = async (): Promise<void> => {
   registerGridZoomShortcut();
   const cleanupGridWheelSmoothing = registerLinuxGridWheelSmoothing();
   window.addEventListener("beforeunload", cleanupGridWheelSmoothing, { once: true });
-  setLibraryViewMode("games", false);
-  setLibrarySummary("Loading library...");
-  renderLibraryLastUpdated();
-  renderDownloadActivity();
-
-  const hasSession = await refreshSession();
-  if (!hasSession) {
-    return;
-  }
-
-  await refreshLibrary(true);
+  await runStartupInitialization();
 };
 
 void initialize();
