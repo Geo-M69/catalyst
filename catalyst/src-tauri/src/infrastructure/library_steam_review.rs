@@ -13,14 +13,14 @@ use crate::AppState;
 use aes::Aes128;
 use cbc::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
 use chrono::{TimeZone, Utc};
-use rusqlite::Connection;
+use rusqlite::{params, Connection, OptionalExtension};
 use scraper::{Html, Selector};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 const STEAM_APP_REVIEWS_ENDPOINT: &str = "https://store.steampowered.com/appreviews/";
 const STEAM_REVIEW_CACHE_TTL_SECONDS: i64 = 15 * 60;
-const STEAM_REVIEW_CACHE_VERSION: &str = "v2";
+const STEAM_REVIEW_CACHE_VERSION: &str = "v3";
 const CHROMIUM_COOKIE_V10_AES_KEY: [u8; 16] = [
     0xfd, 0x62, 0x1f, 0xe5, 0xa2, 0xb4, 0x02, 0x53, 0x9d, 0xfa, 0x14, 0x7c, 0xa9, 0x27, 0x27, 0x78,
 ];
@@ -89,6 +89,104 @@ fn empty_game_review_response(
         warning,
         last_synced_at: Utc::now().to_rfc3339(),
     }
+}
+
+fn find_cached_game_review(
+    connection: &Connection,
+    steam_id: &str,
+    app_id: u64,
+    stale_before: chrono::DateTime<Utc>,
+) -> Result<Option<GameReviewResponse>, String> {
+    let app_id_text = app_id.to_string();
+    let cached_entry = connection
+        .query_row(
+            "
+            SELECT response_json, fetched_at
+            FROM steam_review_cache
+            WHERE steam_id = ?1 AND app_id = ?2
+            ",
+            params![steam_id, app_id_text],
+            |row| {
+                let response_json: String = row.get(0)?;
+                let fetched_at: String = row.get(1)?;
+                Ok((response_json, fetched_at))
+            },
+        )
+        .optional()
+        .map_err(|error| format!("Failed to query cached Steam review payload: {error}"))?;
+
+    let Some((response_json, fetched_at_raw)) = cached_entry else {
+        return Ok(None);
+    };
+
+    let fetched_at = chrono::DateTime::parse_from_rfc3339(fetched_at_raw.trim())
+        .map_err(|error| format!("Failed to parse cached Steam review timestamp: {error}"))?
+        .with_timezone(&Utc);
+    if fetched_at < stale_before {
+        return Ok(None);
+    }
+
+    let response = serde_json::from_str::<GameReviewResponse>(&response_json)
+        .map_err(|error| format!("Failed to decode cached Steam review payload: {error}"))?;
+    Ok(Some(response))
+}
+
+fn find_any_cached_game_review(
+    connection: &Connection,
+    steam_id: &str,
+    app_id: u64,
+) -> Result<Option<GameReviewResponse>, String> {
+    let app_id_text = app_id.to_string();
+    let cached_response_json = connection
+        .query_row(
+            "
+            SELECT response_json
+            FROM steam_review_cache
+            WHERE steam_id = ?1 AND app_id = ?2
+            ",
+            params![steam_id, app_id_text],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| format!("Failed to query stale cached Steam review payload: {error}"))?;
+
+    let Some(response_json) = cached_response_json else {
+        return Ok(None);
+    };
+
+    let response = serde_json::from_str::<GameReviewResponse>(&response_json)
+        .map_err(|error| format!("Failed to decode stale cached Steam review payload: {error}"))?;
+    Ok(Some(response))
+}
+
+fn cache_game_review(
+    connection: &Connection,
+    steam_id: &str,
+    app_id: u64,
+    response: &GameReviewResponse,
+) -> Result<(), String> {
+    let app_id_text = app_id.to_string();
+    let response_json = serde_json::to_string(response)
+        .map_err(|error| format!("Failed to encode Steam review cache payload: {error}"))?;
+    let fetched_at = Utc::now().to_rfc3339();
+    connection
+        .execute(
+            "
+            INSERT INTO steam_review_cache (
+              steam_id,
+              app_id,
+              response_json,
+              fetched_at
+            )
+            VALUES (?1, ?2, ?3, ?4)
+            ON CONFLICT(steam_id, app_id) DO UPDATE SET
+              response_json = excluded.response_json,
+              fetched_at = excluded.fetched_at
+            ",
+            params![steam_id, app_id_text, response_json, fetched_at],
+        )
+        .map_err(|error| format!("Failed to cache Steam review payload: {error}"))?;
+    Ok(())
 }
 
 fn fetch_steam_review_for_user(
@@ -787,6 +885,15 @@ pub(crate) fn get_game_review(
     };
 
     let cache_key = format!("steam_review:{STEAM_REVIEW_CACHE_VERSION}:{steam_id}:{app_id}");
+    let persist_review_cache = |response: &GameReviewResponse| {
+        if let Ok(serialized_response) = serde_json::to_value(response) {
+            CacheAdapter::new().set_json(&cache_key, serialized_response);
+        }
+        if let Err(error) = cache_game_review(&connection, steam_id, app_id, response) {
+            eprintln!("Failed to persist Steam review cache: {error}");
+        }
+    };
+
     if !force_refresh {
         if let Some(cached_value) =
             CacheAdapter::new().get_json(&cache_key, STEAM_REVIEW_CACHE_TTL_SECONDS)
@@ -794,6 +901,35 @@ pub(crate) fn get_game_review(
             if let Ok(cached_response) = serde_json::from_value::<GameReviewResponse>(cached_value)
             {
                 return Ok(cached_response);
+            }
+        }
+
+        let stale_before = Utc::now() - chrono::Duration::seconds(STEAM_REVIEW_CACHE_TTL_SECONDS);
+        match find_cached_game_review(&connection, steam_id, app_id, stale_before) {
+            Ok(Some(cached_response)) => {
+                if let Ok(serialized_response) = serde_json::to_value(&cached_response) {
+                    CacheAdapter::new().set_json(&cache_key, serialized_response);
+                }
+                return Ok(cached_response);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                eprintln!("Failed to read persisted Steam review cache: {error}");
+            }
+        }
+    }
+
+    if !force_refresh {
+        match find_any_cached_game_review(&connection, steam_id, app_id) {
+            Ok(Some(cached_response)) => {
+                if let Ok(serialized_response) = serde_json::to_value(&cached_response) {
+                    CacheAdapter::new().set_json(&cache_key, serialized_response);
+                }
+                return Ok(cached_response);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                eprintln!("Failed to read stale persisted Steam review cache: {error}");
             }
         }
     }
@@ -825,9 +961,7 @@ pub(crate) fn get_game_review(
     }
     response.last_synced_at = Utc::now().to_rfc3339();
 
-    if let Ok(serialized_response) = serde_json::to_value(&response) {
-        CacheAdapter::new().set_json(&cache_key, serialized_response);
-    }
+    persist_review_cache(&response);
 
     Ok(response)
 }

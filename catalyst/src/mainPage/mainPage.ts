@@ -47,6 +47,7 @@ import {
   type LibraryViewMode,
 } from "./stores";
 import type {
+  GameAchievementsPayload,
   GameActivityTimelineItemPayload,
   GameActivityTimelinePayload,
   GameDlcPayload,
@@ -193,7 +194,7 @@ const DOWNLOAD_ETA_SAMPLE_MIN_SECONDS = 0.5;
 const DOWNLOAD_ETA_STALE_MS = 15000;
 const TOAST_DURATION_MS = 3200;
 const DLC_CDN_CAPSULE_URL = "https://cdn.cloudflare.steamstatic.com/steam/apps";
-const FRIENDS_ACTIVITY_PARTIAL_WARNING_PATTERN = /\bfirst\s+\d+\s+friends\b/i;
+const STEAM_REVIEW_MISSING_WARNING_PATTERN = /no public steam review found/i;
 const STARTUP_TIMEOUT_MS = 20_000;
 const STARTUP_CLOSE_DURATION_MS = 320;
 const LIBRARY_SOFT_LOCK_ASPECTS: ReadonlyArray<{ label: string; ratio: number }> = [
@@ -940,6 +941,96 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
     achievementsSection.append(heading, placeholder);
   };
 
+  const renderAchievements = (payload: GameAchievementsPayload): void => {
+    achievementsSection.replaceChildren();
+    const heading = document.createElement("h4");
+    heading.textContent = "Achievements";
+
+    const entries = payload.entries ?? [];
+    if (entries.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "placeholder";
+      empty.textContent = payload.warning ?? "No achievements available for this title.";
+      achievementsSection.append(heading, empty);
+      return;
+    }
+
+    const summary = document.createElement("div");
+    summary.className = "achievements-summary";
+
+    const total = payload.total ?? 0;
+    const unlocked = payload.unlockedCount ?? 0;
+    const percent = payload.percent ?? (total > 0 ? (unlocked / total) * 100 : 0);
+
+    const countP = document.createElement("p");
+    countP.className = "achievements-count";
+    countP.textContent = `You've unlocked ${unlocked}/${total} (${Math.round(percent)}%)`;
+
+    const progressWrap = document.createElement("div");
+    progressWrap.className = "achievements-progress";
+    const bar = document.createElement("div");
+    bar.className = "achievements-bar";
+    bar.setAttribute("role", "progressbar");
+    bar.setAttribute("aria-valuemin", "0");
+    bar.setAttribute("aria-valuemax", "100");
+    bar.setAttribute("aria-valuenow", `${Math.round(percent)}`);
+    const fill = document.createElement("div");
+    fill.className = "achievements-bar-fill";
+    fill.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+    bar.append(fill);
+    progressWrap.append(bar);
+
+    const iconsRow = document.createElement("div");
+    iconsRow.className = "achievements-icons";
+
+    const maxVisible = 10;
+    let shown = 0;
+    for (const entry of entries) {
+      if (shown >= maxVisible) break;
+      const iconWrap = document.createElement("div");
+      iconWrap.className = `achievements-icon ${entry.unlocked ? "is-unlocked" : "is-locked"}`;
+      iconWrap.setAttribute("title", entry.name + (entry.unlockedAt ? ` — ${entry.unlockedAt}` : ""));
+      if (entry.icon) {
+        const img = document.createElement("img");
+        img.src = entry.icon;
+        img.alt = entry.name;
+        img.loading = "lazy";
+        iconWrap.append(img);
+      } else {
+        const fallback = document.createElement("div");
+        fallback.className = "achievements-icon-fallback";
+        fallback.textContent = entry.name.slice(0, 1).toUpperCase() || "?";
+        iconWrap.append(fallback);
+      }
+      iconsRow.append(iconWrap);
+      shown += 1;
+    }
+
+    if (entries.length > maxVisible) {
+      const more = document.createElement("div");
+      more.className = "achievements-more";
+      more.textContent = `+${entries.length - maxVisible}`;
+      iconsRow.append(more);
+    }
+
+    const viewLinkP = document.createElement("p");
+    viewLinkP.className = "achievements-view-link";
+    const viewLink = document.createElement("a");
+    const appId = parseInt(game.externalId || "", 10);
+    if (!Number.isNaN(appId)) {
+      viewLink.href = `https://steamcommunity.com/stats/${appId}/achievements`;
+    } else {
+      viewLink.href = `https://store.steampowered.com/`;
+    }
+    viewLink.target = "_blank";
+    viewLink.rel = "noopener noreferrer";
+    viewLink.textContent = "View My Achievements";
+    viewLinkP.append(viewLink);
+
+    summary.append(countP, progressWrap, iconsRow, viewLinkP);
+    achievementsSection.append(heading, summary);
+  };
+
   const tradingCardsSection = document.createElement("section");
   tradingCardsSection.className = "details-section trading-cards-section";
   tradingCardsSection.hidden = true;
@@ -1356,8 +1447,10 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
   const friendsSection = document.createElement("section");
   friendsSection.className = "details-section";
   friendsSection.innerHTML = `<h4>Friends</h4><p class="placeholder">Loading friends activity…</p>`;
+  let friendsActivityRefreshToken = 0;
 
   const renderFriendsPlaceholder = (message: string): void => {
+    friendsActivityRefreshToken += 1;
     friendsSection.replaceChildren();
     const heading = document.createElement("h4");
     heading.textContent = "Friends";
@@ -1484,56 +1577,84 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
   cols.append(main, side);
   gameDetailsContentElement.append(cols);
 
-  // Async: fetch Steam review so we can show true playtime_at_review when available.
+  const isActiveGameDetailsView = (): boolean => (
+    detailsViewStore.appViewMode === "game-details" && detailsViewStore.selectedGameId === game.id
+  );
+  let reviewRefreshToken = 0;
+  let timelineRefreshToken = 0;
+  let achievementsRefreshToken = 0;
+
+  // Async: fetch Steam review using stale-while-revalidate.
   void (async () => {
     const normalizedProvider = game.provider.trim().toLocaleLowerCase();
     if (normalizedProvider !== "steam") {
       return;
     }
 
-    const reviewPayload = await getGameReviewForGame(game, true);
-    if (detailsViewStore.appViewMode !== "game-details" || detailsViewStore.selectedGameId !== game.id) {
-      return;
-    }
+    const reviewToken = ++reviewRefreshToken;
+    const applyReviewPayload = (reviewPayload: GameReviewPayload | null, isRevalidation: boolean): void => {
+      const steamReviewPayload = reviewPayload?.review;
+      if (steamReviewPayload) {
+        const steamReview: Review = {
+          id: steamReviewPayload.id || `steam-review-${game.id}`,
+          userId: "me",
+          gameId: game.id,
+          recommended: steamReviewPayload.recommended,
+          text: steamReviewPayload.text?.trim() || "No review text available.",
+          playtimeMinutes: Math.max(0, Math.round(steamReviewPayload.playtimeMinutes ?? 0)),
+          playtimeCapturedAtReview: true,
+          createdAt: steamReviewPayload.createdAt ?? new Date().toISOString(),
+          likes: Math.max(0, Math.round(steamReviewPayload.likes ?? 0)),
+          comments: Math.max(0, Math.round(steamReviewPayload.comments ?? 0)),
+        };
 
-    const steamReviewPayload = reviewPayload?.review;
-    if (!steamReviewPayload) {
+        reviewToShow = steamReview;
+        if (!activeReviewCard.isConnected) {
+          return;
+        }
+        const steamReviewCard = createReviewCard(steamReview);
+        activeReviewCard.replaceWith(steamReviewCard);
+        activeReviewCard = steamReviewCard;
+        return;
+      }
+
+      const warningMessage = reviewPayload?.warning?.trim();
+      const missingReviewWarning = STEAM_REVIEW_MISSING_WARNING_PATTERN.test(warningMessage ?? "");
+      if (isRevalidation && !missingReviewWarning) {
+        return;
+      }
       if (!activeReviewCard.isConnected) {
         return;
       }
+
       const unavailableCard = document.createElement("div");
       unavailableCard.className = "review-card placeholder";
-      unavailableCard.textContent = reviewPayload?.warning?.trim()
+      unavailableCard.textContent = warningMessage
         || "Steam review data is unavailable for this title/account.";
       activeReviewCard.replaceWith(unavailableCard);
       activeReviewCard = unavailableCard;
       reviewToShow = null;
-      return;
-    }
-
-    const steamReview: Review = {
-      id: steamReviewPayload.id || `steam-review-${game.id}`,
-      userId: "me",
-      gameId: game.id,
-      recommended: steamReviewPayload.recommended,
-      text: steamReviewPayload.text?.trim() || "No review text available.",
-      playtimeMinutes: Math.max(0, Math.round(steamReviewPayload.playtimeMinutes ?? 0)),
-      playtimeCapturedAtReview: true,
-      createdAt: steamReviewPayload.createdAt ?? new Date().toISOString(),
-      likes: Math.max(0, Math.round(steamReviewPayload.likes ?? 0)),
-      comments: Math.max(0, Math.round(steamReviewPayload.comments ?? 0)),
     };
 
-    reviewToShow = steamReview;
-    if (!activeReviewCard.isConnected) {
+    const cachedReviewPayload = await getGameReviewForGame(game, false);
+    if (!isActiveGameDetailsView() || reviewToken !== reviewRefreshToken) {
       return;
     }
-    const steamReviewCard = createReviewCard(steamReview);
-    activeReviewCard.replaceWith(steamReviewCard);
-    activeReviewCard = steamReviewCard;
+    applyReviewPayload(cachedReviewPayload, false);
+
+    void (async () => {
+      const refreshedReviewPayload = await getGameReviewForGame(game, true);
+      if (!isActiveGameDetailsView() || reviewToken !== reviewRefreshToken) {
+        return;
+      }
+      if (!refreshedReviewPayload) {
+        return;
+      }
+      applyReviewPayload(refreshedReviewPayload, true);
+    })();
   })();
 
-  // Async: fetch friends activity and update friendsSection if available
+  // Async: fetch timeline using stale-while-revalidate.
   void (async () => {
     const normalizedProvider = game.provider.trim().toLocaleLowerCase();
     if (normalizedProvider !== "steam") {
@@ -1541,21 +1662,37 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
       return;
     }
 
+    const timelineToken = ++timelineRefreshToken;
     const [timeline, timelineWideCoverCandidates] = await Promise.all([
       getGameActivityTimelineForGame(game, forceFriendsActivityRefresh),
       resolveTimelineWideCoverCandidates(game),
     ]);
-    if (detailsViewStore.appViewMode !== "game-details" || detailsViewStore.selectedGameId !== game.id) {
+    if (!isActiveGameDetailsView() || timelineToken !== timelineRefreshToken) {
       return;
     }
     if (!timeline) {
       renderActivityPlaceholder("Could not load activity timeline.");
+    } else {
+      renderActivityTimeline(timeline, timelineWideCoverCandidates);
+    }
+
+    if (forceFriendsActivityRefresh) {
       return;
     }
-    renderActivityTimeline(timeline, timelineWideCoverCandidates);
+
+    void (async () => {
+      const refreshedTimeline = await getGameActivityTimelineForGame(game, true);
+      if (!isActiveGameDetailsView() || timelineToken !== timelineRefreshToken) {
+        return;
+      }
+      if (!refreshedTimeline) {
+        return;
+      }
+      renderActivityTimeline(refreshedTimeline, timelineWideCoverCandidates);
+    })();
   })();
 
-  // Async: fetch achievements summary and render Steam-like UI
+  // Async: fetch achievements using stale-while-revalidate.
   void (async () => {
     const normalizedProvider = game.provider.trim().toLocaleLowerCase();
     if (!sessionStore.steamLinked) {
@@ -1567,100 +1704,34 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
       return;
     }
 
+    const achievementsToken = ++achievementsRefreshToken;
+
     try {
-      const payload = await ipcService.getGameAchievements({ provider: game.provider, externalId: game.externalId, forceRefresh: false });
-      if (detailsViewStore.appViewMode !== "game-details" || detailsViewStore.selectedGameId !== game.id) {
+      const payload = await ipcService.getGameAchievements({
+        provider: game.provider,
+        externalId: game.externalId,
+        forceRefresh: false,
+      });
+      if (!isActiveGameDetailsView() || achievementsToken !== achievementsRefreshToken) {
         return;
       }
+      renderAchievements(payload);
 
-      // Clear placeholder and build UI
-      achievementsSection.replaceChildren();
-      const heading = document.createElement("h4");
-      heading.textContent = "Achievements";
-      const summary = document.createElement("div");
-      summary.className = "achievements-summary";
-
-      const total = payload.total ?? 0;
-      const unlocked = payload.unlockedCount ?? 0;
-      const percent = payload.percent ?? (total > 0 ? (unlocked / total) * 100 : 0);
-
-      const countP = document.createElement("p");
-      countP.className = "achievements-count";
-      countP.textContent = `You've unlocked ${unlocked}/${total} (${Math.round(percent)}%)`;
-
-      const progressWrap = document.createElement("div");
-      progressWrap.className = "achievements-progress";
-      const bar = document.createElement("div");
-      bar.className = "achievements-bar";
-      bar.setAttribute("role", "progressbar");
-      bar.setAttribute("aria-valuemin", "0");
-      bar.setAttribute("aria-valuemax", "100");
-      bar.setAttribute("aria-valuenow", `${Math.round(percent)}`);
-      const fill = document.createElement("div");
-      fill.className = "achievements-bar-fill";
-      fill.style.width = `${Math.max(0, Math.min(100, percent))}%`;
-      bar.append(fill);
-      progressWrap.append(bar);
-
-      const iconsRow = document.createElement("div");
-      iconsRow.className = "achievements-icons";
-
-      const entries = payload.entries ?? [];
-      if (entries.length === 0) {
-        const empty = document.createElement("p");
-        empty.className = "placeholder";
-        empty.textContent = payload.warning ?? "No achievements available for this title.";
-        achievementsSection.append(heading, empty);
-        return;
-      }
-
-      const maxVisible = 10;
-      let shown = 0;
-      for (const entry of entries) {
-        if (shown >= maxVisible) break;
-        const iconWrap = document.createElement("div");
-        iconWrap.className = `achievements-icon ${entry.unlocked ? "is-unlocked" : "is-locked"}`;
-        iconWrap.setAttribute("title", entry.name + (entry.unlockedAt ? ` — ${entry.unlockedAt}` : ""));
-        if (entry.icon) {
-          const img = document.createElement("img");
-          img.src = entry.icon;
-          img.alt = entry.name;
-          img.loading = "lazy";
-          iconWrap.append(img);
-        } else {
-          const fallback = document.createElement("div");
-          fallback.className = "achievements-icon-fallback";
-          fallback.textContent = entry.name.slice(0, 1).toUpperCase() || "?";
-          iconWrap.append(fallback);
+      void (async () => {
+        try {
+          const refreshedPayload = await ipcService.getGameAchievements({
+            provider: game.provider,
+            externalId: game.externalId,
+            forceRefresh: true,
+          });
+          if (!isActiveGameDetailsView() || achievementsToken !== achievementsRefreshToken) {
+            return;
+          }
+          renderAchievements(refreshedPayload);
+        } catch (refreshError) {
+          console.error("getGameAchievements background refresh failed:", refreshError);
         }
-        iconsRow.append(iconWrap);
-        shown += 1;
-      }
-
-      if (entries.length > maxVisible) {
-        const more = document.createElement("div");
-        more.className = "achievements-more";
-        more.textContent = `+${entries.length - maxVisible}`;
-        iconsRow.append(more);
-      }
-
-      const viewLinkP = document.createElement("p");
-      viewLinkP.className = "achievements-view-link";
-      const viewLink = document.createElement("a");
-      // Link to Steam achievements page (general)
-      const appId = parseInt(game.externalId || "", 10);
-      if (!Number.isNaN(appId)) {
-        viewLink.href = `https://steamcommunity.com/stats/${appId}/achievements`;
-      } else {
-        viewLink.href = `https://store.steampowered.com/`;
-      }
-      viewLink.target = "_blank";
-      viewLink.rel = "noopener noreferrer";
-      viewLink.textContent = "View My Achievements";
-      viewLinkP.append(viewLink);
-
-      summary.append(countP, progressWrap, iconsRow, viewLinkP);
-      achievementsSection.append(heading, summary);
+      })();
     } catch (err: unknown) {
       console.error("getGameAchievements failed:", err);
       const message = err instanceof Error ? err.message : "Could not load achievements right now.";
@@ -1806,13 +1877,14 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
     }
     renderFriendsActivity(friendsActivity);
 
-    const hasPartialFriendsWarning =
-      !forceFriendsActivityRefresh
-      && FRIENDS_ACTIVITY_PARTIAL_WARNING_PATTERN.test(friendsActivity.warning ?? "");
-    if (hasPartialFriendsWarning) {
+    if (!forceFriendsActivityRefresh) {
+      const refreshToken = ++friendsActivityRefreshToken;
       void (async () => {
         const refreshedFriendsActivity = await getGameFriendsActivityForGame(game, true);
         if (detailsViewStore.appViewMode !== "game-details" || detailsViewStore.selectedGameId !== game.id) {
+          return;
+        }
+        if (refreshToken !== friendsActivityRefreshToken) {
           return;
         }
         if (!refreshedFriendsActivity) {

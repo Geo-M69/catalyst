@@ -170,6 +170,39 @@ pub(crate) fn initialize_database(db_path: &Path) -> Result<(), String> {
             CREATE INDEX IF NOT EXISTS idx_steam_friends_activity_cache_fetched_at
               ON steam_friends_activity_cache(fetched_at);
 
+            CREATE TABLE IF NOT EXISTS steam_review_cache (
+              steam_id TEXT NOT NULL,
+              app_id TEXT NOT NULL,
+              response_json TEXT NOT NULL,
+              fetched_at TEXT NOT NULL,
+              PRIMARY KEY (steam_id, app_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_steam_review_cache_fetched_at
+              ON steam_review_cache(fetched_at);
+
+            CREATE TABLE IF NOT EXISTS steam_activity_timeline_cache (
+              steam_id TEXT NOT NULL,
+              app_id TEXT NOT NULL,
+              response_json TEXT NOT NULL,
+              fetched_at TEXT NOT NULL,
+              PRIMARY KEY (steam_id, app_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_steam_activity_timeline_cache_fetched_at
+              ON steam_activity_timeline_cache(fetched_at);
+
+            CREATE TABLE IF NOT EXISTS steam_achievements_cache (
+              steam_id TEXT NOT NULL,
+              app_id TEXT NOT NULL,
+              response_json TEXT NOT NULL,
+              fetched_at TEXT NOT NULL,
+              PRIMARY KEY (steam_id, app_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_steam_achievements_cache_fetched_at
+              ON steam_achievements_cache(fetched_at);
+
                         CREATE TABLE IF NOT EXISTS game_genres (
                             user_id TEXT NOT NULL,
                             provider TEXT NOT NULL,

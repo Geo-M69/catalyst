@@ -10,7 +10,7 @@ use crate::{
     normalize_game_identity_input, open_connection, AppState, STEAM_APP_DETAILS_CACHE_TTL_HOURS,
 };
 use chrono::{Duration as ChronoDuration, Utc};
-use rusqlite::Connection;
+use rusqlite::{params, Connection, OptionalExtension};
 use scraper::{Html, Selector};
 use std::collections::HashMap;
 use url::Url;
@@ -22,7 +22,7 @@ const STEAM_WEB_API_GAME_SCHEMA_ENDPOINT: &str =
 const STEAM_WEB_API_BADGES_ENDPOINT: &str =
     "https://api.steampowered.com/IPlayerService/GetBadges/v1/";
 const STEAM_ACHIEVEMENTS_CACHE_TTL_SECONDS: i64 = 15 * 60;
-const STEAM_ACHIEVEMENTS_CACHE_VERSION: &str = "v1";
+const STEAM_ACHIEVEMENTS_CACHE_VERSION: &str = "v2";
 const STEAM_TRADING_CARDS_CACHE_TTL_SECONDS: i64 = 15 * 60;
 const STEAM_TRADING_CARDS_CACHE_VERSION: &str = "v1";
 
@@ -114,6 +114,104 @@ fn append_warning(existing_warning: &mut Option<String>, next_warning: impl Into
             *existing_warning = Some(next_warning.to_owned());
         }
     }
+}
+
+fn find_cached_game_achievements(
+    connection: &Connection,
+    steam_id: &str,
+    app_id: u64,
+    stale_before: chrono::DateTime<Utc>,
+) -> Result<Option<GameAchievementsResponse>, String> {
+    let app_id_text = app_id.to_string();
+    let cached_entry = connection
+        .query_row(
+            "
+            SELECT response_json, fetched_at
+            FROM steam_achievements_cache
+            WHERE steam_id = ?1 AND app_id = ?2
+            ",
+            params![steam_id, app_id_text],
+            |row| {
+                let response_json: String = row.get(0)?;
+                let fetched_at: String = row.get(1)?;
+                Ok((response_json, fetched_at))
+            },
+        )
+        .optional()
+        .map_err(|error| format!("Failed to query cached achievements payload: {error}"))?;
+
+    let Some((response_json, fetched_at_raw)) = cached_entry else {
+        return Ok(None);
+    };
+
+    let fetched_at = chrono::DateTime::parse_from_rfc3339(fetched_at_raw.trim())
+        .map_err(|error| format!("Failed to parse cached achievements timestamp: {error}"))?
+        .with_timezone(&Utc);
+    if fetched_at < stale_before {
+        return Ok(None);
+    }
+
+    let response = serde_json::from_str::<GameAchievementsResponse>(&response_json)
+        .map_err(|error| format!("Failed to decode cached achievements payload: {error}"))?;
+    Ok(Some(response))
+}
+
+fn find_any_cached_game_achievements(
+    connection: &Connection,
+    steam_id: &str,
+    app_id: u64,
+) -> Result<Option<GameAchievementsResponse>, String> {
+    let app_id_text = app_id.to_string();
+    let cached_response_json = connection
+        .query_row(
+            "
+            SELECT response_json
+            FROM steam_achievements_cache
+            WHERE steam_id = ?1 AND app_id = ?2
+            ",
+            params![steam_id, app_id_text],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| format!("Failed to query stale cached achievements payload: {error}"))?;
+
+    let Some(response_json) = cached_response_json else {
+        return Ok(None);
+    };
+
+    let response = serde_json::from_str::<GameAchievementsResponse>(&response_json)
+        .map_err(|error| format!("Failed to decode stale cached achievements payload: {error}"))?;
+    Ok(Some(response))
+}
+
+fn cache_game_achievements(
+    connection: &Connection,
+    steam_id: &str,
+    app_id: u64,
+    response: &GameAchievementsResponse,
+) -> Result<(), String> {
+    let app_id_text = app_id.to_string();
+    let response_json = serde_json::to_string(response)
+        .map_err(|error| format!("Failed to encode achievements cache payload: {error}"))?;
+    let fetched_at = Utc::now().to_rfc3339();
+    connection
+        .execute(
+            "
+            INSERT INTO steam_achievements_cache (
+              steam_id,
+              app_id,
+              response_json,
+              fetched_at
+            )
+            VALUES (?1, ?2, ?3, ?4)
+            ON CONFLICT(steam_id, app_id) DO UPDATE SET
+              response_json = excluded.response_json,
+              fetched_at = excluded.fetched_at
+            ",
+            params![steam_id, app_id_text, response_json, fetched_at],
+        )
+        .map_err(|error| format!("Failed to cache achievements payload: {error}"))?;
+    Ok(())
 }
 
 fn empty_game_trading_cards_response(
@@ -525,6 +623,18 @@ pub(crate) fn get_game_achievements(
         "steam_achievements:{STEAM_ACHIEVEMENTS_CACHE_VERSION}:{steam_id}:{app_id}",
         steam_id = steam_id_opt.as_deref().unwrap_or("unknown")
     );
+    let steam_cache_identity = steam_id_opt.as_deref().unwrap_or("unknown");
+    let persist_achievements_cache = |response: &GameAchievementsResponse| {
+        if let Ok(serialized_response) = serde_json::to_value(response) {
+            CacheAdapter::new().set_json(&cache_key, serialized_response);
+        }
+        if let Err(error) =
+            cache_game_achievements(&connection, steam_cache_identity, app_id, response)
+        {
+            eprintln!("Failed to persist Steam achievements cache: {error}");
+        }
+    };
+
     if !force_refresh {
         if let Some(cached_value) =
             CacheAdapter::new().get_json(&cache_key, STEAM_ACHIEVEMENTS_CACHE_TTL_SECONDS)
@@ -533,6 +643,35 @@ pub(crate) fn get_game_achievements(
                 serde_json::from_value::<GameAchievementsResponse>(cached_value)
             {
                 return Ok(cached_response);
+            }
+        }
+
+        let stale_before = Utc::now() - chrono::Duration::seconds(STEAM_ACHIEVEMENTS_CACHE_TTL_SECONDS);
+        match find_cached_game_achievements(&connection, steam_cache_identity, app_id, stale_before) {
+            Ok(Some(cached_response)) => {
+                if let Ok(serialized_response) = serde_json::to_value(&cached_response) {
+                    CacheAdapter::new().set_json(&cache_key, serialized_response);
+                }
+                return Ok(cached_response);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                eprintln!("Failed to read persisted Steam achievements cache: {error}");
+            }
+        }
+    }
+
+    if !force_refresh {
+        match find_any_cached_game_achievements(&connection, steam_cache_identity, app_id) {
+            Ok(Some(cached_response)) => {
+                if let Ok(serialized_response) = serde_json::to_value(&cached_response) {
+                    CacheAdapter::new().set_json(&cache_key, serialized_response);
+                }
+                return Ok(cached_response);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                eprintln!("Failed to read stale persisted Steam achievements cache: {error}");
             }
         }
     }
@@ -698,9 +837,7 @@ pub(crate) fn get_game_achievements(
 
     response.last_synced_at = Utc::now().to_rfc3339();
 
-    if let Ok(serialized_response) = serde_json::to_value(&response) {
-        CacheAdapter::new().set_json(&cache_key, serialized_response);
-    }
+    persist_achievements_cache(&response);
 
     Ok(response)
 }
