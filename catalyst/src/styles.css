@@ -805,15 +805,18 @@ body.show-back-button #game-details-back-button {
 
 .game-details-columns {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
-  gap: 1.125rem;
+  grid-template-columns: minmax(0, 1fr) clamp(250px, 29.5vw, 1060px);
+  gap: clamp(4.0rem, 0.9vw, 1.1rem);
   align-items: start;
 }
 
 .game-details-main,
-.game-details-side {
+.game-details-side,
+.game-details-main-inner,
+.game-details-side-inner {
   min-height: 0;
   min-width: 0;
+  width: 100%;
 }
 
 .game-details-main .details-section,
@@ -849,6 +852,46 @@ body.show-back-button #game-details-back-button {
   font-weight: 560;
   text-transform: uppercase;
   color: rgba(255, 255, 255, 0.78);
+}
+
+@media (min-width: 1281px) {
+  .game-details-main-inner {
+    width: 100%;
+    min-width: 0;
+    justify-self: stretch;
+  }
+
+  .game-details-side-inner {
+    width: 100%;
+    min-width: 0;
+    justify-self: stretch;
+  }
+
+  .game-details-side-inner {
+    gap: clamp(0.9rem, 0.95vw, 1.3rem);
+  }
+
+  .game-details-side-inner .details-section {
+    border-radius: clamp(9px, 0.7vw, 14px);
+    padding: clamp(0.88rem, 1vw, 1.24rem);
+  }
+
+  .game-details-side-inner .details-section h4 {
+    margin: 0 0 clamp(0.68rem, 0.75vw, 1rem);
+    font-size: clamp(0.86rem, 0.25vw + 0.65rem, 1rem);
+  }
+
+  .details-activity-section .details-subsection.game-activity-timeline {
+    width: 100%;
+    max-width: none;
+    justify-self: start;
+  }
+
+  .details-activity-section .details-subsection.game-activity-timeline .activity-timeline-news,
+  .details-activity-section .details-subsection.game-activity-timeline .activity-timeline-news.is-compact {
+    width: 100%;
+    max-width: none;
+  }
 }
 
 .details-subsection {
@@ -974,6 +1017,7 @@ body.show-back-button #game-details-back-button {
   border-radius: 9px;
   border: 1px solid var(--color-card-border);
   background: transparent;
+  box-sizing: border-box;
 }
 
 .activity-timeline-news.is-featured {
@@ -1580,8 +1624,8 @@ body.show-back-button #game-details-back-button {
 
 @media (max-width: 1200px) {
   .game-details-columns {
-    grid-template-columns: minmax(0, 1fr) 300px;
-    gap: 0.9rem;
+    grid-template-columns: minmax(0, 1fr) clamp(340px, 32vw, 440px);
+    gap: clamp(0.7rem, 0.8vw, 1rem);
   }
 }
 

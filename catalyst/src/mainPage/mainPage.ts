@@ -414,7 +414,11 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
   const lastPlayedLabel = lastPlayed
     ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(lastPlayed)
     : "Never played";
-  const playtimeLabel = typeof game.playtimeMinutes === "number" ? `${Math.round(game.playtimeMinutes)} minutes` : "-";
+  const playtimeLabel = typeof game.playtimeMinutes === "number"
+    ? game.playtimeMinutes > 0
+      ? `${(game.playtimeMinutes / 60).toFixed(1)} hours`
+      : "Never played"
+    : "-";
 
   const playCell = detailsTitleInfo.querySelector('.details-play-cell') ?? document.createElement('div');
   const lastPlayedDiv = document.createElement('div');
