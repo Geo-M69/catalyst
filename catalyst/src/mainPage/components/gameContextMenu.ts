@@ -268,6 +268,7 @@ export const createGameContextMenu = ({
 
   const renderManageButtons = (game: GameResponse): void => {
     manageSubmenu.replaceChildren();
+    const isInstalledAndNotUninstalling = game.installed && game.uninstalling !== true;
 
     const items: Array<{
       disabled?: boolean;
@@ -277,9 +278,9 @@ export const createGameContextMenu = ({
     }> = [
       {
         text: "Add desktop shortcut",
-        disabled: !game.installed,
+        disabled: !isInstalledAndNotUninstalling,
         onClick: () => {
-          if (!game.installed) {
+          if (!isInstalledAndNotUninstalling) {
             return;
           }
           void runMenuAction(
@@ -299,9 +300,9 @@ export const createGameContextMenu = ({
       },
       {
         text: "Browse local files",
-        disabled: !game.installed,
+        disabled: !isInstalledAndNotUninstalling,
         onClick: () => {
-          if (!game.installed) {
+          if (!isInstalledAndNotUninstalling) {
             return;
           }
           void runMenuAction(
@@ -337,11 +338,11 @@ export const createGameContextMenu = ({
         },
       },
       {
-        text: "Uninstall",
+        text: game.uninstalling === true ? "Uninstalling..." : "Uninstall",
         isDanger: true,
-        disabled: !game.installed,
+        disabled: !isInstalledAndNotUninstalling,
         onClick: () => {
-          if (!game.installed) {
+          if (!isInstalledAndNotUninstalling) {
             return;
           }
           void runMenuAction(() => actions.uninstallGame(game), "Could not start uninstall.");
@@ -349,9 +350,9 @@ export const createGameContextMenu = ({
       },
       {
         text: "Back up game files...",
-        disabled: !game.installed,
+        disabled: !isInstalledAndNotUninstalling,
         onClick: () => {
-          if (!game.installed) {
+          if (!isInstalledAndNotUninstalling) {
             return;
           }
           void runMenuAction(
@@ -456,7 +457,13 @@ export const createGameContextMenu = ({
     activeCard = card;
     closeCollectionSubmenu();
     closeManageSubmenu();
-    primaryButton.textContent = game.installed ? "Play" : "Install";
+    if (game.uninstalling === true) {
+      primaryButton.textContent = "Uninstalling...";
+      primaryButton.disabled = true;
+    } else {
+      primaryButton.textContent = game.installed ? "Play" : "Install";
+      primaryButton.disabled = false;
+    }
     favoriteButton.textContent = game.favorite ? "Remove from Favorites" : "Add to Favorites";
     menu.hidden = false;
     positionWithinViewport(menu, x, y);
@@ -466,6 +473,9 @@ export const createGameContextMenu = ({
   primaryButton.addEventListener("click", () => {
     const game = activeGame;
     if (!game) {
+      return;
+    }
+    if (game.uninstalling === true) {
       return;
     }
 

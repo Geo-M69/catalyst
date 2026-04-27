@@ -39,8 +39,10 @@ const addSteamArtworkCandidates = (
   seen: Set<string>,
   candidates: string[]
 ): void => {
-  for (const baseUrl of STEAM_APP_CDN_BASE_URLS) {
-    for (const filename of filenames) {
+  // Interleave CDN hosts per filename so callers can fail over quickly when one
+  // edge host is slow/unreachable for a specific user/network.
+  for (const filename of filenames) {
+    for (const baseUrl of STEAM_APP_CDN_BASE_URLS) {
       addUniqueCandidate(`${baseUrl}/${appId}/${filename}`, seen, candidates);
     }
   }

@@ -4,7 +4,6 @@ import { createFilterPanel } from "./components/filterPanel";
 import { createCollectionNameDialog } from "./components/collectionNameDialog";
 import { createGameContextMenu } from "./components/gameContextMenu";
 import { renderGameGrid } from "./components/gameGrid";
-import { createInstallDialog } from "./components/installDialog";
 import { createReviewCard, createReviewPlaceholder, Review } from "./components/reviewCard";
 import { createDetailsDropdownView } from "./detailsDropdownView";
 import { createDownloadActivityView } from "./downloadActivityView";
@@ -54,7 +53,6 @@ import type {
   GameFriendActivityEntryPayload,
   GameFriendsActivityPayload,
   GameCustomizationArtworkPayload,
-  GameInstallLocationPayload,
   GameInstallationDetailsPayload,
   GamePrivacySettingsPayload,
   GameReviewPayload,
@@ -190,6 +188,10 @@ const ENABLE_LINUX_GRID_WHEEL_SMOOTHING = false;
 const GRID_CARD_WIDTH_STORAGE_KEY = "catalyst.library.gridCardMinWidthPx";
 const APP_NAME = "Catalyst";
 const DOWNLOAD_POLL_INTERVAL_MS = 2500;
+const DOWNLOAD_COMPLETION_REFRESH_RETRY_DELAY_MS = 12_000;
+const DOWNLOAD_COMPLETION_REFRESH_MAX_ATTEMPTS = 6;
+const UNINSTALL_VERIFICATION_RETRY_DELAY_MS = 12_000;
+const UNINSTALL_VERIFICATION_MAX_ATTEMPTS = 20;
 const DOWNLOAD_ETA_SMOOTHING_FACTOR = 0.35;
 const DOWNLOAD_ETA_SAMPLE_MIN_SECONDS = 0.5;
 const DOWNLOAD_ETA_STALE_MS = 15000;
@@ -214,7 +216,17 @@ type AppHistoryState = {
   view?: "game-details" | "library";
 };
 
+interface PendingUninstallVerification {
+  externalId: string;
+  gameId: string;
+  provider: string;
+}
+
 let startupAttemptToken = 0;
+let uninstallVerificationTimer: number | null = null;
+let uninstallVerificationAttemptCount = 0;
+let isUninstallVerificationInFlight = false;
+const pendingUninstallVerificationByKey = new Map<string, PendingUninstallVerification>();
 
 const runTaskWithTimeout = async <T>(
   task: Promise<T>,
@@ -350,6 +362,32 @@ const setSessionStatus = (steamConnected: boolean, isError = false): void => {
     if (downloadStore.downloadCompletionRefreshTimer !== null) {
       window.clearTimeout(downloadStore.downloadCompletionRefreshTimer);
       downloadStore.downloadCompletionRefreshTimer = null;
+    }
+    downloadStore.pendingInstallVerificationByKey.clear();
+    downloadStore.downloadCompletionRefreshAttemptCount = 0;
+    downloadStore.isDownloadCompletionRefreshInFlight = false;
+    pendingUninstallVerificationByKey.clear();
+    uninstallVerificationAttemptCount = 0;
+    isUninstallVerificationInFlight = false;
+    if (uninstallVerificationTimer !== null) {
+      window.clearTimeout(uninstallVerificationTimer);
+      uninstallVerificationTimer = null;
+    }
+    let didClearUninstallingState = false;
+    libraryCatalogStore.allGames = libraryCatalogStore.allGames.map((game) => {
+      if (game.uninstalling !== true) {
+        return game;
+      }
+      didClearUninstallingState = true;
+      return {
+        ...game,
+        uninstalling: false,
+      };
+    });
+    if (didClearUninstallingState) {
+      libraryCatalogStore.gameById = new Map(
+        libraryCatalogStore.allGames.map((game) => [game.id, game])
+      );
     }
     downloadStore.downloadEtaByKey.clear();
     renderDownloadActivity();
@@ -499,6 +537,44 @@ window.addEventListener("game-customization-changed", (ev: Event) => {
   }
 });
 
+const getGameInstallStatusLabel = (game: GameResponse): string => {
+  if (game.uninstalling === true) {
+    return "Uninstalling...";
+  }
+  return game.installed ? "Installed" : "Not installed";
+};
+
+const getGamePrimaryActionLabel = (game: GameResponse): string => {
+  if (game.uninstalling === true) {
+    return "Uninstalling...";
+  }
+  return game.installed ? "Play" : "Install";
+};
+
+const syncDetailsInstallStatusUi = (): void => {
+  if (detailsViewStore.appViewMode !== "game-details") {
+    return;
+  }
+
+  const selectedGameId = detailsViewStore.selectedGameId;
+  if (!selectedGameId) {
+    return;
+  }
+
+  const selectedGame = findGameById(selectedGameId) ?? libraryCatalogStore.gameById.get(selectedGameId) ?? null;
+  if (!selectedGame) {
+    return;
+  }
+
+  detailsPlayButton.textContent = getGamePrimaryActionLabel(selectedGame);
+  detailsPlayButton.disabled = selectedGame.uninstalling === true;
+
+  const statusValue = document.getElementById("details-status-value");
+  if (statusValue instanceof HTMLElement) {
+    statusValue.textContent = getGameInstallStatusLabel(selectedGame);
+  }
+};
+
 const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false): void => {
   console.debug("renderGameDetails called for", gameId);
   const game = findGameById(gameId) ?? libraryCatalogStore.gameById.get(gameId) ?? null;
@@ -534,7 +610,13 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
   const playtimeDiv = document.createElement('div');
   playtimeDiv.innerHTML = `<strong>Playtime</strong><div class="muted">${playtimeLabel}</div>`;
   const statusDiv = document.createElement('div');
-  statusDiv.innerHTML = `<strong>Status</strong><div class="muted">${game.installed ? "Installed" : "Not installed"}</div>`;
+  const statusLabel = document.createElement("strong");
+  statusLabel.textContent = "Status";
+  const statusValue = document.createElement("div");
+  statusValue.className = "muted";
+  statusValue.id = "details-status-value";
+  statusValue.textContent = getGameInstallStatusLabel(game);
+  statusDiv.replaceChildren(statusLabel, statusValue);
 
   detailsTitleInfo.replaceChildren(playCell, lastPlayedDiv, playtimeDiv, statusDiv);
   // Determine hero background image using customization artwork -> steam candidates -> gradient fallback
@@ -606,7 +688,8 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
   }
 
   // Update action buttons
-  detailsPlayButton.textContent = game.installed ? "Play" : "Install";
+  detailsPlayButton.textContent = getGamePrimaryActionLabel(game);
+  detailsPlayButton.disabled = game.uninstalling === true;
   // Keep the favorite button icon SVG intact; use aria-pressed and class to indicate state
   detailsFavoriteButton.setAttribute("aria-pressed", `${game.favorite ? "true" : "false"}`);
   detailsFavoriteButton.setAttribute("aria-label", game.favorite ? "Unfavorite" : "Favorite");
@@ -1243,23 +1326,7 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
             return;
           }
 
-          const installLocations = await listGameInstallLocationsForGame(dlcGame);
-          const installSizeBytes = await getGameInstallSizeEstimateForGame(dlcGame);
-          const installRequest = await installDialog.open({
-            game: dlcGame,
-            locations: installLocations,
-            installSizeBytes: typeof installSizeBytes === "number" ? installSizeBytes : undefined,
-          });
-          if (installRequest === null) {
-            return;
-          }
-          await ipcService.installGame({
-            provider: dlcGame.provider,
-            externalId: dlcGame.externalId,
-            installPath: installRequest.installPath,
-            createDesktopShortcut: installRequest.createDesktopShortcut,
-            createApplicationShortcut: installRequest.createApplicationShortcut,
-          });
+          await installGameForGame(dlcGame);
           showLauncherToast(`Queued "${dlcGame.name}" for install.`);
           void refreshSteamDownloads();
         } catch (error) {
@@ -2183,10 +2250,17 @@ const registerGridZoomShortcut = (): void => {
 };
 
 const setAllGames = (games: GameResponse[]): void => {
-  libraryCatalogStore.allGames = games;
-  libraryCatalogStore.gameById = new Map(games.map((game) => [game.id, game]));
-  console.debug("setAllGames: loaded", games.length, "games; sample ids:", games.slice(0,10).map(g => g.id));
-  filterPanel.setSteamTagSuggestions(collectSteamTagSuggestions(games));
+  const nextGames = games.map((game) => {
+    const key = `${game.provider.trim().toLocaleLowerCase()}:${game.externalId.trim()}`;
+    return {
+      ...game,
+      uninstalling: pendingUninstallVerificationByKey.has(key),
+    };
+  });
+  libraryCatalogStore.allGames = nextGames;
+  libraryCatalogStore.gameById = new Map(nextGames.map((game) => [game.id, game]));
+  console.debug("setAllGames: loaded", nextGames.length, "games; sample ids:", nextGames.slice(0,10).map(g => g.id));
+  filterPanel.setSteamTagSuggestions(collectSteamTagSuggestions(nextGames));
   updateCollectionSuggestions();
 };
 
@@ -2339,7 +2413,6 @@ const updateGameInState = (
 };
 
 const gamePropertiesPanel = createGamePropertiesPanel();
-const installDialog = createInstallDialog();
 const collectionNameDialog = createCollectionNameDialog();
 const confirmationDialog = createConfirmationDialog();
 
@@ -2623,15 +2696,22 @@ const clearGameOverlayDataForGame = async (game: GameResponse): Promise<void> =>
   });
 };
 
-const getGameInstallationDetailsForGame = async (game: GameResponse): Promise<GameInstallationDetailsPayload | null> => {
+const getGameInstallationDetailsForIdentity = async (
+  provider: string,
+  externalId: string
+): Promise<GameInstallationDetailsPayload | null> => {
   try {
     return await ipcService.getGameInstallationDetails({
-      provider: game.provider,
-      externalId: game.externalId,
+      provider,
+      externalId,
     });
   } catch {
     return null;
   }
+};
+
+const getGameInstallationDetailsForGame = async (game: GameResponse): Promise<GameInstallationDetailsPayload | null> => {
+  return getGameInstallationDetailsForIdentity(game.provider, game.externalId);
 };
 
 const getGameFriendsActivityForGame = async (
@@ -2733,28 +2813,6 @@ const getGameScreenshotsForGame = async (
   }
 };
 
-const listGameInstallLocationsForGame = async (game: GameResponse): Promise<GameInstallLocationPayload[]> => {
-  try {
-    return await ipcService.listGameInstallLocations({
-      provider: game.provider,
-      externalId: game.externalId,
-    });
-  } catch {
-    return [];
-  }
-};
-
-const getGameInstallSizeEstimateForGame = async (game: GameResponse): Promise<number | null> => {
-  try {
-    return await ipcService.getGameInstallSizeEstimate({
-      provider: game.provider,
-      externalId: game.externalId,
-    });
-  } catch {
-    return null;
-  }
-};
-
 const listSteamDownloadsForSession = async (): Promise<SteamDownloadProgressPayload[]> => {
   try {
     return await ipcService.listSteamDownloads();
@@ -2762,6 +2820,12 @@ const listSteamDownloadsForSession = async (): Promise<SteamDownloadProgressPayl
     console.error("Could not load Steam downloads.", error);
     return [];
   }
+};
+
+const getGameInstallationDetailsForDownload = async (
+  download: SteamDownloadProgressPayload
+): Promise<GameInstallationDetailsPayload | null> => {
+  return getGameInstallationDetailsForIdentity(download.provider, download.externalId);
 };
 
 const isLikelyCompletedDownload = (download: SteamDownloadProgressPayload): boolean => {
@@ -2782,50 +2846,313 @@ const isLikelyCompletedDownload = (download: SteamDownloadProgressPayload): bool
   return false;
 };
 
+const getGameIdentityKey = (provider: string, externalId: string): string => {
+  return `${provider.trim().toLocaleLowerCase()}:${externalId.trim()}`;
+};
+
+interface GameStateTarget {
+  externalId: string;
+  gameId?: string;
+  provider: string;
+}
+
+const applyGameStateMutationInState = (
+  target: GameStateTarget,
+  mutate: (game: GameResponse) => GameResponse
+): boolean => {
+  let updatedGame: GameResponse | null = null;
+
+  if (typeof target.gameId === "string" && target.gameId.trim().length > 0) {
+    updatedGame = updateGameInState(target.gameId, mutate);
+  }
+
+  if (!updatedGame) {
+    const normalizedProvider = target.provider.trim().toLocaleLowerCase();
+    const fallbackGame = libraryCatalogStore.allGames.find((game) =>
+      game.provider.trim().toLocaleLowerCase() === normalizedProvider
+      && game.externalId === target.externalId
+    );
+    if (fallbackGame) {
+      updatedGame = updateGameInState(fallbackGame.id, mutate);
+    }
+  }
+
+  return updatedGame !== null;
+};
+
+const setGameInstalledStateInState = (
+  target: GameStateTarget,
+  installed: boolean
+): boolean => {
+  return applyGameStateMutationInState(target, (existingGame) => ({
+    ...existingGame,
+    installed,
+    uninstalling: installed ? existingGame.uninstalling : false,
+  }));
+};
+
+const setGameUninstallingStateInState = (
+  target: GameStateTarget,
+  uninstalling: boolean
+): boolean => {
+  return applyGameStateMutationInState(target, (existingGame) => ({
+    ...existingGame,
+    uninstalling,
+  }));
+};
+
+const isGameInstalledInState = (target: GameStateTarget): boolean => {
+  if (typeof target.gameId === "string" && target.gameId.trim().length > 0) {
+    const gameById = libraryCatalogStore.gameById.get(target.gameId);
+    if (gameById?.installed) {
+      return true;
+    }
+  }
+
+  const normalizedProvider = target.provider.trim().toLocaleLowerCase();
+  return libraryCatalogStore.allGames.some((game) =>
+    game.installed
+    && game.externalId === target.externalId
+    && game.provider.trim().toLocaleLowerCase() === normalizedProvider
+  );
+};
+
+const clearPendingUninstallingGameState = (): boolean => {
+  let didUpdateGameState = false;
+  for (const target of pendingUninstallVerificationByKey.values()) {
+    if (setGameUninstallingStateInState(target, false)) {
+      didUpdateGameState = true;
+    }
+  }
+  return didUpdateGameState;
+};
+
 const markCompletedDownloadsAsInstalled = (downloads: SteamDownloadProgressPayload[]): void => {
   let didUpdateInstalledState = false;
 
   for (const download of downloads) {
-    let updatedGame = updateGameInState(download.gameId, (existingGame) => ({
-      ...existingGame,
-      installed: true,
-    }));
-
-    if (!updatedGame) {
-      const fallbackGame = libraryCatalogStore.allGames.find((game) =>
-        game.provider === download.provider
-        && game.externalId === download.externalId
-      );
-      if (fallbackGame) {
-        updatedGame = updateGameInState(fallbackGame.id, (existingGame) => ({
-          ...existingGame,
-          installed: true,
-        }));
-      }
-    }
-
-    if (updatedGame) {
+    if (setGameInstalledStateInState(download, true)) {
       didUpdateInstalledState = true;
     }
   }
 
   if (didUpdateInstalledState) {
     renderActiveLibraryView();
+    syncDetailsInstallStatusUi();
   }
 };
 
-const scheduleLibraryRefreshAfterDownloadCompletion = (): void => {
+const scheduleDownloadCompletionRefresh = (delayMs: number): void => {
   if (downloadStore.downloadCompletionRefreshTimer !== null) {
+    if (delayMs > 0) {
+      return;
+    }
+    window.clearTimeout(downloadStore.downloadCompletionRefreshTimer);
+    downloadStore.downloadCompletionRefreshTimer = null;
+  }
+
+  downloadStore.downloadCompletionRefreshTimer = window.setTimeout(() => {
+    downloadStore.downloadCompletionRefreshTimer = null;
+    void runDownloadCompletionRefresh();
+  }, delayMs);
+};
+
+const queueDownloadInstallVerification = (downloads: SteamDownloadProgressPayload[]): void => {
+  if (!sessionStore.steamLinked || downloads.length === 0) {
     return;
   }
 
-  // Trigger a refresh immediately (don't gate on visibility/focus) so that
-  // completed downloads are reflected in the UI without requiring a manual
-  // library sync. `refreshLibrary` already guards against concurrent loads.
-  downloadStore.downloadCompletionRefreshTimer = window.setTimeout(() => {
-    downloadStore.downloadCompletionRefreshTimer = null;
-    void refreshLibrary(true);
-  }, 0);
+  let didQueue = false;
+  for (const download of downloads) {
+    const key = getDownloadEtaKey(download);
+    if (downloadStore.pendingInstallVerificationByKey.has(key)) {
+      continue;
+    }
+    downloadStore.pendingInstallVerificationByKey.set(key, download);
+    didQueue = true;
+  }
+
+  if (!didQueue) {
+    return;
+  }
+
+  scheduleDownloadCompletionRefresh(0);
+};
+
+const runDownloadCompletionRefresh = async (): Promise<void> => {
+  if (!sessionStore.steamLinked) {
+    downloadStore.pendingInstallVerificationByKey.clear();
+    downloadStore.downloadCompletionRefreshAttemptCount = 0;
+    return;
+  }
+
+  if (downloadStore.pendingInstallVerificationByKey.size === 0) {
+    downloadStore.downloadCompletionRefreshAttemptCount = 0;
+    return;
+  }
+
+  if (downloadStore.isDownloadCompletionRefreshInFlight) {
+    return;
+  }
+
+  downloadStore.isDownloadCompletionRefreshInFlight = true;
+  let didUpdateInstalledState = false;
+  try {
+    const queuedDownloads = [...downloadStore.pendingInstallVerificationByKey.values()];
+    const installChecks = await Promise.all(queuedDownloads.map(async (download) => {
+      if (isGameInstalledInState(download)) {
+        return { key: getDownloadEtaKey(download), installed: true };
+      }
+
+      const installationDetails = await getGameInstallationDetailsForDownload(download);
+      const installPath = installationDetails?.installPath?.trim();
+      const isInstalled = typeof installPath === "string" && installPath.length > 0;
+      if (isInstalled && setGameInstalledStateInState(download, true)) {
+        didUpdateInstalledState = true;
+      }
+      return { key: getDownloadEtaKey(download), installed: isInstalled };
+    }));
+
+    for (const installCheck of installChecks) {
+      if (installCheck.installed) {
+        downloadStore.pendingInstallVerificationByKey.delete(installCheck.key);
+      }
+    }
+  } finally {
+    downloadStore.isDownloadCompletionRefreshInFlight = false;
+  }
+
+  if (didUpdateInstalledState) {
+    renderActiveLibraryView();
+    syncDetailsInstallStatusUi();
+  }
+
+  if (downloadStore.pendingInstallVerificationByKey.size === 0) {
+    downloadStore.downloadCompletionRefreshAttemptCount = 0;
+    return;
+  }
+
+  downloadStore.downloadCompletionRefreshAttemptCount += 1;
+  if (downloadStore.downloadCompletionRefreshAttemptCount >= DOWNLOAD_COMPLETION_REFRESH_MAX_ATTEMPTS) {
+    downloadStore.pendingInstallVerificationByKey.clear();
+    downloadStore.downloadCompletionRefreshAttemptCount = 0;
+    return;
+  }
+
+  scheduleDownloadCompletionRefresh(DOWNLOAD_COMPLETION_REFRESH_RETRY_DELAY_MS);
+};
+
+const scheduleUninstallVerification = (delayMs: number): void => {
+  if (uninstallVerificationTimer !== null) {
+    if (delayMs > 0) {
+      return;
+    }
+    window.clearTimeout(uninstallVerificationTimer);
+    uninstallVerificationTimer = null;
+  }
+
+  uninstallVerificationTimer = window.setTimeout(() => {
+    uninstallVerificationTimer = null;
+    void runUninstallVerification();
+  }, delayMs);
+};
+
+const queueGameUninstallVerification = (game: GameResponse): void => {
+  if (!sessionStore.steamLinked) {
+    return;
+  }
+
+  const key = getGameIdentityKey(game.provider, game.externalId);
+  const pendingTarget: PendingUninstallVerification = {
+    gameId: game.id,
+    provider: game.provider,
+    externalId: game.externalId,
+  };
+  pendingUninstallVerificationByKey.set(key, pendingTarget);
+  if (setGameUninstallingStateInState(pendingTarget, true)) {
+    renderActiveLibraryView();
+    syncDetailsInstallStatusUi();
+  }
+  scheduleUninstallVerification(0);
+};
+
+const runUninstallVerification = async (): Promise<void> => {
+  if (!sessionStore.steamLinked) {
+    const didClearPendingState = clearPendingUninstallingGameState();
+    pendingUninstallVerificationByKey.clear();
+    uninstallVerificationAttemptCount = 0;
+    if (didClearPendingState) {
+      renderActiveLibraryView();
+      syncDetailsInstallStatusUi();
+    }
+    return;
+  }
+
+  if (pendingUninstallVerificationByKey.size === 0) {
+    uninstallVerificationAttemptCount = 0;
+    return;
+  }
+
+  if (isUninstallVerificationInFlight) {
+    return;
+  }
+
+  isUninstallVerificationInFlight = true;
+  let didUpdateGameState = false;
+  try {
+    const pendingTargets = [...pendingUninstallVerificationByKey.entries()];
+    const verificationChecks = await Promise.all(pendingTargets.map(async ([key, target]) => {
+      if (!isGameInstalledInState(target)) {
+        if (setGameUninstallingStateInState(target, false)) {
+          didUpdateGameState = true;
+        }
+        return { key, isUninstalled: true };
+      }
+
+      const installationDetails = await getGameInstallationDetailsForIdentity(
+        target.provider,
+        target.externalId
+      );
+      const installPath = installationDetails?.installPath?.trim();
+      const isInstalled = typeof installPath === "string" && installPath.length > 0;
+      if (!isInstalled && setGameInstalledStateInState(target, false)) {
+        didUpdateGameState = true;
+      }
+      return { key, isUninstalled: !isInstalled };
+    }));
+
+    for (const verificationCheck of verificationChecks) {
+      if (verificationCheck.isUninstalled) {
+        pendingUninstallVerificationByKey.delete(verificationCheck.key);
+      }
+    }
+  } finally {
+    isUninstallVerificationInFlight = false;
+  }
+
+  if (didUpdateGameState) {
+    renderActiveLibraryView();
+    syncDetailsInstallStatusUi();
+  }
+
+  if (pendingUninstallVerificationByKey.size === 0) {
+    uninstallVerificationAttemptCount = 0;
+    return;
+  }
+
+  uninstallVerificationAttemptCount += 1;
+  if (uninstallVerificationAttemptCount >= UNINSTALL_VERIFICATION_MAX_ATTEMPTS) {
+    const didClearPendingState = clearPendingUninstallingGameState();
+    pendingUninstallVerificationByKey.clear();
+    uninstallVerificationAttemptCount = 0;
+    if (didClearPendingState) {
+      renderActiveLibraryView();
+      syncDetailsInstallStatusUi();
+    }
+    return;
+  }
+
+  scheduleUninstallVerification(UNINSTALL_VERIFICATION_RETRY_DELAY_MS);
 };
 
 const refreshSteamDownloads = async (): Promise<void> => {
@@ -2842,10 +3169,12 @@ const refreshSteamDownloads = async (): Promise<void> => {
     }
 
     const completedDownloads: SteamDownloadProgressPayload[] = [];
+    const disappearedDownloads: SteamDownloadProgressPayload[] = [];
     for (const [previousKey, previousDownload] of downloadStore.previousActiveDownloadsByKey) {
       if (latestDownloadsByKey.has(previousKey)) {
         continue;
       }
+      disappearedDownloads.push(previousDownload);
       if (isLikelyCompletedDownload(previousDownload)) {
         completedDownloads.push(previousDownload);
       }
@@ -2856,7 +3185,9 @@ const refreshSteamDownloads = async (): Promise<void> => {
     updateDownloadEtaSnapshots(downloadStore.activeDownloads);
     if (completedDownloads.length > 0) {
       markCompletedDownloadsAsInstalled(completedDownloads);
-      scheduleLibraryRefreshAfterDownloadCompletion();
+    }
+    if (disappearedDownloads.length > 0) {
+      queueDownloadInstallVerification(disappearedDownloads);
     }
   } finally {
     downloadStore.isDownloadPollInFlight = false;
@@ -2943,6 +3274,16 @@ const uninstallGameForGame = async (game: GameResponse): Promise<void> => {
   await ipcService.uninstallGame({
     provider: game.provider,
     externalId: game.externalId,
+  });
+};
+
+const installGameForGame = async (game: GameResponse): Promise<void> => {
+  await ipcService.installGame({
+    provider: game.provider,
+    externalId: game.externalId,
+    installPath: "Steam default install location",
+    createDesktopShortcut: true,
+    createApplicationShortcut: true,
   });
 };
 
@@ -3098,26 +3439,7 @@ const gameContextMenu = createGameContextMenu({
       showLauncherToast(`"${game.name}" has been removed from hidden games.`);
     },
     installGame: async (game) => {
-      const [installLocations, installSizeBytes] = await Promise.all([
-        listGameInstallLocationsForGame(game),
-        getGameInstallSizeEstimateForGame(game),
-      ]);
-      const installRequest = await installDialog.open({
-        game,
-        locations: installLocations,
-        installSizeBytes: typeof installSizeBytes === "number" ? installSizeBytes : undefined,
-      });
-      if (installRequest === null) {
-        return;
-      }
-
-      await ipcService.installGame({
-        provider: game.provider,
-        externalId: game.externalId,
-        installPath: installRequest.installPath,
-        createDesktopShortcut: installRequest.createDesktopShortcut,
-        createApplicationShortcut: installRequest.createApplicationShortcut,
-      });
+      await installGameForGame(game);
       showLauncherToast(`Queued "${game.name}" for install.`);
       void refreshSteamDownloads();
     },
@@ -3152,47 +3474,14 @@ const gameContextMenu = createGameContextMenu({
         showLauncherToast(`"${game.name}" is not currently installed.`, "error");
         return;
       }
-
-      const shouldUninstall = await confirmationDialog.open({
-        title: "Uninstall Game",
-        description: `Uninstall "${game.name}"? Local files will be removed, but the game stays in your library.`,
-        confirmLabel: "Uninstall",
-        confirmTone: "danger",
-      });
-      if (!shouldUninstall) {
+      if (game.uninstalling === true) {
+        showLauncherToast(`"${game.name}" is already uninstalling.`, "error");
         return;
       }
 
       await uninstallGameForGame(game);
-      updateGameInState(game.id, (existingGame) => ({
-        ...existingGame,
-        installed: false,
-      }));
-      renderActiveLibraryView();
       showLauncherToast(`Opened uninstall flow for "${game.name}".`);
-
-      let refreshCompleted = false;
-      let refreshFallbackTimer: number | null = null;
-      const runRefresh = (): void => {
-        if (refreshCompleted) {
-          return;
-        }
-        refreshCompleted = true;
-        if (refreshFallbackTimer !== null) {
-          window.clearTimeout(refreshFallbackTimer);
-          refreshFallbackTimer = null;
-        }
-        void refreshLibrary(true);
-      };
-
-      const handleFocus = (): void => {
-        runRefresh();
-      };
-
-      window.addEventListener("focus", handleFocus, { once: true });
-      refreshFallbackTimer = window.setTimeout(() => {
-        runRefresh();
-      }, 20000);
+      queueGameUninstallVerification(game);
     },
   },
   container: libraryGridElement,
@@ -3227,14 +3516,15 @@ if (detailsPlayButton instanceof HTMLButtonElement) {
     const game = findGameById(gameId) ?? libraryCatalogStore.gameById.get(gameId);
     if (!game) return;
 
+    if (game.uninstalling === true) {
+      showLauncherToast(`"${game.name}" is currently uninstalling.`, "error");
+      return;
+    }
+
     if (game.installed) {
       await ipcService.playGame({ provider: game.provider, externalId: game.externalId });
     } else {
-      const installLocations = await listGameInstallLocationsForGame(game);
-      const installSizeBytes = await getGameInstallSizeEstimateForGame(game);
-      const installRequest = await installDialog.open({ game, locations: installLocations, installSizeBytes: typeof installSizeBytes === "number" ? installSizeBytes : undefined });
-      if (installRequest === null) return;
-      await ipcService.installGame({ provider: game.provider, externalId: game.externalId, installPath: installRequest.installPath, createDesktopShortcut: installRequest.createDesktopShortcut, createApplicationShortcut: installRequest.createApplicationShortcut });
+      await installGameForGame(game);
       showLauncherToast(`Queued "${game.name}" for install.`);
       void refreshSteamDownloads();
     }

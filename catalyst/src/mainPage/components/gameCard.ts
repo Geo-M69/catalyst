@@ -1,7 +1,8 @@
 import type { GameResponse } from "../types";
 import { getSteamArtworkCandidates } from "../../shared/utils/artwork";
 
-const MAX_ARTWORK_CANDIDATES = 2;
+const MAX_ARTWORK_CANDIDATES = 6;
+const ARTWORK_CANDIDATE_TIMEOUT_MS = 2500;
 const FAILED_ARTWORK_CACHE_MAX_ENTRIES = 2000;
 const FAILED_ARTWORK_CACHE_TTL_MS = 10 * 60 * 1000;
 const LOADED_ARTWORK_CACHE_MAX_ENTRIES = 4000;
@@ -9,6 +10,7 @@ const LOADED_ARTWORK_CACHE_TTL_MS = 20 * 60 * 1000;
 const ARTWORK_CACHE_PRUNE_MUTATION_INTERVAL = 40;
 const ARTWORK_CACHE_PRUNE_INTERVAL_MS = 15 * 1000;
 const ENABLE_GAME_CARD_ARTWORK_PREFETCH = true;
+const ARTWORK_PREFETCH_CONCURRENCY_LIMIT = 12;
 const failedArtworkCandidateTimestamps = new Map<string, number>();
 const loadedArtworkCandidateTimestamps = new Map<string, number>();
 const inFlightArtworkPrefetches = new Set<string>();
@@ -189,7 +191,10 @@ const isArtworkCandidateRecentlyLoaded = (candidate: string): boolean => {
 
 const prefetchArtworkCandidate = (candidate: string): void => {
   if (
-    inFlightArtworkPrefetches.has(candidate)
+    inFlightArtworkPrefetches.size >= ARTWORK_PREFETCH_CONCURRENCY_LIMIT
+    || !ENABLE_GAME_CARD_ARTWORK_PREFETCH
+    || !candidate
+    || inFlightArtworkPrefetches.has(candidate)
     || isArtworkCandidateRecentlyLoaded(candidate)
     || isArtworkCandidateRecentlyFailed(candidate)
   ) {
@@ -297,8 +302,48 @@ export const createGameCard = (game: GameResponse): HTMLElement => {
     image.fetchPriority = "auto";
 
     let candidateIndex = 0;
+    let candidateTimeoutId: number | null = null;
+
+    const clearCandidateTimeout = (): void => {
+      if (candidateTimeoutId === null) {
+        return;
+      }
+      window.clearTimeout(candidateTimeoutId);
+      candidateTimeoutId = null;
+    };
+
+    const renderPlaceholder = (): void => {
+      clearCandidateTimeout();
+      image.remove();
+      appendPlaceholder(media, game.name);
+    };
+
+    const tryCurrentCandidate = (): void => {
+      const currentCandidate = artworkCandidates[candidateIndex];
+      if (!currentCandidate) {
+        renderPlaceholder();
+        return;
+      }
+
+      clearCandidateTimeout();
+      candidateTimeoutId = window.setTimeout(() => {
+        const timedOutCandidate = artworkCandidates[candidateIndex];
+        if (timedOutCandidate) {
+          markArtworkCandidateAsFailed(timedOutCandidate);
+        }
+        candidateIndex += 1;
+        if (candidateIndex < artworkCandidates.length) {
+          tryCurrentCandidate();
+          return;
+        }
+        renderPlaceholder();
+      }, ARTWORK_CANDIDATE_TIMEOUT_MS);
+
+      image.src = currentCandidate;
+    };
 
     image.addEventListener("load", () => {
+      clearCandidateTimeout();
       const loadedCandidate = artworkCandidates[candidateIndex];
       if (loadedCandidate) {
         markArtworkCandidateAsLoaded(loadedCandidate);
@@ -306,6 +351,7 @@ export const createGameCard = (game: GameResponse): HTMLElement => {
     });
 
     image.addEventListener("error", () => {
+      clearCandidateTimeout();
       const failedCandidate = artworkCandidates[candidateIndex];
       if (failedCandidate) {
         markArtworkCandidateAsFailed(failedCandidate);
@@ -313,21 +359,17 @@ export const createGameCard = (game: GameResponse): HTMLElement => {
 
       candidateIndex += 1;
       if (candidateIndex < artworkCandidates.length) {
-        const nextCandidate = artworkCandidates[candidateIndex];
-        if (nextCandidate) {
-          image.src = nextCandidate;
-          return;
-        }
+        tryCurrentCandidate();
+        return;
       }
 
-      image.remove();
-      appendPlaceholder(media, game.name);
+      renderPlaceholder();
     });
 
     const firstCandidate = artworkCandidates[candidateIndex];
     if (firstCandidate) {
-      image.src = firstCandidate;
       media.append(image);
+      tryCurrentCandidate();
     } else {
       appendPlaceholder(media, game.name);
     }
@@ -351,7 +393,12 @@ export const createGameCard = (game: GameResponse): HTMLElement => {
     statusRow.append(favoriteBadge);
   }
 
-  if (game.installed) {
+  if (game.uninstalling === true) {
+    const uninstallingBadge = document.createElement("span");
+    uninstallingBadge.className = "game-card-badge";
+    uninstallingBadge.textContent = "Uninstalling...";
+    statusRow.append(uninstallingBadge);
+  } else if (game.installed) {
     const installedBadge = document.createElement("span");
     installedBadge.className = "game-card-badge";
     installedBadge.textContent = "Installed";

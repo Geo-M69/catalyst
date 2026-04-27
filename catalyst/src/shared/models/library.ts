@@ -43,6 +43,7 @@ export interface GameResponse {
   hasCloudSaves?: boolean;
   cloudDetails?: string | null;
   controllerSupport?: string | null;
+  uninstalling?: boolean;
 }
 
 export interface CollectionResponse {

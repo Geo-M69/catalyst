@@ -12,5 +12,8 @@ export const downloadStore = {
   activeDownloads: [] as SteamDownloadProgressPayload[],
   previousActiveDownloadsByKey: new Map<string, SteamDownloadProgressPayload>(),
   downloadCompletionRefreshTimer: null as number | null,
+  isDownloadCompletionRefreshInFlight: false,
+  downloadCompletionRefreshAttemptCount: 0,
+  pendingInstallVerificationByKey: new Map<string, SteamDownloadProgressPayload>(),
   downloadEtaByKey: new Map<string, DownloadEtaSnapshot>(),
 };
