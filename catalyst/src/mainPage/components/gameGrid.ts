@@ -14,6 +14,11 @@ interface RenderGameGridArgs {
   sections?: GameGridSection[];
 }
 
+interface RenderGameGridSkeletonArgs {
+  container: HTMLElement;
+  cardCount?: number;
+}
+
 interface CachedGameCard {
   element: HTMLElement;
   gameReference: GameResponse;
@@ -72,6 +77,11 @@ interface SectionsRenderState {
   sectionsById: Map<string, SectionRenderState>;
 }
 
+interface SkeletonRenderState {
+  cardCount: number;
+  root: HTMLDivElement;
+}
+
 const DEFAULT_CARD_HEIGHT_ESTIMATE_PX = 102;
 const DEFAULT_CARD_WIDTH_MIN_PX = 180;
 const GRID_CARD_BORDER_ESTIMATE_PX = 1;
@@ -103,6 +113,8 @@ const GRID_PERF_DEBUG_STORAGE_KEY = "catalyst.debug.gridPerf";
 const GRID_PERF_DEBUG_QUERY_PARAM = "debugGridPerf";
 const GRID_PERF_LOG_INTERVAL_MS = 1500;
 const GRID_PERF_LONGTASK_LOG_THROTTLE_MS = 500;
+const GRID_SKELETON_MIN_CARDS = 6;
+const GRID_SKELETON_MAX_CARDS = 48;
 
 const collapsedSectionIds = new Set<string>();
 const rendererByContainer = new WeakMap<HTMLElement, GameGridRenderer>();
@@ -242,6 +254,32 @@ const patchChildren = (container: HTMLElement, nextChildren: HTMLElement[]): voi
   }
 };
 
+const createSkeletonCard = (): HTMLElement => {
+  const card = document.createElement("article");
+  card.className = "game-card game-card-skeleton";
+  card.setAttribute("aria-hidden", "true");
+
+  const media = document.createElement("div");
+  media.className = "game-card-media";
+
+  const mediaBlock = document.createElement("span");
+  mediaBlock.className = "game-card-skeleton-block game-card-skeleton-media";
+  media.append(mediaBlock);
+
+  const overlay = document.createElement("div");
+  overlay.className = "game-card-skeleton-overlay";
+
+  const title = document.createElement("span");
+  title.className = "game-card-skeleton-block game-card-skeleton-line is-title";
+
+  const meta = document.createElement("span");
+  meta.className = "game-card-skeleton-block game-card-skeleton-line is-meta";
+
+  overlay.append(title, meta);
+  card.append(media, overlay);
+  return card;
+};
+
 const clamp = (value: number, min: number, max: number): number => {
   return Math.max(min, Math.min(value, max));
 };
@@ -298,6 +336,22 @@ const resolveGridMetrics = (grid: HTMLElement, container: HTMLElement): GridMetr
     rowGap: safeRowGap,
     rowStride: cardHeight + safeRowGap,
   };
+};
+
+const resolveSkeletonCardCount = (container: HTMLElement, requestedCount?: number): number => {
+  if (Number.isFinite(requestedCount) && requestedCount !== undefined && requestedCount > 0) {
+    return clamp(Math.floor(requestedCount), GRID_SKELETON_MIN_CARDS, GRID_SKELETON_MAX_CARDS);
+  }
+
+  const minCardWidth = resolveGridCardMinWidth(container);
+  const estimatedColumnGap = 14;
+  const estimatedRowGap = 22;
+  const estimatedCardHeight = estimateCardHeight(minCardWidth);
+  const availableWidth = Math.max(container.clientWidth, minCardWidth);
+  const availableHeight = Math.max(container.clientHeight, estimatedCardHeight * 2);
+  const columns = Math.max(1, Math.floor((availableWidth + estimatedColumnGap) / (minCardWidth + estimatedColumnGap)));
+  const rows = Math.max(2, Math.ceil((availableHeight + estimatedRowGap) / (estimatedCardHeight + estimatedRowGap)));
+  return clamp(columns * rows, GRID_SKELETON_MIN_CARDS, GRID_SKELETON_MAX_CARDS);
 };
 
 const resolveDynamicOverscan = (
@@ -436,6 +490,8 @@ class GameGridRenderer {
 
   private emptyState: EmptyRenderState | null = null;
 
+  private skeletonState: SkeletonRenderState | null = null;
+
   private plainState: PlainRenderState | null = null;
 
   private sectionsState: SectionsRenderState | null = null;
@@ -553,6 +609,9 @@ class GameGridRenderer {
   }
 
   render({ games, emptyMessage, sections }: Omit<RenderGameGridArgs, "container">): void {
+    this.container.setAttribute("aria-busy", "false");
+    this.skeletonState = null;
+
     const hasSections = Array.isArray(sections) && sections.length > 0;
     if (games.length === 0 || (hasSections && sections.every((section) => section.games.length === 0))) {
       this.renderEmpty(emptyMessage);
@@ -577,7 +636,39 @@ class GameGridRenderer {
     this.pruneCardCache(activeIds);
   }
 
+  renderSkeleton(cardCount?: number): void {
+    this.container.setAttribute("aria-busy", "true");
+    this.emptyState = null;
+    this.plainState = null;
+    this.sectionsState = null;
+
+    const nextCardCount = resolveSkeletonCardCount(this.container, cardCount);
+    if (!this.skeletonState || this.skeletonState.cardCount !== nextCardCount) {
+      const root = document.createElement("div");
+      root.className = "game-grid game-grid-skeleton";
+      root.setAttribute("aria-hidden", "true");
+
+      const cards: HTMLElement[] = [];
+      for (let index = 0; index < nextCardCount; index += 1) {
+        cards.push(createSkeletonCard());
+      }
+
+      root.replaceChildren(...cards);
+      this.skeletonState = {
+        cardCount: nextCardCount,
+        root,
+      };
+    }
+
+    if (this.container.firstElementChild !== this.skeletonState.root || this.container.childElementCount !== 1) {
+      this.container.replaceChildren(this.skeletonState.root);
+    }
+
+    this.cancelViewportRender();
+  }
+
   private renderEmpty(message: string): void {
+    this.skeletonState = null;
     this.plainState = null;
     this.sectionsState = null;
 
@@ -624,6 +715,7 @@ class GameGridRenderer {
 
   private renderPlain(games: GameResponse[]): void {
     this.emptyState = null;
+    this.skeletonState = null;
     this.sectionsState = null;
 
     const plainState = this.ensurePlainState();
@@ -759,6 +851,7 @@ class GameGridRenderer {
 
   private renderSections(sections: GameGridSection[]): void {
     this.emptyState = null;
+    this.skeletonState = null;
     this.plainState = null;
 
     const sectionsState = this.ensureSectionsState();
@@ -1226,4 +1319,14 @@ export const renderGameGrid = ({ container, games, emptyMessage, sections }: Ren
   }
 
   renderer.render({ games, emptyMessage });
+};
+
+export const renderGameGridSkeleton = ({ container, cardCount }: RenderGameGridSkeletonArgs): void => {
+  let renderer = rendererByContainer.get(container);
+  if (!renderer) {
+    renderer = new GameGridRenderer(container);
+    rendererByContainer.set(container, renderer);
+  }
+
+  renderer.renderSkeleton(cardCount);
 };

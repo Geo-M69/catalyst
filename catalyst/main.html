@@ -8,25 +8,7 @@
     <script type="module" src="/src/mainPage/mainPage.ts" defer></script>
   </head>
 
-<body class="library-page startup-pending">
-    <section id="startup-gate" class="startup-gate" role="status" aria-live="polite" aria-atomic="true">
-      <div class="startup-gate-card">
-        <p class="startup-gate-brand">Catalyst</p>
-        <h1 class="startup-gate-title">Preparing your library</h1>
-        <p id="startup-gate-status" class="startup-gate-status">Starting up...</p>
-        <div class="startup-gate-progress" aria-hidden="true">
-          <span class="startup-gate-progress-bar"></span>
-        </div>
-        <ul class="startup-gate-steps" aria-label="Startup tasks">
-          <li id="startup-step-session" class="startup-gate-step" data-state="pending">Restore session</li>
-          <li id="startup-step-config" class="startup-gate-step" data-state="pending">Load core configuration</li>
-          <li id="startup-step-library" class="startup-gate-step" data-state="pending">Sync and load required library data</li>
-        </ul>
-        <button id="startup-gate-retry" class="secondary-button startup-gate-retry" type="button" hidden>
-          Retry startup
-        </button>
-      </div>
-    </section>
+<body class="library-page">
     <div id="library-aspect-shell" class="library-aspect-shell" data-aspect-label="16:9">
     <div id="app-top-hover" class="app-top-hover" aria-hidden="true"></div>
     <main class="launcher-library" aria-label="Game launcher library view">

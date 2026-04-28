@@ -3,7 +3,7 @@ import { createConfirmationDialog } from "./components/confirmationDialog";
 import { createFilterPanel } from "./components/filterPanel";
 import { createCollectionNameDialog } from "./components/collectionNameDialog";
 import { createGameContextMenu } from "./components/gameContextMenu";
-import { renderGameGrid } from "./components/gameGrid";
+import { renderGameGrid, renderGameGridSkeleton } from "./components/gameGrid";
 import { createReviewCard, createReviewPlaceholder, Review } from "./components/reviewCard";
 import { createDetailsDropdownView } from "./detailsDropdownView";
 import { createDownloadActivityView } from "./downloadActivityView";
@@ -103,12 +103,6 @@ const detailsSettingsButton = document.getElementById("details-settings-button")
 const detailsFavoriteButton = document.getElementById("details-favorite-button");
 const detailsPropertiesButton = document.getElementById("details-properties-button");
 const detailsDropdown = document.getElementById("details-dropdown");
-const startupGateElement = document.getElementById("startup-gate");
-const startupGateStatusElement = document.getElementById("startup-gate-status");
-const startupStepSessionElement = document.getElementById("startup-step-session");
-const startupStepConfigElement = document.getElementById("startup-step-config");
-const startupStepLibraryElement = document.getElementById("startup-step-library");
-const startupRetryButtonElement = document.getElementById("startup-gate-retry");
 
 if (
   !(sessionAccountElement instanceof HTMLElement)
@@ -141,12 +135,6 @@ if (
   || !(detailsFavoriteButton instanceof HTMLButtonElement)
   || !(detailsPropertiesButton instanceof HTMLButtonElement)
   || !(detailsDropdown instanceof HTMLElement)
-  || !(startupGateElement instanceof HTMLElement)
-  || !(startupGateStatusElement instanceof HTMLElement)
-  || !(startupStepSessionElement instanceof HTMLElement)
-  || !(startupStepConfigElement instanceof HTMLElement)
-  || !(startupStepLibraryElement instanceof HTMLElement)
-  || !(startupRetryButtonElement instanceof HTMLButtonElement)
 ) {
   throw new Error("Main page is missing required DOM elements");
 }
@@ -198,8 +186,6 @@ const DOWNLOAD_ETA_STALE_MS = 15000;
 const TOAST_DURATION_MS = 3200;
 const DLC_CDN_CAPSULE_URL = "https://cdn.cloudflare.steamstatic.com/steam/apps";
 const STEAM_REVIEW_MISSING_WARNING_PATTERN = /no public steam review found/i;
-const STARTUP_TIMEOUT_MS = 20_000;
-const STARTUP_CLOSE_DURATION_MS = 320;
 const LIBRARY_SOFT_LOCK_ASPECTS: ReadonlyArray<{ label: string; ratio: number }> = [
   { label: "16:9", ratio: 16 / 9 },
   { label: "21:9", ratio: 21 / 9 },
@@ -209,7 +195,6 @@ const LIBRARY_SOFT_LOCK_ASPECTS: ReadonlyArray<{ label: string; ratio: number }>
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
 // runtime platform alias used below
 type RuntimePlatform = "windows" | "macos" | "linux" | "other";
-type StartupStepState = "pending" | "active" | "done" | "error";
 type SessionRefreshResult = "ready" | "redirecting" | "failed";
 type AppHistoryState = {
   gameId?: string;
@@ -222,7 +207,6 @@ interface PendingUninstallVerification {
   provider: string;
 }
 
-let startupAttemptToken = 0;
 let uninstallVerificationTimer: number | null = null;
 let uninstallVerificationAttemptCount = 0;
 let isUninstallVerificationInFlight = false;
@@ -280,39 +264,6 @@ const getErrorMessage = (error: unknown, fallback: string): string => {
   }
 
   return fallback;
-};
-
-const setStartupStepState = (stepElement: HTMLElement, state: StartupStepState): void => {
-  stepElement.dataset.state = state;
-};
-
-const setStartupStatus = (message: string, isError = false): void => {
-  startupGateStatusElement.textContent = message;
-  startupGateElement.classList.toggle("is-error", isError);
-};
-
-const showStartupGate = (): void => {
-  startupGateElement.hidden = false;
-  startupGateElement.classList.remove("is-closing", "is-error");
-  startupRetryButtonElement.hidden = true;
-  startupRetryButtonElement.disabled = false;
-  document.body.classList.add("startup-pending");
-};
-
-const hideStartupGate = (): void => {
-  startupGateElement.classList.remove("is-error");
-  startupGateElement.classList.add("is-closing");
-  document.body.classList.remove("startup-pending");
-  window.setTimeout(() => {
-    startupGateElement.hidden = true;
-  }, STARTUP_CLOSE_DURATION_MS);
-};
-
-const resetStartupUi = (): void => {
-  setStartupStepState(startupStepSessionElement, "pending");
-  setStartupStepState(startupStepConfigElement, "pending");
-  setStartupStepState(startupStepLibraryElement, "pending");
-  setStartupStatus("Starting up...");
 };
 
 const resolveToastRegion = (): HTMLElement => {
@@ -3838,82 +3789,20 @@ refreshLibraryButton.addEventListener("click", () => {
 const applyStartupCoreConfiguration = (): void => {
   setLibraryViewMode("games", false);
   setLibrarySummary("Loading library...");
+  renderGameGridSkeleton({ container: libraryGridElement });
   renderLibraryLastUpdated();
   renderDownloadActivity();
 };
 
-const markActiveStartupStepAsError = (): void => {
-  const steps = [startupStepSessionElement, startupStepConfigElement, startupStepLibraryElement];
-  const activeStep = steps.find((stepElement) => stepElement.dataset.state === "active");
-  if (activeStep) {
-    setStartupStepState(activeStep, "error");
-  }
-};
-
 const runStartupInitialization = async (): Promise<void> => {
-  const attemptToken = ++startupAttemptToken;
-  showStartupGate();
-  resetStartupUi();
-  const ensureCurrentStartupAttempt = (): void => {
-    if (attemptToken !== startupAttemptToken) {
-      throw new Error("Startup attempt was superseded.");
-    }
-  };
-
-  try {
-    const startupResult = await runTaskWithTimeout((async (): Promise<SessionRefreshResult> => {
-      setStartupStepState(startupStepSessionElement, "active");
-      setStartupStatus("Restoring your session...");
-      const sessionStatus = await refreshSession(true);
-      ensureCurrentStartupAttempt();
-      if (sessionStatus === "redirecting") {
-        setStartupStepState(startupStepSessionElement, "done");
-        setStartupStatus("Redirecting to sign in...");
-        return "redirecting";
-      }
-
-      setStartupStepState(startupStepSessionElement, "done");
-      setStartupStepState(startupStepConfigElement, "active");
-      setStartupStatus("Loading core configuration...");
-      applyStartupCoreConfiguration();
-      setStartupStepState(startupStepConfigElement, "done");
-
-      setStartupStepState(startupStepLibraryElement, "active");
-      setStartupStatus("Syncing Steam library and loading required data...");
-      await refreshLibrary(true, true, true);
-      ensureCurrentStartupAttempt();
-      setStartupStepState(startupStepLibraryElement, "done");
-      return "ready";
-    })(), STARTUP_TIMEOUT_MS, "Startup timed out. Please retry.");
-
-    if (attemptToken !== startupAttemptToken) {
-      return;
-    }
-
-    if (startupResult === "redirecting") {
-      return;
-    }
-
-    setStartupStatus("Library is ready.");
-    hideStartupGate();
-  } catch (error) {
-    if (attemptToken !== startupAttemptToken) {
-      return;
-    }
-
-    markActiveStartupStepAsError();
-    setStartupStatus(getErrorMessage(error, "Startup failed. Please retry."), true);
-    startupRetryButtonElement.hidden = false;
-    startupRetryButtonElement.disabled = false;
-    if (startupAttemptToken === attemptToken) {
-      startupAttemptToken += 1;
-    }
+  applyStartupCoreConfiguration();
+  const sessionStatus = await refreshSession(true);
+  if (sessionStatus === "redirecting") {
+    return;
   }
-};
 
-startupRetryButtonElement.addEventListener("click", () => {
-  void runStartupInitialization();
-});
+  await refreshLibrary(true, true, true);
+};
 
 window.addEventListener("resize", applyLibraryAspectSoftLock);
 window.addEventListener("beforeunload", stopDownloadPolling);
@@ -3924,7 +3813,14 @@ const initialize = async (): Promise<void> => {
   registerGridZoomShortcut();
   const cleanupGridWheelSmoothing = registerLinuxGridWheelSmoothing();
   window.addEventListener("beforeunload", cleanupGridWheelSmoothing, { once: true });
-  await runStartupInitialization();
+  try {
+    await runStartupInitialization();
+  } catch (error) {
+    const startupErrorMessage = getErrorMessage(error, "Could not finish startup.");
+    setLibrarySummary(startupErrorMessage);
+    librarySummaryElement.classList.add("status-error");
+    showLauncherToast(startupErrorMessage, "error");
+  }
 };
 
 void initialize();
