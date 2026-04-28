@@ -11,7 +11,11 @@ use regex::Regex;
 use reqwest::blocking::Client;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "linux")]
+use tauri::Manager;
 use url::Url;
+#[cfg(target_os = "linux")]
+use webkit2gtk::{HardwareAccelerationPolicy, SettingsExt, WebViewExt};
 
 const STEAM_OPENID_ENDPOINT: &str = "https://steamcommunity.com/openid/login";
 const STEAM_WEB_API_ENDPOINT: &str =
@@ -4193,7 +4197,11 @@ fn initialize_database(db_path: &Path) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .setup(application::bootstrap::setup_app)
+        .setup(|app| {
+            application::bootstrap::setup_app(app)?;
+            configure_linux_webview_acceleration(app);
+            Ok(())
+        })
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             // `register` and `login` (local credentials) are intentionally
@@ -4250,3 +4258,32 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+#[cfg(target_os = "linux")]
+fn configure_linux_webview_acceleration(app: &mut tauri::App) {
+    let Some(main_window) = app.get_webview_window("main") else {
+        eprintln!("[catalyst] linux webview 'main' not found; skipping acceleration policy setup");
+        return;
+    };
+
+    let apply_result = main_window.with_webview(|platform_webview| {
+        let webview = platform_webview.inner();
+        let Some(settings) = webview.settings() else {
+            eprintln!("[catalyst] webkit settings unavailable; could not set acceleration policy");
+            return;
+        };
+
+        settings.set_hardware_acceleration_policy(HardwareAccelerationPolicy::Always);
+        let effective_policy = settings.hardware_acceleration_policy();
+        eprintln!(
+            "[catalyst] WebKitGTK hardware acceleration policy requested=Always effective={effective_policy:?}"
+        );
+    });
+
+    if let Err(error) = apply_result {
+        eprintln!("[catalyst] failed to configure WebKitGTK acceleration policy: {error}");
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn configure_linux_webview_acceleration(_app: &mut tauri::App) {}

@@ -10,6 +10,7 @@ import { createDownloadActivityView } from "./downloadActivityView";
 import { createLibraryStatusView } from "./libraryStatusView";
 import { loadReviewForGame, saveReviewForGame } from "./reviewStore";
 import { createLibraryViewRenderer } from "./libraryViewRenderer";
+import { createRecentlyPlayedPerfMonitor } from "./recentlyPlayedPerf";
 import {
   createGamePropertiesPanel,
 } from "./components/gamePropertiesPanel";
@@ -95,6 +96,7 @@ const recentlyPlayedPrevButton = document.getElementById("recently-played-prev")
 const recentlyPlayedNextButton = document.getElementById("recently-played-next");
 const recentlyPlayedListElement = document.getElementById("recently-played-list");
 const libraryGridElement = document.getElementById("library-grid");
+const libraryGridContentElement = document.getElementById("library-grid-content");
 const libraryAspectShellElement = document.getElementById("library-aspect-shell");
 const panelLeftElement = document.querySelector<HTMLElement>(".panel-left");
 const panelMiddleElement = document.querySelector<HTMLElement>(".panel-middle");
@@ -131,6 +133,7 @@ if (
   || !(recentlyPlayedNextButton instanceof HTMLButtonElement)
   || !(recentlyPlayedListElement instanceof HTMLElement)
   || !(libraryGridElement instanceof HTMLElement)
+  || !(libraryGridContentElement instanceof HTMLElement)
   || !(libraryAspectShellElement instanceof HTMLElement)
   || !(panelLeftElement instanceof HTMLElement)
   || !(panelMiddleElement instanceof HTMLElement)
@@ -199,14 +202,12 @@ const STEAM_REVIEW_MISSING_WARNING_PATTERN = /no public steam review found/i;
 const RECENTLY_PLAYED_LIMIT = 12;
 const RECENTLY_PLAYED_STORAGE_KEY = "catalyst.library.recentlyPlayedByGameId";
 const RECENTLY_PLAYED_DRAG_THRESHOLD_PX = 8;
-const RECENTLY_PLAYED_INERTIA_FRICTION_PER_FRAME = 0.9;
-const RECENTLY_PLAYED_INERTIA_MIN_VELOCITY_PX_PER_MS = 0.018;
-const RECENTLY_PLAYED_ANIMATION_LERP = 0.28;
-const RECENTLY_PLAYED_ANIMATION_EPSILON_PX = 0.35;
-const RECENTLY_PLAYED_INERTIA_PROJECTION_MS = 160;
-const RECENTLY_PLAYED_PARALLAX_MAX_PX = 8;
-const RECENTLY_PLAYED_VELOCITY_BLEND_PREVIOUS = 0.6;
-const RECENTLY_PLAYED_VELOCITY_BLEND_SAMPLE = 0.4;
+const RECENTLY_PLAYED_INERTIA_FRICTION_PER_FRAME = 0.92;
+const RECENTLY_PLAYED_INERTIA_MIN_VELOCITY_PX_PER_MS = 0.02;
+const RECENTLY_PLAYED_ANIMATION_LERP = 0.22;
+const RECENTLY_PLAYED_ANIMATION_EPSILON_PX = 0.5;
+const RECENTLY_PLAYED_INERTIA_PROJECTION_MS = 220;
+const RECENTLY_PLAYED_PARALLAX_MAX_PX = 10;
 const LIBRARY_SOFT_LOCK_ASPECTS: ReadonlyArray<{ label: string; ratio: number }> = [
   { label: "16:9", ratio: 16 / 9 },
   { label: "21:9", ratio: 21 / 9 },
@@ -233,6 +234,7 @@ let uninstallVerificationAttemptCount = 0;
 let isUninstallVerificationInFlight = false;
 const pendingUninstallVerificationByKey = new Map<string, PendingUninstallVerification>();
 const recentlyPlayedOverrideByGameId = new Map<string, string>();
+const recentlyPlayedPerfMonitor = createRecentlyPlayedPerfMonitor();
 let activeRecentlyPlayedPointerId: number | null = null;
 let recentlyPlayedPointerStartX = 0;
 let recentlyPlayedScrollStartLeft = 0;
@@ -244,6 +246,8 @@ let recentlyPlayedAnimationFrameId: number | null = null;
 let recentlyPlayedLastAnimationTimestamp = 0;
 let recentlyPlayedIsDragging = false;
 let suppressNextRecentlyPlayedItemClick = false;
+let recentlyPlayedParallaxFrameId: number | null = null;
+let recentlyPlayedParallaxImages: HTMLImageElement[] = [];
 
 const runTaskWithTimeout = async <T>(
   task: Promise<T>,
@@ -2711,14 +2715,19 @@ const getRecentlyPlayedSnapTarget = (value: number): number => {
   return clamp(Math.round(value / scrollStepPx) * scrollStepPx, 0, maxScrollLeft);
 };
 
-const updateRecentlyPlayedParallax = (): void => {
-  const artworkImages = recentlyPlayedListElement.querySelectorAll<HTMLImageElement>(".recently-played-item-media > img");
-  if (artworkImages.length === 0) {
+const refreshRecentlyPlayedParallaxImages = (): void => {
+  recentlyPlayedParallaxImages = Array.from(
+    recentlyPlayedListElement.querySelectorAll<HTMLImageElement>(".recently-played-item-media > img")
+  );
+};
+
+const applyRecentlyPlayedParallax = (): void => {
+  if (recentlyPlayedParallaxImages.length === 0) {
     return;
   }
 
   if (userPrefersReducedMotion()) {
-    for (const artworkImage of artworkImages) {
+    for (const artworkImage of recentlyPlayedParallaxImages) {
       artworkImage.style.transform = "";
     }
     return;
@@ -2728,7 +2737,10 @@ const updateRecentlyPlayedParallax = (): void => {
   const viewportCenter = recentlyPlayedListElement.scrollLeft + (viewportWidth / 2);
   const halfViewportWidth = Math.max(1, viewportWidth / 2);
 
-  for (const artworkImage of artworkImages) {
+  for (const artworkImage of recentlyPlayedParallaxImages) {
+    if (!artworkImage.isConnected) {
+      continue;
+    }
     const mediaElement = artworkImage.parentElement;
     const cardElement = mediaElement?.parentElement;
     if (!(cardElement instanceof HTMLElement)) {
@@ -2740,6 +2752,21 @@ const updateRecentlyPlayedParallax = (): void => {
     const translateXPx = normalizedDistance * -RECENTLY_PLAYED_PARALLAX_MAX_PX;
     artworkImage.style.transform = `translate3d(${translateXPx.toFixed(2)}px, 0, 0) scale(1.04)`;
   }
+};
+
+const scheduleRecentlyPlayedParallax = (): void => {
+  if (recentlyPlayedParallaxFrameId !== null) {
+    return;
+  }
+
+  recentlyPlayedParallaxFrameId = window.requestAnimationFrame(() => {
+    recentlyPlayedParallaxFrameId = null;
+    applyRecentlyPlayedParallax();
+  });
+};
+
+const setRecentlyPlayedAnimatingState = (isAnimating: boolean): void => {
+  recentlyPlayedListElement.classList.toggle("is-animating", isAnimating || recentlyPlayedIsDragging);
 };
 
 const updateRecentlyPlayedControls = (): void => {
@@ -2760,7 +2787,7 @@ const updateRecentlyPlayedControls = (): void => {
 const setRecentlyPlayedScrollLeft = (value: number): void => {
   recentlyPlayedListElement.scrollLeft = clampRecentlyPlayedScrollLeft(value);
   updateRecentlyPlayedControls();
-  updateRecentlyPlayedParallax();
+  scheduleRecentlyPlayedParallax();
 };
 
 const stopRecentlyPlayedAnimation = (): void => {
@@ -2768,6 +2795,12 @@ const stopRecentlyPlayedAnimation = (): void => {
     window.cancelAnimationFrame(recentlyPlayedAnimationFrameId);
     recentlyPlayedAnimationFrameId = null;
   }
+  if (recentlyPlayedParallaxFrameId !== null) {
+    window.cancelAnimationFrame(recentlyPlayedParallaxFrameId);
+    recentlyPlayedParallaxFrameId = null;
+  }
+  recentlyPlayedPerfMonitor.endSession("stopped");
+  setRecentlyPlayedAnimatingState(false);
   recentlyPlayedLastAnimationTimestamp = 0;
 };
 
@@ -2777,6 +2810,7 @@ const runRecentlyPlayedAnimationFrame = (timestamp: number): void => {
     ? clamp(timestamp - recentlyPlayedLastAnimationTimestamp, 1, 34)
     : 16;
   recentlyPlayedLastAnimationTimestamp = timestamp;
+  recentlyPlayedPerfMonitor.recordFrame(frameDeltaMs);
 
   const prefersReducedMotion = userPrefersReducedMotion();
   let nextScrollLeft = recentlyPlayedListElement.scrollLeft;
@@ -2815,10 +2849,13 @@ const runRecentlyPlayedAnimationFrame = (timestamp: number): void => {
     || Math.abs(recentlyPlayedTargetScrollLeft - clampedScrollLeft) > RECENTLY_PLAYED_ANIMATION_EPSILON_PX;
 
   if (shouldContinueAnimating) {
+    setRecentlyPlayedAnimatingState(true);
     recentlyPlayedAnimationFrameId = window.requestAnimationFrame(runRecentlyPlayedAnimationFrame);
     return;
   }
 
+  recentlyPlayedPerfMonitor.endSession("settled");
+  setRecentlyPlayedAnimatingState(false);
   recentlyPlayedLastAnimationTimestamp = 0;
 };
 
@@ -2826,6 +2863,8 @@ const queueRecentlyPlayedAnimation = (): void => {
   if (recentlyPlayedAnimationFrameId !== null) {
     return;
   }
+  recentlyPlayedPerfMonitor.startSession("inertia");
+  setRecentlyPlayedAnimatingState(true);
   recentlyPlayedAnimationFrameId = window.requestAnimationFrame(runRecentlyPlayedAnimationFrame);
 };
 
@@ -2839,6 +2878,8 @@ const settleRecentlyPlayedToNearestSnap = (includeMomentum: boolean): void => {
   if (userPrefersReducedMotion()) {
     recentlyPlayedVelocityPxPerMs = 0;
     setRecentlyPlayedScrollLeft(recentlyPlayedTargetScrollLeft);
+    recentlyPlayedPerfMonitor.endSession("reduced-motion");
+    setRecentlyPlayedAnimatingState(false);
     return;
   }
 
@@ -2863,6 +2904,12 @@ const renderRecentlyPlayedRail = (): void => {
   stopRecentlyPlayedAnimation();
   recentlyPlayedIsDragging = false;
   recentlyPlayedVelocityPxPerMs = 0;
+  setRecentlyPlayedAnimatingState(false);
+  recentlyPlayedParallaxImages = [];
+  if (recentlyPlayedParallaxFrameId !== null) {
+    window.cancelAnimationFrame(recentlyPlayedParallaxFrameId);
+    recentlyPlayedParallaxFrameId = null;
+  }
   recentlyPlayedListElement.classList.remove("is-dragging");
   recentlyPlayedListElement.replaceChildren();
 
@@ -3012,8 +3059,9 @@ const renderRecentlyPlayedRail = (): void => {
 
   recentlyPlayedSectionElement.hidden = false;
   recentlyPlayedTargetScrollLeft = clampRecentlyPlayedScrollLeft(recentlyPlayedListElement.scrollLeft);
+  refreshRecentlyPlayedParallaxImages();
   updateRecentlyPlayedControls();
-  updateRecentlyPlayedParallax();
+  scheduleRecentlyPlayedParallax();
 };
 
 recentlyPlayedPrevButton.addEventListener("click", () => {
@@ -3029,7 +3077,7 @@ recentlyPlayedListElement.addEventListener("scroll", () => {
     recentlyPlayedTargetScrollLeft = clampRecentlyPlayedScrollLeft(recentlyPlayedListElement.scrollLeft);
   }
   updateRecentlyPlayedControls();
-  updateRecentlyPlayedParallax();
+  scheduleRecentlyPlayedParallax();
 }, { passive: true });
 
 recentlyPlayedListElement.addEventListener("keydown", (event) => {
@@ -3075,9 +3123,11 @@ recentlyPlayedListElement.addEventListener("pointermove", (event) => {
 
   const dragDeltaX = event.clientX - recentlyPlayedPointerStartX;
   if (!recentlyPlayedIsDragging && Math.abs(dragDeltaX) >= RECENTLY_PLAYED_DRAG_THRESHOLD_PX) {
+    recentlyPlayedPerfMonitor.startSession("drag");
     recentlyPlayedIsDragging = true;
     suppressNextRecentlyPlayedItemClick = true;
     recentlyPlayedListElement.classList.add("is-dragging");
+    setRecentlyPlayedAnimatingState(true);
   }
 
   if (!recentlyPlayedIsDragging) {
@@ -3093,8 +3143,7 @@ recentlyPlayedListElement.addEventListener("pointermove", (event) => {
   const deltaTimeMs = Math.max(1, event.timeStamp - recentlyPlayedLastPointerTimestamp);
   const pointerDeltaX = event.clientX - recentlyPlayedLastPointerX;
   const sampledVelocityPxPerMs = (-pointerDeltaX) / deltaTimeMs;
-  recentlyPlayedVelocityPxPerMs = (recentlyPlayedVelocityPxPerMs * RECENTLY_PLAYED_VELOCITY_BLEND_PREVIOUS)
-    + (sampledVelocityPxPerMs * RECENTLY_PLAYED_VELOCITY_BLEND_SAMPLE);
+  recentlyPlayedVelocityPxPerMs = (recentlyPlayedVelocityPxPerMs * 0.7) + (sampledVelocityPxPerMs * 0.3);
 
   recentlyPlayedLastPointerX = event.clientX;
   recentlyPlayedLastPointerTimestamp = event.timeStamp;
@@ -3122,6 +3171,8 @@ const endRecentlyPlayedPointerDrag = (pointerId: number): void => {
     settleRecentlyPlayedToNearestSnap(true);
   } else {
     recentlyPlayedVelocityPxPerMs = 0;
+    recentlyPlayedPerfMonitor.endSession("tap");
+    setRecentlyPlayedAnimatingState(false);
   }
 
   window.setTimeout(() => {
@@ -3142,7 +3193,7 @@ recentlyPlayedListElement.addEventListener("lostpointercapture", (event) => {
 });
 
 const libraryViewRenderer = createLibraryViewRenderer({
-  libraryGridElement,
+  libraryGridElement: libraryGridContentElement,
   filterPanel,
   setLibrarySummary,
   setLibraryViewMode: (viewMode, render) => {
@@ -4367,7 +4418,7 @@ const refreshLibrary = async (
       setLibrarySummary("Could not load your collections.");
     } else {
       renderGameGrid({
-        container: libraryGridElement,
+        container: libraryGridContentElement,
         games: [],
         emptyMessage: "Could not load your library.",
       });
@@ -4417,7 +4468,7 @@ refreshLibraryButton.addEventListener("click", () => {
 const applyStartupCoreConfiguration = (): void => {
   setLibraryViewMode("games", false);
   setLibrarySummary("Loading library...");
-  renderGameGridSkeleton({ container: libraryGridElement });
+  renderGameGridSkeleton({ container: libraryGridContentElement });
   renderLibraryLastUpdated();
   renderDownloadActivity();
 };

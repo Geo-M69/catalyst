@@ -108,37 +108,38 @@
           <p id="library-summary" class="status-message library-heading-summary">Loading library...</p>
         </header>
 
-        <section
-          id="recently-played-section"
-          class="recently-played-section"
-          hidden
-          aria-label="Recently played games"
-        >
-          <div class="recently-played-header">
-            <h2 class="recently-played-title">Recently Played</h2>
-            <div class="recently-played-controls">
-              <button
-                id="recently-played-prev"
-                class="recently-played-control-button"
-                type="button"
-                aria-label="Scroll recently played left"
-              >
-                &#8592;
-              </button>
-              <button
-                id="recently-played-next"
-                class="recently-played-control-button"
-                type="button"
-                aria-label="Scroll recently played right"
-              >
-                &#8594;
-              </button>
+        <div id="library-grid" class="library-grid-scroll" aria-live="polite">
+          <section
+            id="recently-played-section"
+            class="recently-played-section"
+            hidden
+            aria-label="Recently played games"
+          >
+            <div class="recently-played-header">
+              <h2 class="recently-played-title">Recently Played</h2>
+              <div class="recently-played-controls">
+                <button
+                  id="recently-played-prev"
+                  class="recently-played-control-button"
+                  type="button"
+                  aria-label="Scroll recently played left"
+                >
+                  &#8592;
+                </button>
+                <button
+                  id="recently-played-next"
+                  class="recently-played-control-button"
+                  type="button"
+                  aria-label="Scroll recently played right"
+                >
+                  &#8594;
+                </button>
+              </div>
             </div>
-          </div>
-          <div id="recently-played-list" class="recently-played-list" role="list" tabindex="0"></div>
-        </section>
-
-        <div id="library-grid" class="library-grid-scroll" aria-live="polite"></div>
+            <div id="recently-played-list" class="recently-played-list" role="list" tabindex="0"></div>
+          </section>
+          <div id="library-grid-content"></div>
+        </div>
       </section>
 
       <!-- Game details shell: hidden by default, shown when a game is opened -->

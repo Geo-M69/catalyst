@@ -464,6 +464,7 @@ dependencies = [
  "url",
  "uuid",
  "webbrowser",
+ "webkit2gtk",
 ]
 
 [[package]]

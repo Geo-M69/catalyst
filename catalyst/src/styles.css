@@ -2188,9 +2188,9 @@ body.show-back-button #game-details-back-button {
 
 .recently-played-section {
   display: grid;
-  gap: 0.5rem;
-  margin: 0.24rem 0.24rem 0.2rem;
-  padding: 0.58rem 0.62rem 0.62rem;
+  gap: 0.66rem;
+  margin: 0 0 0.8rem;
+  padding: 0.74rem 0.78rem 0.78rem;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 12px;
   background: #080808;
@@ -2206,7 +2206,7 @@ body.show-back-button #game-details-back-button {
 .recently-played-title {
   margin: 0;
   font-family: var(--font-inter);
-  font-size: 0.74rem;
+  font-size: 0.8rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   font-weight: 650;
@@ -2216,13 +2216,13 @@ body.show-back-button #game-details-back-button {
 .recently-played-controls {
   display: inline-flex;
   align-items: center;
-  gap: 0.24rem;
+  gap: 0.32rem;
 }
 
 .recently-played-control-button {
-  width: 1.72rem;
-  height: 1.72rem;
-  min-width: 1.72rem;
+  width: 1.92rem;
+  height: 1.92rem;
+  min-width: 1.92rem;
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 999px;
   background: #121212;
@@ -2243,8 +2243,8 @@ body.show-back-button #game-details-back-button {
 .recently-played-list {
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: minmax(122px, 156px);
-  gap: 0.56rem;
+  grid-auto-columns: minmax(146px, 196px);
+  gap: 0.68rem;
   overflow-x: auto;
   overflow-y: hidden;
   padding-bottom: 0.12rem;
@@ -2259,6 +2259,11 @@ body.show-back-button #game-details-back-button {
   cursor: grabbing;
   scroll-snap-type: none;
   user-select: none;
+}
+
+.recently-played-list.is-animating .recently-played-item-media img,
+.recently-played-list.is-dragging .recently-played-item-media img {
+  will-change: transform;
 }
 
 .recently-played-list:focus-visible {
@@ -2309,7 +2314,6 @@ body.show-back-button #game-details-back-button {
   object-position: center;
   display: block;
   transform: translate3d(0, 0, 0) scale(1.04);
-  will-change: transform;
 }
 
 .recently-played-item-media-placeholder {
@@ -2336,8 +2340,8 @@ body.show-back-button #game-details-back-button {
 }
 
 .recently-played-play-button {
-  width: 2.9rem;
-  height: 2.9rem;
+  width: 3.2rem;
+  height: 3.2rem;
   border: none;
   border-radius: 999px;
   background: transparent;
@@ -2355,8 +2359,8 @@ body.show-back-button #game-details-back-button {
 }
 
 .recently-played-play-button > svg {
-  width: 2.1rem;
-  height: 2.1rem;
+  width: 2.34rem;
+  height: 2.34rem;
   display: block;
   filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.55));
 }
@@ -5679,7 +5683,7 @@ body.show-back-button #game-details-back-button {
   }
 
   .recently-played-list {
-    grid-auto-columns: minmax(114px, 138px);
+    grid-auto-columns: minmax(128px, 164px);
   }
 
   .panel-heading {
