@@ -73,6 +73,8 @@ const escapeHtml = (unsafe: string): string => {
     .replace(/'/g, "&#039;");
 };
 
+const PLAY_CIRCLE_SVG_MARKUP = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"36\" height=\"36\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"feather feather-play-circle\"><circle cx=\"12\" cy=\"12\" r=\"10\"></circle><polygon points=\"10 8 16 12 10 16 10 8\"></polygon></svg>";
+
 const sessionAccountElement = document.getElementById("session-account");
 const sessionAccountButton = document.getElementById("session-account-button");
 const sessionAccountLabelElement = document.getElementById("session-account-label");
@@ -88,6 +90,10 @@ const downloadActivityElement = document.getElementById("download-activity");
 const downloadActivityCountElement = document.getElementById("download-activity-count");
 const downloadActivityListElement = document.getElementById("download-activity-list");
 const filterPanelElement = document.getElementById("filter-panel");
+const recentlyPlayedSectionElement = document.getElementById("recently-played-section");
+const recentlyPlayedPrevButton = document.getElementById("recently-played-prev");
+const recentlyPlayedNextButton = document.getElementById("recently-played-next");
+const recentlyPlayedListElement = document.getElementById("recently-played-list");
 const libraryGridElement = document.getElementById("library-grid");
 const libraryAspectShellElement = document.getElementById("library-aspect-shell");
 const panelLeftElement = document.querySelector<HTMLElement>(".panel-left");
@@ -120,6 +126,10 @@ if (
   || !(downloadActivityCountElement instanceof HTMLElement)
   || !(downloadActivityListElement instanceof HTMLElement)
   || !(filterPanelElement instanceof HTMLElement)
+  || !(recentlyPlayedSectionElement instanceof HTMLElement)
+  || !(recentlyPlayedPrevButton instanceof HTMLButtonElement)
+  || !(recentlyPlayedNextButton instanceof HTMLButtonElement)
+  || !(recentlyPlayedListElement instanceof HTMLElement)
   || !(libraryGridElement instanceof HTMLElement)
   || !(libraryAspectShellElement instanceof HTMLElement)
   || !(panelLeftElement instanceof HTMLElement)
@@ -159,7 +169,7 @@ if (
   gameDetailsBackButton.addEventListener("blur", hide);
 }
 
-import { getSteamArtworkCandidates } from "./steamArtwork";
+import { addUniqueCandidate, getSteamArtworkCandidates } from "./steamArtwork";
 import { isFiniteNonNegativeNumber } from "../shared/utils/format";
 const GRID_CARD_WIDTH_CSS_VAR = "--game-grid-card-min-width";
 const GRID_CARD_WIDTH_DEFAULT_PX = 180;
@@ -186,6 +196,17 @@ const DOWNLOAD_ETA_STALE_MS = 15000;
 const TOAST_DURATION_MS = 3200;
 const DLC_CDN_CAPSULE_URL = "https://cdn.cloudflare.steamstatic.com/steam/apps";
 const STEAM_REVIEW_MISSING_WARNING_PATTERN = /no public steam review found/i;
+const RECENTLY_PLAYED_LIMIT = 12;
+const RECENTLY_PLAYED_STORAGE_KEY = "catalyst.library.recentlyPlayedByGameId";
+const RECENTLY_PLAYED_DRAG_THRESHOLD_PX = 8;
+const RECENTLY_PLAYED_INERTIA_FRICTION_PER_FRAME = 0.9;
+const RECENTLY_PLAYED_INERTIA_MIN_VELOCITY_PX_PER_MS = 0.018;
+const RECENTLY_PLAYED_ANIMATION_LERP = 0.28;
+const RECENTLY_PLAYED_ANIMATION_EPSILON_PX = 0.35;
+const RECENTLY_PLAYED_INERTIA_PROJECTION_MS = 160;
+const RECENTLY_PLAYED_PARALLAX_MAX_PX = 8;
+const RECENTLY_PLAYED_VELOCITY_BLEND_PREVIOUS = 0.6;
+const RECENTLY_PLAYED_VELOCITY_BLEND_SAMPLE = 0.4;
 const LIBRARY_SOFT_LOCK_ASPECTS: ReadonlyArray<{ label: string; ratio: number }> = [
   { label: "16:9", ratio: 16 / 9 },
   { label: "21:9", ratio: 21 / 9 },
@@ -211,6 +232,18 @@ let uninstallVerificationTimer: number | null = null;
 let uninstallVerificationAttemptCount = 0;
 let isUninstallVerificationInFlight = false;
 const pendingUninstallVerificationByKey = new Map<string, PendingUninstallVerification>();
+const recentlyPlayedOverrideByGameId = new Map<string, string>();
+let activeRecentlyPlayedPointerId: number | null = null;
+let recentlyPlayedPointerStartX = 0;
+let recentlyPlayedScrollStartLeft = 0;
+let recentlyPlayedLastPointerX = 0;
+let recentlyPlayedLastPointerTimestamp = 0;
+let recentlyPlayedVelocityPxPerMs = 0;
+let recentlyPlayedTargetScrollLeft = 0;
+let recentlyPlayedAnimationFrameId: number | null = null;
+let recentlyPlayedLastAnimationTimestamp = 0;
+let recentlyPlayedIsDragging = false;
+let suppressNextRecentlyPlayedItemClick = false;
 
 const runTaskWithTimeout = async <T>(
   task: Promise<T>,
@@ -265,6 +298,95 @@ const getErrorMessage = (error: unknown, fallback: string): string => {
 
   return fallback;
 };
+
+const parseDateToMs = (rawDate?: string): number => {
+  if (!rawDate) {
+    return 0;
+  }
+
+  const parsedDate = Date.parse(rawDate);
+  if (Number.isNaN(parsedDate)) {
+    return 0;
+  }
+
+  return parsedDate;
+};
+
+const loadRecentlyPlayedOverridesFromStorage = (): void => {
+  recentlyPlayedOverrideByGameId.clear();
+
+  try {
+    const rawValue = localStorage.getItem(RECENTLY_PLAYED_STORAGE_KEY);
+    if (!rawValue) {
+      return;
+    }
+
+    const parsedValue = JSON.parse(rawValue) as Record<string, unknown>;
+    for (const [gameId, timestamp] of Object.entries(parsedValue)) {
+      if (typeof gameId !== "string" || gameId.trim().length === 0 || typeof timestamp !== "string") {
+        continue;
+      }
+      if (parseDateToMs(timestamp) <= 0) {
+        continue;
+      }
+      recentlyPlayedOverrideByGameId.set(gameId, timestamp);
+    }
+  } catch {
+    // Ignore localStorage and JSON parse errors.
+  }
+};
+
+const persistRecentlyPlayedOverridesToStorage = (): void => {
+  try {
+    const storagePayload: Record<string, string> = {};
+    for (const [gameId, timestamp] of recentlyPlayedOverrideByGameId) {
+      storagePayload[gameId] = timestamp;
+    }
+    localStorage.setItem(RECENTLY_PLAYED_STORAGE_KEY, JSON.stringify(storagePayload));
+  } catch {
+    // Ignore localStorage write failures in restricted environments.
+  }
+};
+
+const getGameRecentlyPlayedTimestampMs = (game: GameResponse): number => {
+  const syncedTimestampMs = parseDateToMs(game.lastPlayedAt);
+  const localTimestampMs = parseDateToMs(recentlyPlayedOverrideByGameId.get(game.id));
+  return Math.max(syncedTimestampMs, localTimestampMs);
+};
+
+const markGameAsRecentlyPlayed = (game: GameResponse): void => {
+  const playedAt = new Date().toISOString();
+  recentlyPlayedOverrideByGameId.set(game.id, playedAt);
+  persistRecentlyPlayedOverridesToStorage();
+  updateGameInState(game.id, (existingGame) => ({
+    ...existingGame,
+    lastPlayedAt: playedAt,
+  }));
+};
+
+const initialsFromGameName = (name: string): string => {
+  const words = name.trim().split(/\s+/).filter((value) => value.length > 0);
+  return words.slice(0, 2).map((word) => word[0]?.toUpperCase() ?? "").join("") || "?";
+};
+
+const resolveRecentlyPlayedArtworkCandidates = (game: GameResponse): string[] => {
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+
+  for (const candidate of getSteamArtworkCandidates(game, "cover")) {
+    addUniqueCandidate(candidate, seen, candidates);
+  }
+
+  for (const candidate of getSteamArtworkCandidates(game, "wide-cover")) {
+    addUniqueCandidate(candidate, seen, candidates);
+  }
+
+  addUniqueCandidate(game.artworkUrl, seen, candidates);
+  addUniqueCandidate(game.headerImage, seen, candidates);
+  return candidates;
+};
+
+loadRecentlyPlayedOverridesFromStorage();
 
 const resolveToastRegion = (): HTMLElement => {
   const existingRegion = document.getElementById("launcher-toast-region");
@@ -1274,6 +1396,8 @@ const renderGameDetails = (gameId: string, forceFriendsActivityRefresh = false):
 
           if (dlcGame.installed) {
             await ipcService.playGame({ provider: dlcGame.provider, externalId: dlcGame.externalId });
+            markGameAsRecentlyPlayed(dlcGame);
+            renderRecentlyPlayedRail();
             return;
           }
 
@@ -2528,11 +2652,496 @@ const filterPanel = createFilterPanel(filterPanelElement, () => {
   }
 });
 
-const {
-  renderGameLibrary,
-  renderCollectionLibrary,
-  renderActiveLibraryView,
-} = createLibraryViewRenderer({
+const hasActiveLibraryFilters = (): boolean => {
+  const filters = filterPanel.getFilters();
+  return (
+    filters.search.trim().length > 0
+    || filters.steamTag !== ""
+    || filters.collection !== ""
+    || filters.filterBy !== "all"
+    || filters.platform !== "all"
+    || filters.source !== "all"
+    || filters.kind !== "all"
+    || filters.genre !== "all"
+    || filters.sortBy !== "alphabetical"
+  );
+};
+
+const openGameDetailsFromRail = (gameId: string): void => {
+  const openDetailsEvent = new CustomEvent("open-game-details", {
+    detail: { gameId },
+    bubbles: true,
+  });
+  recentlyPlayedListElement.dispatchEvent(openDetailsEvent);
+};
+
+const userPrefersReducedMotion = (): boolean => {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+};
+
+const getRecentlyPlayedMaxScrollLeft = (): number => {
+  return Math.max(0, recentlyPlayedListElement.scrollWidth - recentlyPlayedListElement.clientWidth);
+};
+
+const clampRecentlyPlayedScrollLeft = (value: number): number => {
+  return clamp(value, 0, getRecentlyPlayedMaxScrollLeft());
+};
+
+const getRecentlyPlayedScrollStepPx = (): number => {
+  const firstCard = recentlyPlayedListElement.querySelector<HTMLElement>(".recently-played-item");
+  if (!(firstCard instanceof HTMLElement)) {
+    return Math.max(recentlyPlayedListElement.clientWidth * 0.75, 180);
+  }
+
+  const computedStyle = getComputedStyle(recentlyPlayedListElement);
+  const parsedGap = Number.parseFloat(computedStyle.columnGap || computedStyle.gap || "0");
+  const gapPx = Number.isFinite(parsedGap) ? parsedGap : 0;
+  return firstCard.getBoundingClientRect().width + gapPx;
+};
+
+const getRecentlyPlayedSnapTarget = (value: number): number => {
+  const maxScrollLeft = getRecentlyPlayedMaxScrollLeft();
+  if (maxScrollLeft <= 0) {
+    return 0;
+  }
+  const scrollStepPx = getRecentlyPlayedScrollStepPx();
+  if (!Number.isFinite(scrollStepPx) || scrollStepPx <= 0) {
+    return clamp(value, 0, maxScrollLeft);
+  }
+  return clamp(Math.round(value / scrollStepPx) * scrollStepPx, 0, maxScrollLeft);
+};
+
+const updateRecentlyPlayedParallax = (): void => {
+  const artworkImages = recentlyPlayedListElement.querySelectorAll<HTMLImageElement>(".recently-played-item-media > img");
+  if (artworkImages.length === 0) {
+    return;
+  }
+
+  if (userPrefersReducedMotion()) {
+    for (const artworkImage of artworkImages) {
+      artworkImage.style.transform = "";
+    }
+    return;
+  }
+
+  const viewportWidth = recentlyPlayedListElement.clientWidth;
+  const viewportCenter = recentlyPlayedListElement.scrollLeft + (viewportWidth / 2);
+  const halfViewportWidth = Math.max(1, viewportWidth / 2);
+
+  for (const artworkImage of artworkImages) {
+    const mediaElement = artworkImage.parentElement;
+    const cardElement = mediaElement?.parentElement;
+    if (!(cardElement instanceof HTMLElement)) {
+      continue;
+    }
+
+    const cardCenter = cardElement.offsetLeft + (cardElement.offsetWidth / 2);
+    const normalizedDistance = clamp((cardCenter - viewportCenter) / halfViewportWidth, -1, 1);
+    const translateXPx = normalizedDistance * -RECENTLY_PLAYED_PARALLAX_MAX_PX;
+    artworkImage.style.transform = `translate3d(${translateXPx.toFixed(2)}px, 0, 0) scale(1.04)`;
+  }
+};
+
+const updateRecentlyPlayedControls = (): void => {
+  if (recentlyPlayedSectionElement.hidden) {
+    recentlyPlayedPrevButton.disabled = true;
+    recentlyPlayedNextButton.disabled = true;
+    return;
+  }
+
+  const maxScrollLeft = getRecentlyPlayedMaxScrollLeft();
+  const currentScrollLeft = recentlyPlayedListElement.scrollLeft;
+  const canScroll = maxScrollLeft > 1;
+
+  recentlyPlayedPrevButton.disabled = !canScroll || currentScrollLeft <= 1;
+  recentlyPlayedNextButton.disabled = !canScroll || currentScrollLeft >= (maxScrollLeft - 1);
+};
+
+const setRecentlyPlayedScrollLeft = (value: number): void => {
+  recentlyPlayedListElement.scrollLeft = clampRecentlyPlayedScrollLeft(value);
+  updateRecentlyPlayedControls();
+  updateRecentlyPlayedParallax();
+};
+
+const stopRecentlyPlayedAnimation = (): void => {
+  if (recentlyPlayedAnimationFrameId !== null) {
+    window.cancelAnimationFrame(recentlyPlayedAnimationFrameId);
+    recentlyPlayedAnimationFrameId = null;
+  }
+  recentlyPlayedLastAnimationTimestamp = 0;
+};
+
+const runRecentlyPlayedAnimationFrame = (timestamp: number): void => {
+  recentlyPlayedAnimationFrameId = null;
+  const frameDeltaMs = recentlyPlayedLastAnimationTimestamp > 0
+    ? clamp(timestamp - recentlyPlayedLastAnimationTimestamp, 1, 34)
+    : 16;
+  recentlyPlayedLastAnimationTimestamp = timestamp;
+
+  const prefersReducedMotion = userPrefersReducedMotion();
+  let nextScrollLeft = recentlyPlayedListElement.scrollLeft;
+
+  if (
+    !prefersReducedMotion
+    && !recentlyPlayedIsDragging
+    && Math.abs(recentlyPlayedVelocityPxPerMs) >= RECENTLY_PLAYED_INERTIA_MIN_VELOCITY_PX_PER_MS
+  ) {
+    nextScrollLeft += recentlyPlayedVelocityPxPerMs * frameDeltaMs;
+    const normalizedFrameDelta = frameDeltaMs / (1000 / 60);
+    const velocityFriction = Math.pow(RECENTLY_PLAYED_INERTIA_FRICTION_PER_FRAME, normalizedFrameDelta);
+    recentlyPlayedVelocityPxPerMs *= velocityFriction;
+  } else if (Math.abs(recentlyPlayedVelocityPxPerMs) < RECENTLY_PLAYED_INERTIA_MIN_VELOCITY_PX_PER_MS) {
+    recentlyPlayedVelocityPxPerMs = 0;
+  }
+
+  recentlyPlayedTargetScrollLeft = clampRecentlyPlayedScrollLeft(recentlyPlayedTargetScrollLeft);
+  const targetDelta = recentlyPlayedTargetScrollLeft - nextScrollLeft;
+  if (Math.abs(targetDelta) > RECENTLY_PLAYED_ANIMATION_EPSILON_PX) {
+    nextScrollLeft += targetDelta * (prefersReducedMotion ? 1 : RECENTLY_PLAYED_ANIMATION_LERP);
+  } else if (recentlyPlayedVelocityPxPerMs === 0) {
+    nextScrollLeft = recentlyPlayedTargetScrollLeft;
+  }
+
+  const clampedScrollLeft = clampRecentlyPlayedScrollLeft(nextScrollLeft);
+  const maxScrollLeft = getRecentlyPlayedMaxScrollLeft();
+  if (clampedScrollLeft <= 0 || clampedScrollLeft >= maxScrollLeft) {
+    recentlyPlayedVelocityPxPerMs = 0;
+  }
+
+  setRecentlyPlayedScrollLeft(clampedScrollLeft);
+
+  const shouldContinueAnimating = recentlyPlayedIsDragging
+    || Math.abs(recentlyPlayedVelocityPxPerMs) >= RECENTLY_PLAYED_INERTIA_MIN_VELOCITY_PX_PER_MS
+    || Math.abs(recentlyPlayedTargetScrollLeft - clampedScrollLeft) > RECENTLY_PLAYED_ANIMATION_EPSILON_PX;
+
+  if (shouldContinueAnimating) {
+    recentlyPlayedAnimationFrameId = window.requestAnimationFrame(runRecentlyPlayedAnimationFrame);
+    return;
+  }
+
+  recentlyPlayedLastAnimationTimestamp = 0;
+};
+
+const queueRecentlyPlayedAnimation = (): void => {
+  if (recentlyPlayedAnimationFrameId !== null) {
+    return;
+  }
+  recentlyPlayedAnimationFrameId = window.requestAnimationFrame(runRecentlyPlayedAnimationFrame);
+};
+
+const settleRecentlyPlayedToNearestSnap = (includeMomentum: boolean): void => {
+  const currentScrollLeft = recentlyPlayedListElement.scrollLeft;
+  const projectedScrollLeft = includeMomentum && !userPrefersReducedMotion()
+    ? currentScrollLeft + (recentlyPlayedVelocityPxPerMs * RECENTLY_PLAYED_INERTIA_PROJECTION_MS)
+    : currentScrollLeft;
+  recentlyPlayedTargetScrollLeft = getRecentlyPlayedSnapTarget(projectedScrollLeft);
+
+  if (userPrefersReducedMotion()) {
+    recentlyPlayedVelocityPxPerMs = 0;
+    setRecentlyPlayedScrollLeft(recentlyPlayedTargetScrollLeft);
+    return;
+  }
+
+  queueRecentlyPlayedAnimation();
+};
+
+const scrollRecentlyPlayedByDirection = (direction: -1 | 1): void => {
+  recentlyPlayedVelocityPxPerMs = 0;
+  recentlyPlayedTargetScrollLeft = clampRecentlyPlayedScrollLeft(
+    recentlyPlayedListElement.scrollLeft + (getRecentlyPlayedScrollStepPx() * direction)
+  );
+
+  if (userPrefersReducedMotion()) {
+    setRecentlyPlayedScrollLeft(recentlyPlayedTargetScrollLeft);
+    return;
+  }
+
+  queueRecentlyPlayedAnimation();
+};
+
+const renderRecentlyPlayedRail = (): void => {
+  stopRecentlyPlayedAnimation();
+  recentlyPlayedIsDragging = false;
+  recentlyPlayedVelocityPxPerMs = 0;
+  recentlyPlayedListElement.classList.remove("is-dragging");
+  recentlyPlayedListElement.replaceChildren();
+
+  if (!isGameLibraryViewMode(libraryViewStore.activeLibraryViewMode) || hasActiveLibraryFilters()) {
+    recentlyPlayedSectionElement.hidden = true;
+    recentlyPlayedTargetScrollLeft = 0;
+    recentlyPlayedListElement.scrollLeft = 0;
+    updateRecentlyPlayedControls();
+    return;
+  }
+
+  const recentlyPlayedGames = libraryCatalogStore.allGames
+    .filter((game) => {
+      if (game.hideInLibrary === true) {
+        return false;
+      }
+      if (libraryViewStore.activeLibraryViewMode === "installed" && !game.installed) {
+        return false;
+      }
+      if (libraryViewStore.activeLibraryViewMode === "favorites" && !game.favorite) {
+        return false;
+      }
+      return getGameRecentlyPlayedTimestampMs(game) > 0;
+    })
+    .sort((left, right) => {
+      const rightPlayedAt = getGameRecentlyPlayedTimestampMs(right);
+      const leftPlayedAt = getGameRecentlyPlayedTimestampMs(left);
+      if (rightPlayedAt !== leftPlayedAt) {
+        return rightPlayedAt - leftPlayedAt;
+      }
+      if (right.playtimeMinutes !== left.playtimeMinutes) {
+        return right.playtimeMinutes - left.playtimeMinutes;
+      }
+      return left.name.localeCompare(right.name, undefined, { sensitivity: "base" });
+    })
+    .slice(0, RECENTLY_PLAYED_LIMIT);
+
+  if (recentlyPlayedGames.length === 0) {
+    recentlyPlayedSectionElement.hidden = true;
+    recentlyPlayedTargetScrollLeft = 0;
+    recentlyPlayedListElement.scrollLeft = 0;
+    updateRecentlyPlayedControls();
+    return;
+  }
+
+  for (const game of recentlyPlayedGames) {
+    const card = document.createElement("div");
+    card.className = "recently-played-item";
+    card.setAttribute("role", "listitem");
+    card.tabIndex = 0;
+    card.setAttribute("aria-label", `Open details for ${game.name}`);
+    card.addEventListener("click", (event) => {
+      if (suppressNextRecentlyPlayedItemClick) {
+        event.preventDefault();
+        suppressNextRecentlyPlayedItemClick = false;
+        return;
+      }
+      openGameDetailsFromRail(game.id);
+    });
+    card.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") {
+        return;
+      }
+
+      event.preventDefault();
+      openGameDetailsFromRail(game.id);
+    });
+
+    const media = document.createElement("div");
+    media.className = "recently-played-item-media";
+
+    const artworkCandidates = resolveRecentlyPlayedArtworkCandidates(game);
+    if (artworkCandidates.length > 0) {
+      const artwork = document.createElement("img");
+      artwork.alt = `${game.name} artwork`;
+      artwork.loading = "lazy";
+      artwork.decoding = "async";
+
+      let candidateIndex = 0;
+      artwork.addEventListener("error", () => {
+        candidateIndex += 1;
+        const nextCandidate = artworkCandidates[candidateIndex];
+        if (nextCandidate) {
+          artwork.src = nextCandidate;
+          return;
+        }
+        artwork.remove();
+        const placeholder = document.createElement("div");
+        placeholder.className = "recently-played-item-media-placeholder";
+        placeholder.textContent = initialsFromGameName(game.name);
+        media.append(placeholder);
+      });
+      artwork.src = artworkCandidates[candidateIndex] ?? "";
+      media.append(artwork);
+    } else {
+      const placeholder = document.createElement("div");
+      placeholder.className = "recently-played-item-media-placeholder";
+      placeholder.textContent = initialsFromGameName(game.name);
+      media.append(placeholder);
+    }
+
+    const overlay = document.createElement("div");
+    overlay.className = "recently-played-item-overlay";
+
+    const playButton = document.createElement("button");
+    playButton.type = "button";
+    playButton.className = "recently-played-play-button";
+    playButton.setAttribute(
+      "aria-label",
+      `${game.installed ? "Play" : "Install"} ${game.name}`
+    );
+    playButton.innerHTML = PLAY_CIRCLE_SVG_MARKUP;
+    playButton.addEventListener("pointerdown", (event) => {
+      event.stopPropagation();
+    });
+    playButton.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (game.uninstalling === true) {
+        showLauncherToast(`"${game.name}" is currently uninstalling.`, "error");
+        return;
+      }
+
+      try {
+        if (game.installed) {
+          await ipcService.playGame({ provider: game.provider, externalId: game.externalId });
+          markGameAsRecentlyPlayed(game);
+          renderRecentlyPlayedRail();
+          return;
+        }
+
+        await installGameForGame(game);
+        showLauncherToast(`Queued "${game.name}" for install.`);
+        void refreshSteamDownloads();
+      } catch (error) {
+        const appError = normalizeAppError(error, `Could not launch "${game.name}".`);
+        showLauncherToast(appError.message, "error");
+      }
+    });
+
+    overlay.append(playButton);
+    media.append(overlay);
+    card.append(media);
+    recentlyPlayedListElement.append(card);
+  }
+
+  recentlyPlayedSectionElement.hidden = false;
+  recentlyPlayedTargetScrollLeft = clampRecentlyPlayedScrollLeft(recentlyPlayedListElement.scrollLeft);
+  updateRecentlyPlayedControls();
+  updateRecentlyPlayedParallax();
+};
+
+recentlyPlayedPrevButton.addEventListener("click", () => {
+  scrollRecentlyPlayedByDirection(-1);
+});
+
+recentlyPlayedNextButton.addEventListener("click", () => {
+  scrollRecentlyPlayedByDirection(1);
+});
+
+recentlyPlayedListElement.addEventListener("scroll", () => {
+  if (activeRecentlyPlayedPointerId === null && recentlyPlayedAnimationFrameId === null) {
+    recentlyPlayedTargetScrollLeft = clampRecentlyPlayedScrollLeft(recentlyPlayedListElement.scrollLeft);
+  }
+  updateRecentlyPlayedControls();
+  updateRecentlyPlayedParallax();
+}, { passive: true });
+
+recentlyPlayedListElement.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowLeft") {
+    event.preventDefault();
+    scrollRecentlyPlayedByDirection(-1);
+    return;
+  }
+
+  if (event.key === "ArrowRight") {
+    event.preventDefault();
+    scrollRecentlyPlayedByDirection(1);
+  }
+});
+
+recentlyPlayedListElement.addEventListener("pointerdown", (event) => {
+  if (event.pointerType === "mouse" && event.button !== 0) {
+    return;
+  }
+
+  stopRecentlyPlayedAnimation();
+  activeRecentlyPlayedPointerId = event.pointerId;
+  recentlyPlayedPointerStartX = event.clientX;
+  recentlyPlayedScrollStartLeft = recentlyPlayedListElement.scrollLeft;
+  recentlyPlayedLastPointerX = event.clientX;
+  recentlyPlayedLastPointerTimestamp = event.timeStamp;
+  recentlyPlayedVelocityPxPerMs = 0;
+  recentlyPlayedIsDragging = false;
+  recentlyPlayedTargetScrollLeft = recentlyPlayedScrollStartLeft;
+  suppressNextRecentlyPlayedItemClick = false;
+  recentlyPlayedListElement.classList.remove("is-dragging");
+  try {
+    recentlyPlayedListElement.setPointerCapture(event.pointerId);
+  } catch {
+    // Ignore if the browser rejects pointer capture.
+  }
+});
+
+recentlyPlayedListElement.addEventListener("pointermove", (event) => {
+  if (activeRecentlyPlayedPointerId === null || event.pointerId !== activeRecentlyPlayedPointerId) {
+    return;
+  }
+
+  const dragDeltaX = event.clientX - recentlyPlayedPointerStartX;
+  if (!recentlyPlayedIsDragging && Math.abs(dragDeltaX) >= RECENTLY_PLAYED_DRAG_THRESHOLD_PX) {
+    recentlyPlayedIsDragging = true;
+    suppressNextRecentlyPlayedItemClick = true;
+    recentlyPlayedListElement.classList.add("is-dragging");
+  }
+
+  if (!recentlyPlayedIsDragging) {
+    recentlyPlayedLastPointerX = event.clientX;
+    recentlyPlayedLastPointerTimestamp = event.timeStamp;
+    return;
+  }
+
+  event.preventDefault();
+  setRecentlyPlayedScrollLeft(recentlyPlayedScrollStartLeft - dragDeltaX);
+  recentlyPlayedTargetScrollLeft = recentlyPlayedListElement.scrollLeft;
+
+  const deltaTimeMs = Math.max(1, event.timeStamp - recentlyPlayedLastPointerTimestamp);
+  const pointerDeltaX = event.clientX - recentlyPlayedLastPointerX;
+  const sampledVelocityPxPerMs = (-pointerDeltaX) / deltaTimeMs;
+  recentlyPlayedVelocityPxPerMs = (recentlyPlayedVelocityPxPerMs * RECENTLY_PLAYED_VELOCITY_BLEND_PREVIOUS)
+    + (sampledVelocityPxPerMs * RECENTLY_PLAYED_VELOCITY_BLEND_SAMPLE);
+
+  recentlyPlayedLastPointerX = event.clientX;
+  recentlyPlayedLastPointerTimestamp = event.timeStamp;
+});
+
+const endRecentlyPlayedPointerDrag = (pointerId: number): void => {
+  if (activeRecentlyPlayedPointerId !== pointerId) {
+    return;
+  }
+
+  if (activeRecentlyPlayedPointerId !== null) {
+    try {
+      recentlyPlayedListElement.releasePointerCapture(activeRecentlyPlayedPointerId);
+    } catch {
+      // Ignore if the pointer capture was already released.
+    }
+  }
+
+  const wasDragging = recentlyPlayedIsDragging;
+  activeRecentlyPlayedPointerId = null;
+  recentlyPlayedIsDragging = false;
+  recentlyPlayedListElement.classList.remove("is-dragging");
+
+  if (wasDragging) {
+    settleRecentlyPlayedToNearestSnap(true);
+  } else {
+    recentlyPlayedVelocityPxPerMs = 0;
+  }
+
+  window.setTimeout(() => {
+    suppressNextRecentlyPlayedItemClick = false;
+  }, 0);
+};
+
+recentlyPlayedListElement.addEventListener("pointerup", (event) => {
+  endRecentlyPlayedPointerDrag(event.pointerId);
+});
+
+recentlyPlayedListElement.addEventListener("pointercancel", (event) => {
+  endRecentlyPlayedPointerDrag(event.pointerId);
+});
+
+recentlyPlayedListElement.addEventListener("lostpointercapture", (event) => {
+  endRecentlyPlayedPointerDrag(event.pointerId);
+});
+
+const libraryViewRenderer = createLibraryViewRenderer({
   libraryGridElement,
   filterPanel,
   setLibrarySummary,
@@ -2549,6 +3158,21 @@ const {
     void deleteCollectionFromGrid(collection);
   },
 });
+
+const renderGameLibrary = (): void => {
+  libraryViewRenderer.renderGameLibrary();
+  renderRecentlyPlayedRail();
+};
+
+const renderCollectionLibrary = (): void => {
+  libraryViewRenderer.renderCollectionLibrary();
+  renderRecentlyPlayedRail();
+};
+
+const renderActiveLibraryView = (): void => {
+  libraryViewRenderer.renderActiveLibraryView();
+  renderRecentlyPlayedRail();
+};
 
 const listGameLanguagesForGame = async (game: GameResponse): Promise<string[]> => {
   try {
@@ -3410,6 +4034,8 @@ const gameContextMenu = createGameContextMenu({
         provider: game.provider,
         externalId: game.externalId,
       });
+      markGameAsRecentlyPlayed(game);
+      renderRecentlyPlayedRail();
     },
     setFavorite: async (game, favorite) => {
       await ipcService.setGameFavorite({
@@ -3474,6 +4100,8 @@ if (detailsPlayButton instanceof HTMLButtonElement) {
 
     if (game.installed) {
       await ipcService.playGame({ provider: game.provider, externalId: game.externalId });
+      markGameAsRecentlyPlayed(game);
+      renderRecentlyPlayedRail();
     } else {
       await installGameForGame(game);
       showLauncherToast(`Queued "${game.name}" for install.`);
@@ -3805,6 +4433,12 @@ const runStartupInitialization = async (): Promise<void> => {
 };
 
 window.addEventListener("resize", applyLibraryAspectSoftLock);
+window.addEventListener("resize", () => {
+  recentlyPlayedTargetScrollLeft = clampRecentlyPlayedScrollLeft(
+    Math.max(recentlyPlayedTargetScrollLeft, recentlyPlayedListElement.scrollLeft)
+  );
+  setRecentlyPlayedScrollLeft(recentlyPlayedTargetScrollLeft);
+});
 window.addEventListener("beforeunload", stopDownloadPolling);
 window.addEventListener("beforeunload", stopLibraryLastUpdatedTimer);
 

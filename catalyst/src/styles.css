@@ -2186,6 +2186,237 @@ body.show-back-button #game-details-back-button {
   overflow-wrap: anywhere;
 }
 
+.recently-played-section {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0.24rem 0.24rem 0.2rem;
+  padding: 0.58rem 0.62rem 0.62rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: #080808;
+}
+
+.recently-played-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.recently-played-title {
+  margin: 0;
+  font-family: var(--font-inter);
+  font-size: 0.74rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 650;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.recently-played-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.24rem;
+}
+
+.recently-played-control-button {
+  width: 1.72rem;
+  height: 1.72rem;
+  min-width: 1.72rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  background: #121212;
+  color: rgba(255, 255, 255, 0.86);
+  padding: 0;
+  font-size: 0.82rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: none;
+}
+
+.recently-played-control-button:disabled {
+  opacity: 0.44;
+}
+
+.recently-played-list {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(122px, 156px);
+  gap: 0.56rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 0.12rem;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
+  scroll-snap-type: x proximity;
+  touch-action: pan-y;
+  cursor: grab;
+}
+
+.recently-played-list.is-dragging {
+  cursor: grabbing;
+  scroll-snap-type: none;
+  user-select: none;
+}
+
+.recently-played-list:focus-visible {
+  outline: none;
+}
+
+.recently-played-list::-webkit-scrollbar {
+  height: 7px;
+}
+
+.recently-played-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 999px;
+}
+
+.recently-played-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.recently-played-item {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 11px;
+  padding: 0;
+  background: #121212;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.92);
+  display: block;
+  text-align: left;
+  box-shadow: none;
+  transition: border-color 150ms ease, box-shadow 160ms ease;
+  scroll-snap-align: start;
+  cursor: pointer;
+}
+
+.recently-played-item-media {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  background: rgba(0, 0, 0, 0.26);
+  overflow: hidden;
+}
+
+.recently-played-item-media img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  display: block;
+  transform: translate3d(0, 0, 0) scale(1.04);
+  will-change: transform;
+}
+
+.recently-played-item-media-placeholder {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  font-size: 1.12rem;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.92);
+  background: linear-gradient(160deg, rgba(244, 135, 182, 0.5), rgba(88, 116, 212, 0.42));
+}
+
+.recently-played-item-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.06), rgba(0, 0, 0, 0.58));
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 150ms ease, visibility 150ms ease;
+}
+
+.recently-played-play-button {
+  width: 2.9rem;
+  height: 2.9rem;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.95);
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.recently-played-play-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.34);
+}
+
+.recently-played-play-button > svg {
+  width: 2.1rem;
+  height: 2.1rem;
+  display: block;
+  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.55));
+}
+
+.recently-played-play-button > svg circle {
+  fill: rgba(0, 0, 0, 0.52);
+  stroke: rgba(255, 255, 255, 0.9);
+}
+
+.recently-played-play-button > svg polygon {
+  fill: rgba(255, 255, 255, 0.97);
+  stroke: none;
+}
+
+@media (hover: hover) {
+  .recently-played-control-button:not(:disabled):hover {
+    border-color: rgba(255, 255, 255, 0.24);
+    background: #161616;
+    color: rgba(255, 255, 255, 0.95);
+  }
+
+  .recently-played-item:hover {
+    border-color: rgba(255, 255, 255, 0.22);
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.34);
+  }
+
+  .recently-played-item:hover .recently-played-item-overlay {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+  }
+
+  .recently-played-play-button:hover {
+    color: rgba(255, 255, 255, 1);
+  }
+}
+
+.recently-played-control-button:focus-visible {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.recently-played-item:focus-visible {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.recently-played-item:focus-within .recently-played-item-overlay {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .recently-played-item-media img {
+    transform: none !important;
+    will-change: auto;
+  }
+}
+
 .library-grid-scroll {
   flex: 1;
   min-height: 0;
@@ -5441,6 +5672,14 @@ body.show-back-button #game-details-back-button {
 
   .panel-middle {
     min-height: 52vh;
+  }
+
+  .recently-played-section {
+    margin-inline: 0;
+  }
+
+  .recently-played-list {
+    grid-auto-columns: minmax(114px, 138px);
   }
 
   .panel-heading {

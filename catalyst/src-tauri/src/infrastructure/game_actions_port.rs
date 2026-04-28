@@ -10,6 +10,7 @@ use crate::load_game_properties_settings;
 use crate::normalize_game_identity_input;
 use crate::open_connection;
 use crate::AppState;
+use chrono::Utc;
 use rusqlite::{params, OptionalExtension};
 
 #[derive(Clone)]
@@ -60,7 +61,21 @@ impl GameActionsPort for InfrastructureGameActionsPort {
             &external_id,
             "play",
             resolved_launch_options.as_deref(),
-        )
+        )?;
+
+        let played_at = Utc::now().to_rfc3339();
+        if let Err(error) = connection.execute(
+            "
+            UPDATE games
+            SET last_played_at = ?1
+            WHERE user_id = ?2 AND provider = ?3 AND external_id = ?4
+            ",
+            params![played_at, &user.id, &provider, &external_id],
+        ) {
+            eprintln!("Could not persist game launch timestamp: {error}");
+        }
+
+        Ok(())
     }
 
     fn install_game(
