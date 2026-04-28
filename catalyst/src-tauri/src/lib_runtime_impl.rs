@@ -3,7 +3,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
-    time::{Duration, SystemTime},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use chrono::{Duration as ChronoDuration, TimeZone, Utc};
@@ -366,7 +366,7 @@ fn sync_steam_games_for_user(
     connection: &Connection,
     user: &UserRow,
     steam_api_key: Option<&str>,
-        steam_local_install_detection: bool,
+    steam_local_install_detection: bool,
     steam_root_override: Option<&str>,
     client: &Client,
 ) -> Result<usize, String> {
@@ -375,14 +375,24 @@ fn sync_steam_games_for_user(
         .as_deref()
         .ok_or_else(|| String::from("User is not linked to Steam"))?;
 
-    let locally_installed_app_ids = if steam_local_install_detection {
-        match detect_locally_installed_steam_app_ids(steam_root_override) {
-            Ok(app_ids) => Some(app_ids),
+    let locally_installed_games = if steam_local_install_detection {
+        match collect_locally_installed_steam_games(steam_root_override) {
+            Ok(games) => Some(games),
             Err(error) => {
                 eprintln!("Local Steam install detection failed: {error}");
                 None
             }
         }
+    } else {
+        None
+    };
+    let locally_installed_app_ids = if steam_local_install_detection {
+        locally_installed_games.as_ref().map(|games| {
+            games
+                .iter()
+                .filter_map(|game| game.external_id.parse::<u64>().ok())
+                .collect::<HashSet<_>>()
+        })
     } else {
         Some(HashSet::new())
     };
@@ -391,9 +401,15 @@ fn sync_steam_games_for_user(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
-        if let Some(app_ids) = locally_installed_app_ids.as_ref() {
+        if steam_local_install_detection {
+            if let Some(local_games) = locally_installed_games.as_ref() {
+                replace_provider_games(connection, &user.id, "steam", local_games)?;
+                return Ok(local_games.len());
+            }
+        } else if let Some(app_ids) = locally_installed_app_ids.as_ref() {
             refresh_provider_installed_flags(connection, &user.id, "steam", app_ids)?;
         }
+
         return Ok(0);
     };
 
@@ -580,8 +596,358 @@ fn detect_locally_installed_steam_app_ids(
     Ok(installed_app_ids)
 }
 
-    // Store result in cache for subsequent calls
-    // (we can't return earlier because we need a HashSet to be returned, so cache after computing)
+fn collect_locally_installed_steam_games(
+    steam_root_override: Option<&str>,
+) -> Result<Vec<LibraryGameInput>, String> {
+    let steam_roots = resolve_steam_root_paths(steam_root_override);
+    if steam_roots.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut seen_app_ids = HashSet::new();
+    let mut local_games = Vec::new();
+    for steam_root in steam_roots {
+        let steamapps_directories = match resolve_steamapps_directories(&steam_root) {
+            Ok(paths) => paths,
+            Err(error) => {
+                eprintln!(
+                    "Could not resolve Steam library paths from root {}: {}",
+                    steam_root.display(),
+                    error
+                );
+                continue;
+            }
+        };
+
+        for steamapps_directory in steamapps_directories {
+            if let Err(error) = collect_locally_installed_steam_games_from_steamapps_dir(
+                &steamapps_directory,
+                &mut seen_app_ids,
+                &mut local_games,
+            ) {
+                eprintln!(
+                    "Could not collect local Steam games from {}: {}",
+                    steamapps_directory.display(),
+                    error
+                );
+            }
+        }
+    }
+
+    Ok(local_games)
+}
+
+fn collect_locally_installed_steam_games_from_steamapps_dir(
+    steamapps_directory: &Path,
+    seen_app_ids: &mut HashSet<u64>,
+    output: &mut Vec<LibraryGameInput>,
+) -> Result<(), String> {
+    let directory_entries = match fs::read_dir(steamapps_directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(format!(
+                "Failed to read Steam library directory {}: {error}",
+                steamapps_directory.display()
+            ));
+        }
+    };
+
+    for directory_entry in directory_entries {
+        let entry = match directory_entry {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!(
+                    "Could not read Steam library entry in {}: {}",
+                    steamapps_directory.display(),
+                    error
+                );
+                continue;
+            }
+        };
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        let Some(app_id) = parse_steam_manifest_app_id(&file_name) else {
+            continue;
+        };
+        if seen_app_ids.contains(&app_id) {
+            continue;
+        }
+
+        let manifest_contents = match fs::read_to_string(entry.path()) {
+            Ok(contents) => contents,
+            Err(error) => {
+                eprintln!(
+                    "Could not read Steam app manifest {}: {}",
+                    entry.path().display(),
+                    error
+                );
+                continue;
+            }
+        };
+
+        if let Some(state_flags) = parse_steam_manifest_u64_field(&manifest_contents, "StateFlags") {
+            if state_flags & STEAM_APP_STATE_FULLY_INSTALLED == 0 {
+                continue;
+            }
+        }
+
+        let install_dir_name = match parse_steam_manifest_install_directory(&manifest_contents) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let install_directory = steamapps_directory.join("common").join(install_dir_name);
+        if !install_directory.is_dir() {
+            continue;
+        }
+
+        let has_install_content = match fs::read_dir(&install_directory) {
+            Ok(mut entries) => entries.next().is_some(),
+            Err(_) => false,
+        };
+        if !has_install_content {
+            continue;
+        }
+
+        let external_id = app_id.to_string();
+        let name = parse_steam_manifest_string_field(&manifest_contents, "name")
+            .unwrap_or_else(|| format!("Steam App {external_id}"));
+        let kind = classify_steam_game_kind(&name).to_owned();
+        let artwork_url = parse_steam_manifest_string_field(&manifest_contents, "icon")
+            .map(|icon_hash| {
+                format!(
+                    "https://media.steampowered.com/steamcommunity/public/images/apps/{external_id}/{icon_hash}.jpg"
+                )
+            });
+
+        output.push(LibraryGameInput {
+            external_id,
+            name,
+            kind,
+            playtime_minutes: 0,
+            installed: true,
+            artwork_url,
+            last_synced_at: Utc::now().to_rfc3339(),
+            last_played_at: parse_steam_manifest_last_played_at(&manifest_contents),
+        });
+        seen_app_ids.insert(app_id);
+    }
+
+    Ok(())
+}
+
+fn parse_steam_manifest_last_played_at(manifest_contents: &str) -> Option<String> {
+    let seconds_since_epoch = parse_steam_manifest_u64_field(manifest_contents, "LastPlayed")?;
+    if seconds_since_epoch == 0 {
+        return None;
+    }
+
+    let seconds_since_epoch = i64::try_from(seconds_since_epoch).ok()?;
+    Utc.timestamp_opt(seconds_since_epoch, 0)
+        .single()
+        .map(|value| value.to_rfc3339())
+}
+
+#[derive(Debug, Clone)]
+struct ActiveSteamUserCandidate {
+    steam_id: String,
+    source_priority: u8,
+    modified_epoch_secs: u64,
+    root_index: usize,
+}
+
+fn should_replace_active_steam_user_candidate(
+    current: &ActiveSteamUserCandidate,
+    candidate: &ActiveSteamUserCandidate,
+) -> bool {
+    if candidate.source_priority != current.source_priority {
+        return candidate.source_priority > current.source_priority;
+    }
+    if candidate.modified_epoch_secs != current.modified_epoch_secs {
+        return candidate.modified_epoch_secs > current.modified_epoch_secs;
+    }
+
+    candidate.root_index < current.root_index
+}
+
+fn modified_epoch_secs(path: &Path) -> Option<u64> {
+    fs::metadata(path)
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_secs())
+}
+
+fn steam_id64_from_userdata_directory_name(directory_name: &str) -> Option<String> {
+    let trimmed_name = directory_name.trim();
+    if trimmed_name.is_empty() || !trimmed_name.chars().all(|character| character.is_ascii_digit()) {
+        return None;
+    }
+
+    let numeric_value = trimmed_name.parse::<u64>().ok()?;
+    if trimmed_name.len() == 17 {
+        return Some(trimmed_name.to_owned());
+    }
+
+    if numeric_value >= STEAM_ID64_ACCOUNT_ID_BASE {
+        return Some(numeric_value.to_string());
+    }
+
+    Some((STEAM_ID64_ACCOUNT_ID_BASE + numeric_value).to_string())
+}
+
+fn resolve_active_local_steam_id_from_userdata_root(steam_root: &Path) -> Option<(String, u64)> {
+    let userdata_directory = steam_root.join("userdata");
+    let directory_entries = fs::read_dir(&userdata_directory).ok()?;
+    let mut best_candidate: Option<(String, u64)> = None;
+
+    for directory_entry in directory_entries.flatten() {
+        let Ok(file_type) = directory_entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+
+        let directory_name = directory_entry.file_name().to_string_lossy().to_string();
+        let Some(steam_id) = steam_id64_from_userdata_directory_name(&directory_name) else {
+            continue;
+        };
+
+        let entry_path = directory_entry.path();
+        let modified_at = [
+            entry_path.join("config").join("localconfig.vdf"),
+            entry_path.join("config").join("sharedconfig.vdf"),
+            entry_path.join("7").join("remote").join("sharedconfig.vdf"),
+            entry_path,
+        ]
+        .iter()
+        .filter_map(|path| modified_epoch_secs(path))
+        .max()
+        .unwrap_or(0);
+
+        let candidate = (steam_id, modified_at);
+        match &best_candidate {
+            Some((_, best_modified_at)) if modified_at <= *best_modified_at => {}
+            _ => {
+                best_candidate = Some(candidate);
+            }
+        }
+    }
+
+    best_candidate
+}
+
+fn is_truthy_steam_flag(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn is_steam_id64(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed.len() == 17 && trimmed.chars().all(|character| character.is_ascii_digit())
+}
+
+fn parse_active_steam_id_from_loginusers(contents: &str) -> Option<String> {
+    let parsed_document = crate::infrastructure::runtime_vdf::parse_vdf_document(contents).ok()?;
+    let users_value =
+        crate::infrastructure::runtime_vdf::vdf_find_object_value(&parsed_document, "users")?;
+    let crate::infrastructure::runtime_vdf::VdfValue::Object(user_entries) = users_value else {
+        return None;
+    };
+
+    let mut most_recent = None;
+    let mut auto_login = None;
+    let mut first_user = None;
+
+    for (raw_steam_id, user_value) in user_entries {
+        let steam_id = raw_steam_id.trim();
+        if !is_steam_id64(steam_id) {
+            continue;
+        }
+
+        let steam_id = steam_id.to_owned();
+        if first_user.is_none() {
+            first_user = Some(steam_id.clone());
+        }
+
+        let is_most_recent = crate::infrastructure::runtime_vdf::vdf_get_text_entry(
+            user_value,
+            "MostRecent",
+        )
+        .map(is_truthy_steam_flag)
+        .unwrap_or(false);
+        if is_most_recent {
+            most_recent = Some(steam_id.clone());
+            continue;
+        }
+
+        let allows_auto_login = crate::infrastructure::runtime_vdf::vdf_get_text_entry(
+            user_value,
+            "AllowAutoLogin",
+        )
+        .or_else(|| {
+            crate::infrastructure::runtime_vdf::vdf_get_text_entry(user_value, "RememberPassword")
+        })
+        .map(is_truthy_steam_flag)
+        .unwrap_or(false);
+        if allows_auto_login && auto_login.is_none() {
+            auto_login = Some(steam_id);
+        }
+    }
+
+    most_recent.or(auto_login).or(first_user)
+}
+
+fn resolve_active_local_steam_id(steam_root_override: Option<&str>) -> Option<String> {
+    let steam_roots = resolve_steam_root_paths(steam_root_override);
+    let mut best_candidate: Option<ActiveSteamUserCandidate> = None;
+
+    for (root_index, steam_root) in steam_roots.into_iter().enumerate() {
+        let loginusers_path = steam_root.join("config").join("loginusers.vdf");
+        if let Ok(loginusers_contents) = fs::read_to_string(&loginusers_path) {
+            if let Some(active_steam_id) = parse_active_steam_id_from_loginusers(&loginusers_contents)
+            {
+                let candidate = ActiveSteamUserCandidate {
+                    steam_id: active_steam_id,
+                    source_priority: 2,
+                    modified_epoch_secs: modified_epoch_secs(&loginusers_path).unwrap_or(0),
+                    root_index,
+                };
+                match &best_candidate {
+                    Some(current) if !should_replace_active_steam_user_candidate(current, &candidate) => {}
+                    _ => {
+                        best_candidate = Some(candidate);
+                    }
+                }
+                continue;
+            }
+        }
+
+        if let Some((active_steam_id, modified_epoch_secs)) =
+            resolve_active_local_steam_id_from_userdata_root(&steam_root)
+        {
+            let candidate = ActiveSteamUserCandidate {
+                steam_id: active_steam_id,
+                source_priority: 1,
+                modified_epoch_secs,
+                root_index,
+            };
+            match &best_candidate {
+                Some(current) if !should_replace_active_steam_user_candidate(current, &candidate) => {}
+                _ => {
+                    best_candidate = Some(candidate);
+                }
+            }
+        }
+    }
+
+    best_candidate.map(|candidate| candidate.steam_id)
+}
 
 fn resolve_steam_root_paths(steam_root_override: Option<&str>) -> Vec<PathBuf> {
     if let Some(override_path) = steam_root_override
@@ -614,6 +980,19 @@ fn resolve_steam_root_path(steam_root_override: Option<&str>) -> Option<PathBuf>
         .next()
 }
 
+fn resolve_steam_root_path_for_user(
+    steam_root_override: Option<&str>,
+    steam_id: &str,
+) -> Option<PathBuf> {
+    for steam_root in resolve_steam_root_paths(steam_root_override) {
+        if resolve_steam_userdata_directory(&steam_root, steam_id).is_ok() {
+            return Some(steam_root);
+        }
+    }
+
+    None
+}
+
 fn resolve_steam_userdata_directory(steam_root: &Path, steam_id: &str) -> Result<PathBuf, String> {
     let userdata_directory = steam_root.join("userdata");
     let candidate_directory_names = steam_userdata_candidate_directory_names(steam_id)?;
@@ -635,7 +1014,8 @@ fn resolve_steam_localconfig_path(
     steam_root_override: Option<&str>,
     steam_id: &str,
 ) -> Result<PathBuf, String> {
-    let steam_root = resolve_steam_root_path(steam_root_override)
+    let steam_root = resolve_steam_root_path_for_user(steam_root_override, steam_id)
+        .or_else(|| resolve_steam_root_path(steam_root_override))
         .ok_or_else(|| String::from("Could not locate local Steam installation"))?;
     let userdata_directory = resolve_steam_userdata_directory(&steam_root, steam_id)?;
     let localconfig_path = userdata_directory.join("config").join("localconfig.vdf");
@@ -653,7 +1033,8 @@ fn resolve_steam_sharedconfig_paths(
     steam_root_override: Option<&str>,
     steam_id: &str,
 ) -> Result<Vec<PathBuf>, String> {
-    let steam_root = resolve_steam_root_path(steam_root_override)
+    let steam_root = resolve_steam_root_path_for_user(steam_root_override, steam_id)
+        .or_else(|| resolve_steam_root_path(steam_root_override))
         .ok_or_else(|| String::from("Could not locate local Steam installation"))?;
     let userdata_directory = resolve_steam_userdata_directory(&steam_root, steam_id)?;
     let candidates = [
@@ -670,7 +1051,8 @@ fn resolve_steam_cloudstorage_directory(
     steam_root_override: Option<&str>,
     steam_id: &str,
 ) -> Result<PathBuf, String> {
-    let steam_root = resolve_steam_root_path(steam_root_override)
+    let steam_root = resolve_steam_root_path_for_user(steam_root_override, steam_id)
+        .or_else(|| resolve_steam_root_path(steam_root_override))
         .ok_or_else(|| String::from("Could not locate local Steam installation"))?;
     let userdata_directory = resolve_steam_userdata_directory(&steam_root, steam_id)?;
     let cloudstorage_directory = userdata_directory.join("config").join("cloudstorage");
@@ -2026,6 +2408,8 @@ fn find_cached_steam_app_features(
 mod tests {
     use super::*;
     use rusqlite::Connection;
+    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn cache_and_find_steam_app_details_roundtrip() {
@@ -2059,6 +2443,145 @@ mod tests {
         let cached = cached.unwrap();
         assert_eq!(cached.get("success").and_then(|v| v.as_bool()), Some(true));
         assert!(cached.get("data").is_some());
+    }
+
+    #[test]
+    fn parse_active_steam_id_prefers_most_recent_loginuser() {
+        let contents = r#"
+            "users"
+            {
+                "76561198000000001"
+                {
+                    "AccountName" "older"
+                    "AllowAutoLogin" "1"
+                    "MostRecent" "0"
+                }
+                "76561198000000002"
+                {
+                    "AccountName" "active"
+                    "AllowAutoLogin" "0"
+                    "MostRecent" "1"
+                }
+            }
+        "#;
+
+        let active_steam_id = parse_active_steam_id_from_loginusers(contents);
+        assert_eq!(active_steam_id.as_deref(), Some("76561198000000002"));
+    }
+
+    #[test]
+    fn parse_active_steam_id_falls_back_to_auto_login_user() {
+        let contents = r#"
+            "users"
+            {
+                "76561198000000003"
+                {
+                    "AccountName" "candidate"
+                    "AllowAutoLogin" "1"
+                }
+                "76561198000000004"
+                {
+                    "AccountName" "secondary"
+                    "AllowAutoLogin" "0"
+                }
+            }
+        "#;
+
+        let active_steam_id = parse_active_steam_id_from_loginusers(contents);
+        assert_eq!(active_steam_id.as_deref(), Some("76561198000000003"));
+    }
+
+    #[test]
+    fn resolve_active_local_steam_id_falls_back_to_userdata_when_loginusers_missing() {
+        let steam_root = tempdir().expect("create temp steam root");
+        let account_id = 12_345_678_u64;
+        let expected_steam_id = (STEAM_ID64_ACCOUNT_ID_BASE + account_id).to_string();
+
+        fs::create_dir_all(
+            steam_root
+                .path()
+                .join("userdata")
+                .join(account_id.to_string())
+                .join("config"),
+        )
+        .expect("create userdata config directory");
+        fs::write(
+            steam_root
+                .path()
+                .join("userdata")
+                .join(account_id.to_string())
+                .join("config")
+                .join("localconfig.vdf"),
+            "\"UserLocalConfigStore\" {}",
+        )
+        .expect("write localconfig");
+
+        let active_steam_id =
+            resolve_active_local_steam_id(Some(steam_root.path().to_string_lossy().as_ref()));
+        assert_eq!(active_steam_id.as_deref(), Some(expected_steam_id.as_str()));
+    }
+
+    #[test]
+    fn resolve_active_local_steam_id_falls_back_to_userdata_when_loginusers_is_invalid() {
+        let steam_root = tempdir().expect("create temp steam root");
+        let account_id = 87_654_321_u64;
+        let expected_steam_id = (STEAM_ID64_ACCOUNT_ID_BASE + account_id).to_string();
+
+        fs::create_dir_all(steam_root.path().join("config")).expect("create config directory");
+        fs::write(steam_root.path().join("config").join("loginusers.vdf"), "not-vdf")
+            .expect("write invalid loginusers");
+
+        fs::create_dir_all(
+            steam_root
+                .path()
+                .join("userdata")
+                .join(account_id.to_string())
+                .join("config"),
+        )
+        .expect("create userdata config directory");
+        fs::write(
+            steam_root
+                .path()
+                .join("userdata")
+                .join(account_id.to_string())
+                .join("config")
+                .join("localconfig.vdf"),
+            "\"UserLocalConfigStore\" {}",
+        )
+        .expect("write localconfig");
+
+        let active_steam_id =
+            resolve_active_local_steam_id(Some(steam_root.path().to_string_lossy().as_ref()));
+        assert_eq!(active_steam_id.as_deref(), Some(expected_steam_id.as_str()));
+    }
+
+    #[test]
+    fn resolve_active_local_steam_id_prefers_loginusers_over_userdata_fallback() {
+        let steam_root = tempdir().expect("create temp steam root");
+        let loginusers_steam_id = "76561198000000055";
+        let account_id = 99_888_777_u64;
+
+        fs::create_dir_all(steam_root.path().join("config")).expect("create config directory");
+        fs::write(
+            steam_root.path().join("config").join("loginusers.vdf"),
+            format!(
+                "\"users\"\n{{\n    \"{loginusers_steam_id}\"\n    {{\n        \"MostRecent\"\t\"1\"\n    }}\n}}\n"
+            ),
+        )
+        .expect("write loginusers");
+
+        fs::create_dir_all(
+            steam_root
+                .path()
+                .join("userdata")
+                .join(account_id.to_string())
+                .join("config"),
+        )
+        .expect("create userdata config directory");
+
+        let active_steam_id =
+            resolve_active_local_steam_id(Some(steam_root.path().to_string_lossy().as_ref()));
+        assert_eq!(active_steam_id.as_deref(), Some(loginusers_steam_id));
     }
 }
 
@@ -4169,6 +4692,10 @@ fn clear_active_session(state: &AppState) -> Result<(), String> {
 
 fn restore_persisted_session(state: &AppState) -> Result<(), String> {
     crate::infrastructure::runtime_auth::restore_persisted_session(state)
+}
+
+fn bootstrap_local_session(state: &AppState) -> Result<Option<UserRow>, String> {
+    crate::infrastructure::runtime_auth::bootstrap_local_session(state)
 }
 
 fn build_http_client() -> Result<Client, String> {

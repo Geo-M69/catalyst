@@ -12,6 +12,7 @@ pub(crate) trait AuthPort: Clone + Send + 'static {
     fn get_state_session_token(&self) -> AppResult<Option<String>>;
     fn clear_active_session(&self) -> AppResult<()>;
     fn persist_active_session(&self, session_token: &str) -> AppResult<()>;
+    fn bootstrap_local_session(&self) -> AppResult<Option<PublicUser>>;
     fn cleanup_expired_sessions(&self) -> AppResult<()>;
     fn invalidate_session_by_token(&self, session_token: &str) -> AppResult<()>;
     fn find_user_by_session_token(&self, session_token: &str) -> AppResult<Option<PublicUser>>;

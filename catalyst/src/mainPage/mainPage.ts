@@ -217,7 +217,7 @@ const LIBRARY_SOFT_LOCK_ASPECTS: ReadonlyArray<{ label: string; ratio: number }>
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
 // runtime platform alias used below
 type RuntimePlatform = "windows" | "macos" | "linux" | "other";
-type SessionRefreshResult = "ready" | "redirecting" | "failed";
+type SessionRefreshResult = "ready" | "no-session" | "failed";
 type AppHistoryState = {
   gameId?: string;
   view?: "game-details" | "library";
@@ -429,8 +429,8 @@ const setSessionStatus = (steamConnected: boolean, isError = false): void => {
   sessionStore.steamLinked = steamConnected && !isError;
   sessionAccountLabelElement.textContent = APP_NAME;
   sessionAccountButton.classList.toggle("is-error", isError);
-  sessionAccountManageButton.disabled = isError;
-  sessionAccountSignOutButton.disabled = false;
+  sessionAccountManageButton.disabled = isError || !sessionStore.steamLinked;
+  sessionAccountSignOutButton.disabled = isError || !sessionStore.steamLinked;
   downloadActivityElement.classList.toggle("is-disabled", isError || !sessionStore.steamLinked);
   if (!sessionStore.steamLinked) {
     stopDownloadPolling();
@@ -479,6 +479,13 @@ const setSessionStatus = (steamConnected: boolean, isError = false): void => {
 const setLibrarySummary = (message: string): void => {
   librarySummaryElement.textContent = message;
   librarySummaryElement.classList.remove("status-error");
+};
+
+const renderSteamMissingEmptyState = (): void => {
+  setAllGames([]);
+  setAllCollections([]);
+  renderActiveLibraryView();
+  setLibrarySummary("Catalyst could not auto-detect a local Steam account. Make sure Steam is installed and Catalyst can read your Steam files, then restart Catalyst.");
 };
 
 const {
@@ -4344,7 +4351,7 @@ sessionAccountSignOutButton.addEventListener("click", () => {
   void (async () => {
     try {
       await ipcService.logout();
-      window.location.replace("/index.html");
+      window.location.replace("/main.html");
     } catch (error) {
       const appError = normalizeAppError(error, "Could not sign out.");
       console.error(`[auth/logout] ${appError.kind}:${appError.code} ${appError.message}`);
@@ -4366,6 +4373,14 @@ const refreshLibrary = async (
 
   if (librarySyncStore.isLoadingLibrary) {
     return;
+  }
+
+  if (!sessionStore.steamLinked) {
+    const sessionStatus = await refreshSession();
+    if (sessionStatus !== "ready") {
+      renderSteamMissingEmptyState();
+      return;
+    }
   }
 
   try {
@@ -4439,8 +4454,8 @@ const refreshSession = async (throwOnError = false): Promise<SessionRefreshResul
   try {
     const session = await ipcService.getSession();
     if (!session) {
-      window.location.replace("/index.html");
-      return "redirecting";
+      setSessionStatus(false);
+      return "no-session";
     }
 
     setSessionStatus(session.steamLinked);
@@ -4476,7 +4491,8 @@ const applyStartupCoreConfiguration = (): void => {
 const runStartupInitialization = async (): Promise<void> => {
   applyStartupCoreConfiguration();
   const sessionStatus = await refreshSession(true);
-  if (sessionStatus === "redirecting") {
+  if (sessionStatus !== "ready") {
+    renderSteamMissingEmptyState();
     return;
   }
 

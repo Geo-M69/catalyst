@@ -36,16 +36,16 @@ where
     fn get_session(&self) -> AppResult<Option<PublicUser>> {
         self.port.cleanup_expired_sessions()?;
 
-        let Some(session_token) = self.port.get_state_session_token()? else {
-            return Ok(None);
-        };
+        if let Some(session_token) = self.port.get_state_session_token()? {
+            let user = self.port.find_user_by_session_token(&session_token)?;
+            if user.is_some() {
+                return Ok(user);
+            }
 
-        let user = self.port.find_user_by_session_token(&session_token)?;
-        if user.is_none() {
             self.port.clear_active_session()?;
         }
 
-        Ok(user)
+        self.port.bootstrap_local_session()
     }
 
     fn start_steam_auth(&self) -> AppResult<SteamAuthResponse> {

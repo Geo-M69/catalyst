@@ -283,6 +283,52 @@ pub(crate) fn complete_steam_auth_flow(
     })
 }
 
+pub(crate) fn bootstrap_local_session(state: &AppState) -> Result<Option<UserRow>, String> {
+    if !state.steam_local_install_detection {
+        return Ok(None);
+    }
+
+    let connection = crate::infrastructure::runtime_database::open_connection(&state.db_path)?;
+    cleanup_expired_sessions(&connection)?;
+
+    if let Some(session_token) =
+        crate::infrastructure::runtime_session_state::get_state_session_token(state)?
+    {
+        if let Some(user) = find_user_by_session_token(&connection, &session_token)? {
+            return Ok(Some(user));
+        }
+
+        crate::infrastructure::runtime_session_state::clear_active_session(state)?;
+    }
+
+    let Some(steam_id) = crate::resolve_active_local_steam_id(state.steam_root_override.as_deref())
+    else {
+        return Ok(None);
+    };
+
+    let user = match find_user_by_steam_id(&connection, &steam_id)? {
+        Some(existing_user) => existing_user,
+        None => create_steam_user(&connection, &steam_id)?,
+    };
+
+    let client = crate::infrastructure::runtime_http::build_http_client()?;
+    if let Err(error) = crate::sync_steam_games_for_user(
+        &connection,
+        &user,
+        state.steam_api_key.as_deref(),
+        state.steam_local_install_detection,
+        state.steam_root_override.as_deref(),
+        &client,
+    ) {
+        eprintln!("Local Steam bootstrap sync failed: {error}");
+    }
+
+    let session_token = create_session(&connection, &user.id)?;
+    crate::infrastructure::runtime_session_state::persist_active_session(state, &session_token)?;
+
+    Ok(Some(user))
+}
+
 fn resolve_user_for_steam_auth(
     connection: &Connection,
     current_user: Option<&UserRow>,

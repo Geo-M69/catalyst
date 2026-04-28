@@ -38,6 +38,11 @@ impl AuthPort for InfrastructureAuthPort {
         crate::persist_active_session(&self.state, session_token).map_err(AppError::from)
     }
 
+    fn bootstrap_local_session(&self) -> AppResult<Option<PublicUser>> {
+        let user = crate::bootstrap_local_session(&self.state).map_err(AppError::from)?;
+        Ok(user.map(|row| Self::to_contract_public_user(crate::public_user_from_row(&row))))
+    }
+
     fn cleanup_expired_sessions(&self) -> AppResult<()> {
         let connection = crate::open_connection(&self.state.db_path).map_err(AppError::from)?;
         crate::cleanup_expired_sessions(&connection).map_err(AppError::from)

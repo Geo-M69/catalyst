@@ -3,7 +3,7 @@ use crate::application::bootstrap::AppState;
 use chrono::{Duration as ChronoDuration, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::ipc::{CallbackFn, InvokeBody};
 use tauri::test::{
     get_ipc_response, mock_builder, mock_context, noop_assets, MockRuntime, INVOKE_KEY,
@@ -20,6 +20,14 @@ struct CommandTestHarness {
 
 impl CommandTestHarness {
     fn new(steam_api_key: Option<&str>) -> Self {
+        Self::new_with_options(steam_api_key, false, None)
+    }
+
+    fn new_with_options(
+        steam_api_key: Option<&str>,
+        steam_local_install_detection: bool,
+        steam_root_override: Option<String>,
+    ) -> Self {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let db_path = temp_dir.path().join("catalyst.test.db");
         let session_token_path = temp_dir.path().join("session.token");
@@ -29,9 +37,9 @@ impl CommandTestHarness {
             db_path.clone(),
             session_token_path,
             steam_api_key.map(str::to_owned),
+            steam_local_install_detection,
             false,
-            false,
-            None,
+            steam_root_override,
         );
 
         Self {
@@ -141,6 +149,7 @@ impl CommandApp {
             .invoke_handler(tauri::generate_handler![
                 auth::logout,
                 auth::get_session,
+                library::get_library,
                 library::set_game_favorite,
                 library::get_game_store_metadata,
                 library::get_game_review,
@@ -197,6 +206,36 @@ fn assert_error_kind_and_code(error: &Value, expected_kind: &str, expected_code:
     );
 }
 
+fn create_fake_steam_install(
+    steam_root: &Path,
+    most_recent_steam_id: &str,
+    app_id: u64,
+    app_name: &str,
+) {
+    let config_dir = steam_root.join("config");
+    let steamapps_dir = steam_root.join("steamapps");
+    let app_manifest_path = steamapps_dir.join(format!("appmanifest_{app_id}.acf"));
+    let install_dir_name = app_name.replace('/', " ");
+    let game_install_dir = steamapps_dir.join("common").join(&install_dir_name);
+
+    std::fs::create_dir_all(&config_dir).expect("create config dir");
+    std::fs::create_dir_all(&game_install_dir).expect("create fake game install dir");
+    std::fs::create_dir_all(steamapps_dir.join("common")).expect("create common dir");
+
+    std::fs::write(game_install_dir.join("installed.marker"), b"ok").expect("write install marker");
+
+    let loginusers_contents = format!(
+        "\"users\"\n{{\n    \"76561198000000001\"\n    {{\n        \"AccountName\"\t\"older\"\n        \"MostRecent\"\t\"0\"\n        \"AllowAutoLogin\"\t\"1\"\n    }}\n    \"{most_recent_steam_id}\"\n    {{\n        \"AccountName\"\t\"active\"\n        \"MostRecent\"\t\"1\"\n        \"AllowAutoLogin\"\t\"1\"\n    }}\n}}\n"
+    );
+    std::fs::write(config_dir.join("loginusers.vdf"), loginusers_contents)
+        .expect("write loginusers.vdf");
+
+    let manifest_contents = format!(
+        "\"AppState\"\n{{\n    \"appid\"\t\"{app_id}\"\n    \"name\"\t\"{app_name}\"\n    \"StateFlags\"\t\"4\"\n    \"installdir\"\t\"{install_dir_name}\"\n    \"LastPlayed\"\t\"1710000000\"\n}}\n"
+    );
+    std::fs::write(app_manifest_path, manifest_contents).expect("write app manifest");
+}
+
 #[test]
 fn get_session_returns_null_without_active_session() {
     let harness = CommandTestHarness::new(None);
@@ -240,6 +279,90 @@ fn get_session_expires_old_sessions_and_clears_active_token() {
     assert!(response.is_null());
     assert_eq!(harness.current_session_token(), None);
     assert!(!harness.session_exists(&session_token));
+}
+
+#[test]
+fn get_session_bootstraps_local_steam_user_from_loginusers() {
+    let fake_steam_root = tempfile::tempdir().expect("steam temp dir");
+    create_fake_steam_install(
+        fake_steam_root.path(),
+        "76561198000000042",
+        570,
+        "Dota 2",
+    );
+
+    let harness = CommandTestHarness::new_with_options(
+        None,
+        true,
+        Some(fake_steam_root.path().to_string_lossy().to_string()),
+    );
+    let app = CommandApp::new(harness.state.clone());
+
+    let response = app
+        .invoke_no_args("get_session")
+        .expect("get_session should bootstrap local Steam session");
+
+    assert_eq!(
+        response.get("steamId").and_then(Value::as_str),
+        Some("76561198000000042")
+    );
+    assert_eq!(response.get("steamLinked").and_then(Value::as_bool), Some(true));
+    assert!(harness.current_session_token().is_some());
+}
+
+#[test]
+fn get_library_loads_local_manifest_games_after_auto_bootstrap() {
+    let fake_steam_root = tempfile::tempdir().expect("steam temp dir");
+    create_fake_steam_install(
+        fake_steam_root.path(),
+        "76561198000000042",
+        570,
+        "Dota 2",
+    );
+
+    let harness = CommandTestHarness::new_with_options(
+        None,
+        true,
+        Some(fake_steam_root.path().to_string_lossy().to_string()),
+    );
+    let app = CommandApp::new(harness.state.clone());
+
+    let session = app
+        .invoke_no_args("get_session")
+        .expect("get_session should bootstrap local Steam session");
+    assert_eq!(session.get("steamLinked").and_then(Value::as_bool), Some(true));
+
+    let library = app
+        .invoke_no_args("get_library")
+        .expect("get_library should load local Steam manifest game");
+
+    assert_eq!(library.get("total").and_then(Value::as_i64), Some(1));
+    let games = library
+        .get("games")
+        .and_then(Value::as_array)
+        .expect("games should be an array");
+    let first_game = games.first().expect("one game should be present");
+    assert_eq!(first_game.get("provider").and_then(Value::as_str), Some("steam"));
+    assert_eq!(first_game.get("externalId").and_then(Value::as_str), Some("570"));
+    assert_eq!(first_game.get("installed").and_then(Value::as_bool), Some(true));
+}
+
+#[test]
+fn get_session_returns_null_when_local_steam_not_installed() {
+    let empty_root = tempfile::tempdir().expect("steam temp dir");
+    let harness = CommandTestHarness::new_with_options(
+        None,
+        true,
+        Some(empty_root.path().to_string_lossy().to_string()),
+    );
+    let app = CommandApp::new(harness.state.clone());
+
+    let response = app
+        .invoke_no_args("get_session")
+        .expect("get_session should succeed with no Steam install");
+
+    assert!(response.is_null());
+    assert_eq!(harness.current_session_token(), None);
 }
 
 #[test]
