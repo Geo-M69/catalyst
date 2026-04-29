@@ -76,11 +76,12 @@ const formatKind = (kind: GameResponse["kind"]): string => {
   return "Game";
 };
 
-const appendPlaceholder = (container: HTMLElement, gameName: string): void => {
+const appendPlaceholder = (container: HTMLElement, gameName: string): HTMLDivElement => {
   const placeholder = document.createElement("div");
   placeholder.className = "game-card-placeholder";
   placeholder.textContent = initialsFromName(gameName);
   container.append(placeholder);
+  return placeholder;
 };
 
 const pruneTimestampCache = (
@@ -293,8 +294,33 @@ export const createGameCard = (game: GameResponse): HTMLElement => {
   const media = document.createElement("div");
   media.className = "game-card-media";
 
+  let placeholder: HTMLDivElement | null = null;
+  const ensurePlaceholder = (): void => {
+    if (placeholder?.isConnected) {
+      return;
+    }
+    placeholder = appendPlaceholder(media, game.name);
+  };
+  const setPlaceholderLoadingState = (isLoadingArtwork: boolean): void => {
+    ensurePlaceholder();
+    if (!placeholder) {
+      return;
+    }
+    placeholder.classList.toggle("is-loading-artwork", isLoadingArtwork);
+    placeholder.textContent = isLoadingArtwork ? "" : initialsFromName(game.name);
+  };
+  const removePlaceholder = (): void => {
+    if (!placeholder) {
+      return;
+    }
+    placeholder.remove();
+    placeholder = null;
+  };
+
   const artworkCandidates = getArtworkCandidates(game);
   if (artworkCandidates.length > 0) {
+    setPlaceholderLoadingState(true);
+
     const image = document.createElement("img");
     image.className = "game-card-image";
     image.alt = `${game.name} cover art`;
@@ -314,8 +340,9 @@ export const createGameCard = (game: GameResponse): HTMLElement => {
 
     const renderPlaceholder = (): void => {
       clearCandidateTimeout();
+      image.classList.remove("is-loaded");
       image.remove();
-      appendPlaceholder(media, game.name);
+      setPlaceholderLoadingState(false);
     };
 
     const tryCurrentCandidate = (): void => {
@@ -348,6 +375,8 @@ export const createGameCard = (game: GameResponse): HTMLElement => {
       if (loadedCandidate) {
         markArtworkCandidateAsLoaded(loadedCandidate);
       }
+      image.classList.add("is-loaded");
+      removePlaceholder();
     });
 
     image.addEventListener("error", () => {
@@ -371,10 +400,10 @@ export const createGameCard = (game: GameResponse): HTMLElement => {
       media.append(image);
       tryCurrentCandidate();
     } else {
-      appendPlaceholder(media, game.name);
+      setPlaceholderLoadingState(false);
     }
   } else {
-    appendPlaceholder(media, game.name);
+    setPlaceholderLoadingState(false);
   }
 
   const body = document.createElement("div");

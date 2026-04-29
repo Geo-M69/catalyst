@@ -4556,15 +4556,16 @@ const refreshLibrary = async (
       }
     }
 
-    const [library, collections] = await Promise.all([
-      ipcService.getLibrary(),
-      listCollectionsForUser().catch(() => []),
-    ]);
-    // (removed debug log)
+    const collectionsPromise = listCollectionsForUser().catch(() => []);
+    const library = await ipcService.getLibrary();
+
     setAllGames(library.games);
-    setAllCollections(collections);
     renderActiveLibraryView();
     markLibraryAsUpdatedNow();
+
+    const collections = await collectionsPromise;
+    setAllCollections(collections);
+    renderActiveLibraryView();
   } catch (error) {
     setAllGames([]);
     setAllCollections([]);

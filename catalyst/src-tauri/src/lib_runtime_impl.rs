@@ -39,7 +39,7 @@ const STEAM_APP_LANGUAGES_CACHE_TTL_HOURS: i64 = 24 * 7;
 const STEAM_APP_BETAS_CACHE_TTL_HOURS: i64 = 24 * 7;
 const STEAM_APP_STORE_TAGS_CACHE_TTL_HOURS: i64 = 24 * 7;
 const STEAM_PUBLIC_APP_NAME_CACHE_TTL_HOURS: i64 = 24 * 30;
-const STEAM_PUBLIC_APP_NAME_LOOKUP_MAX_REQUESTS_PER_SYNC: usize = 120;
+const STEAM_PUBLIC_APP_NAME_LOOKUP_MAX_REQUESTS_PER_SYNC: usize = 20;
 const STEAM_PUBLIC_APP_NAME_LOOKUP_MAX_CONSECUTIVE_ERRORS: usize = 5;
 const SESSION_TTL_DAYS: i64 = 30;
 const STEAM_ID64_ACCOUNT_ID_BASE: u64 = 76_561_197_960_265_728;
@@ -510,6 +510,28 @@ fn sync_steam_games_for_user(
             ) {
                 eprintln!("Local Steam public catalog name fallback failed: {error}");
             }
+            let local_app_ids = games_by_external_id
+                .keys()
+                .filter_map(|external_id| external_id.parse::<u64>().ok())
+                .collect::<Vec<_>>();
+            if !local_app_ids.is_empty() {
+                match resolve_steam_app_kinds_for_app_ids(connection, client, &local_app_ids) {
+                    Ok(kinds_by_app_id) => {
+                        for game in games_by_external_id.values_mut() {
+                            let Some(app_id) = game.external_id.parse::<u64>().ok() else {
+                                continue;
+                            };
+                            let Some(kind) = kinds_by_app_id.get(&app_id) else {
+                                continue;
+                            };
+                            game.kind = kind.clone();
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("Local Steam app kind fallback failed: {error}");
+                    }
+                }
+            }
 
             if !games_by_external_id.is_empty() {
                 let mut merged_local_games = games_by_external_id
@@ -605,11 +627,163 @@ fn sync_steam_games_for_user(
             map_steam_game(game, resolved_kind, installed)
         })
         .collect::<Vec<_>>();
+    let mut games_by_external_id = games
+        .into_iter()
+        .map(|game| (game.external_id.clone(), game))
+        .collect::<HashMap<_, _>>();
+    let steam_owned_app_id_set = steam_owned_app_ids.iter().copied().collect::<HashSet<_>>();
+
+    if steam_local_install_detection {
+        if let Some(local_games) = locally_installed_games.as_ref() {
+            for local_game in local_games {
+                if let Some(existing_game) = games_by_external_id.get_mut(&local_game.external_id) {
+                    if local_game.installed {
+                        existing_game.installed = true;
+                    }
+                    if existing_game.playtime_minutes <= 0 && local_game.playtime_minutes > 0 {
+                        existing_game.playtime_minutes = local_game.playtime_minutes;
+                    }
+                    if existing_game.last_played_at.is_none() && local_game.last_played_at.is_some() {
+                        existing_game.last_played_at = local_game.last_played_at.clone();
+                    }
+                    if existing_game.name.starts_with("Steam App ")
+                        && !local_game.name.starts_with("Steam App ")
+                    {
+                        existing_game.name = local_game.name.clone();
+                        existing_game.kind = local_game.kind.clone();
+                    }
+                    if existing_game.artwork_url.is_none() && local_game.artwork_url.is_some() {
+                        existing_game.artwork_url = local_game.artwork_url.clone();
+                    }
+                    continue;
+                }
+
+                games_by_external_id.insert(local_game.external_id.clone(), local_game.clone());
+            }
+        }
+
+        match collect_locally_known_steam_games_from_localconfig(
+            connection,
+            user,
+            steam_root_override,
+        ) {
+            Ok(localconfig_games) => {
+                for localconfig_game in localconfig_games {
+                    if let Some(existing_game) =
+                        games_by_external_id.get_mut(&localconfig_game.external_id)
+                    {
+                        if existing_game.playtime_minutes <= 0
+                            && localconfig_game.playtime_minutes > 0
+                        {
+                            existing_game.playtime_minutes = localconfig_game.playtime_minutes;
+                        }
+                        if existing_game.last_played_at.is_none()
+                            && localconfig_game.last_played_at.is_some()
+                        {
+                            existing_game.last_played_at = localconfig_game.last_played_at;
+                        }
+                        if existing_game.name.starts_with("Steam App ")
+                            && !localconfig_game.name.starts_with("Steam App ")
+                        {
+                            existing_game.name = localconfig_game.name;
+                            existing_game.kind = localconfig_game.kind;
+                        }
+                        if existing_game.artwork_url.is_none()
+                            && localconfig_game.artwork_url.is_some()
+                        {
+                            existing_game.artwork_url = localconfig_game.artwork_url;
+                        }
+                        continue;
+                    }
+
+                    games_by_external_id.insert(localconfig_game.external_id.clone(), localconfig_game);
+                }
+            }
+            Err(error) => {
+                eprintln!("Local Steam localconfig merge failed: {error}");
+            }
+        }
+
+        match collect_locally_known_steam_games_from_librarycache(
+            connection,
+            user,
+            steam_root_override,
+        ) {
+            Ok(librarycache_games) => {
+                for librarycache_game in librarycache_games {
+                    if let Some(existing_game) =
+                        games_by_external_id.get_mut(&librarycache_game.external_id)
+                    {
+                        if existing_game.name.starts_with("Steam App ")
+                            && !librarycache_game.name.starts_with("Steam App ")
+                        {
+                            existing_game.name = librarycache_game.name;
+                            existing_game.kind = librarycache_game.kind;
+                        }
+                        if existing_game.artwork_url.is_none()
+                            && librarycache_game.artwork_url.is_some()
+                        {
+                            existing_game.artwork_url = librarycache_game.artwork_url;
+                        }
+                        continue;
+                    }
+
+                    // API-backed sync should not add brand-new librarycache-only app IDs.
+                    // Librarycache can contain stale/noisy entries and inflate the library.
+                }
+            }
+            Err(error) => {
+                eprintln!("Local Steam librarycache merge failed: {error}");
+            }
+        }
+
+        if let Err(error) = hydrate_local_steam_game_names_from_manifests(
+            &mut games_by_external_id,
+            steam_root_override,
+        ) {
+            eprintln!("Local Steam manifest name merge failed: {error}");
+        }
+        if let Err(error) = hydrate_local_steam_game_names_from_public_catalog(
+            connection,
+            client,
+            &mut games_by_external_id,
+        ) {
+            eprintln!("Local Steam public catalog name merge failed: {error}");
+        }
+
+        let local_only_app_ids = games_by_external_id
+            .keys()
+            .filter_map(|external_id| external_id.parse::<u64>().ok())
+            .filter(|app_id| !steam_owned_app_id_set.contains(app_id))
+            .collect::<Vec<_>>();
+        if !local_only_app_ids.is_empty() {
+            match resolve_steam_app_kinds_for_app_ids(connection, client, &local_only_app_ids) {
+                Ok(kinds_by_app_id) => {
+                    for game in games_by_external_id.values_mut() {
+                        let Some(app_id) = game.external_id.parse::<u64>().ok() else {
+                            continue;
+                        };
+                        if steam_owned_app_id_set.contains(&app_id) {
+                            continue;
+                        }
+                        let Some(kind) = kinds_by_app_id.get(&app_id) else {
+                            continue;
+                        };
+                        game.kind = kind.clone();
+                    }
+                }
+                Err(error) => {
+                    eprintln!("Local Steam app kind merge failed: {error}");
+                }
+            }
+        }
+    }
 
     if let Err(error) = refresh_steam_store_tags_cache(connection, client, &steam_owned_app_ids) {
         eprintln!("Steam Store tag sync failed: {error}");
     }
 
+    let games = games_by_external_id.into_values().collect::<Vec<_>>();
     replace_provider_games(connection, &user.id, "steam", &games)?;
     Ok(games.len())
 }
@@ -2764,24 +2938,33 @@ fn resolve_steam_game_kinds(
     client: &Client,
     games: &[SteamOwnedGame],
 ) -> Result<HashMap<u64, String>, String> {
+    let app_ids = games.iter().map(|game| game.appid).collect::<Vec<_>>();
+    resolve_steam_app_kinds_for_app_ids(connection, client, &app_ids)
+}
+
+fn resolve_steam_app_kinds_for_app_ids(
+    connection: &Connection,
+    client: &Client,
+    app_ids: &[u64],
+) -> Result<HashMap<u64, String>, String> {
     let stale_before = Utc::now() - ChronoDuration::hours(STEAM_APP_METADATA_CACHE_TTL_HOURS);
     let mut kinds_by_app_id = HashMap::new();
     let mut uncached_app_ids = Vec::new();
     let mut seen_app_ids = HashSet::new();
 
-    for game in games {
-        if !seen_app_ids.insert(game.appid) {
+    for app_id in app_ids {
+        if !seen_app_ids.insert(*app_id) {
             continue;
         }
 
-        if let Some(cached_type) = find_cached_steam_app_type(connection, game.appid, stale_before)?
+        if let Some(cached_type) = find_cached_steam_app_type(connection, *app_id, stale_before)?
         {
             kinds_by_app_id.insert(
-                game.appid,
+                *app_id,
                 steam_kind_from_app_type(&cached_type).to_owned(),
             );
         } else {
-            uncached_app_ids.push(game.appid);
+            uncached_app_ids.push(*app_id);
         }
     }
 
