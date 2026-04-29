@@ -646,8 +646,10 @@ pub(crate) fn get_game_achievements(
             }
         }
 
-        let stale_before = Utc::now() - chrono::Duration::seconds(STEAM_ACHIEVEMENTS_CACHE_TTL_SECONDS);
-        match find_cached_game_achievements(&connection, steam_cache_identity, app_id, stale_before) {
+        let stale_before =
+            Utc::now() - chrono::Duration::seconds(STEAM_ACHIEVEMENTS_CACHE_TTL_SECONDS);
+        match find_cached_game_achievements(&connection, steam_cache_identity, app_id, stale_before)
+        {
             Ok(Some(cached_response)) => {
                 if let Ok(serialized_response) = serde_json::to_value(&cached_response) {
                     CacheAdapter::new().set_json(&cache_key, serialized_response);

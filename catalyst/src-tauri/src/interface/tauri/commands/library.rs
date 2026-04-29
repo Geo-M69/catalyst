@@ -210,23 +210,33 @@ pub(crate) fn run_local_steam_scan_and_call_with_override<F>(
 
 #[tauri::command]
 pub(crate) fn start_local_steam_scan(
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
     app_handle: AppHandle,
 ) -> AppResult<()> {
+    let steam_root_override = state.steam_root_override.clone();
     // Spawn a background thread to run the local Steam install detection
     let _ = std::thread::Builder::new()
         .name("local-steam-scan".into())
         .spawn(move || {
-            crate::interface::tauri::commands::library::run_local_steam_scan_and_call(
-                move |result| match result {
-                    Ok(ids) => {
-                        let _ = app_handle.emit("local-scan-complete", ids);
-                    }
-                    Err(err) => {
-                        let _ = app_handle.emit("local-scan-error", err);
-                    }
-                },
-            );
+            let emit_result = move |result| match result {
+                Ok(ids) => {
+                    let _ = app_handle.emit("local-scan-complete", ids);
+                }
+                Err(err) => {
+                    let _ = app_handle.emit("local-scan-error", err);
+                }
+            };
+
+            if steam_root_override.is_some() {
+                crate::interface::tauri::commands::library::run_local_steam_scan_and_call_with_override(
+                    steam_root_override.as_deref(),
+                    emit_result,
+                );
+            } else {
+                crate::interface::tauri::commands::library::run_local_steam_scan_and_call(
+                    emit_result,
+                );
+            }
         });
 
     Ok(())

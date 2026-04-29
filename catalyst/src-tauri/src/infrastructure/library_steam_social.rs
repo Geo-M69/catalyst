@@ -290,8 +290,10 @@ fn find_any_cached_game_friends_activity(
         return Ok(None);
     };
 
-    let response = serde_json::from_str::<GameFriendsActivityResponse>(&response_json)
-        .map_err(|error| format!("Failed to decode stale cached friends activity payload: {error}"))?;
+    let response =
+        serde_json::from_str::<GameFriendsActivityResponse>(&response_json).map_err(|error| {
+            format!("Failed to decode stale cached friends activity payload: {error}")
+        })?;
     Ok(Some(response))
 }
 
@@ -422,14 +424,18 @@ fn find_any_cached_game_activity_timeline(
             |row| row.get::<_, String>(0),
         )
         .optional()
-        .map_err(|error| format!("Failed to query stale cached activity timeline payload: {error}"))?;
+        .map_err(|error| {
+            format!("Failed to query stale cached activity timeline payload: {error}")
+        })?;
 
     let Some(response_json) = cached_response_json else {
         return Ok(None);
     };
 
-    let response = serde_json::from_str::<GameActivityTimelineResponse>(&response_json)
-        .map_err(|error| format!("Failed to decode stale cached activity timeline payload: {error}"))?;
+    let response =
+        serde_json::from_str::<GameActivityTimelineResponse>(&response_json).map_err(|error| {
+            format!("Failed to decode stale cached activity timeline payload: {error}")
+        })?;
     Ok(Some(response))
 }
 
@@ -1338,23 +1344,24 @@ pub(crate) fn get_game_friends_activity(
         ));
     };
 
-    let cache_key =
-        format!("steam_friends_activity:{STEAM_FRIENDS_ACTIVITY_CACHE_VERSION}:{steam_id}:{app_id}");
+    let cache_key = format!(
+        "steam_friends_activity:{STEAM_FRIENDS_ACTIVITY_CACHE_VERSION}:{steam_id}:{app_id}"
+    );
     let persist_friends_activity_cache =
         |friend_list_fingerprint: &str, response: &GameFriendsActivityResponse| {
-        if let Ok(serialized_response) = serde_json::to_value(response) {
-            CacheAdapter::new().set_json(&cache_key, serialized_response);
-        }
-        if let Err(error) = cache_game_friends_activity(
-            &connection,
-            steam_id,
-            app_id,
-            friend_list_fingerprint,
-            response,
-        ) {
-            eprintln!("Failed to persist Steam friends activity cache: {error}");
-        }
-    };
+            if let Ok(serialized_response) = serde_json::to_value(response) {
+                CacheAdapter::new().set_json(&cache_key, serialized_response);
+            }
+            if let Err(error) = cache_game_friends_activity(
+                &connection,
+                steam_id,
+                app_id,
+                friend_list_fingerprint,
+                response,
+            ) {
+                eprintln!("Failed to persist Steam friends activity cache: {error}");
+            }
+        };
 
     if !force_refresh {
         if let Some(cached_value) =

@@ -341,7 +341,6 @@ impl SteamPort for InfrastructureSteamPort {
 
         let mut combined_collections_by_app_id: HashMap<String, HashSet<String>> = HashMap::new();
         let mut loaded_any_config_file = false;
-        let mut loaded_config_paths = Vec::new();
         for config_path in config_paths {
             if !config_path.is_file() {
                 continue;
@@ -356,7 +355,6 @@ impl SteamPort for InfrastructureSteamPort {
             let parsed_collections = parse_steam_collections_from_vdf(&config_contents)?;
             merge_collections_by_app_id(&mut combined_collections_by_app_id, parsed_collections);
             loaded_any_config_file = true;
-            loaded_config_paths.push(config_path.display().to_string());
         }
 
         if !loaded_any_config_file {
@@ -370,16 +368,14 @@ impl SteamPort for InfrastructureSteamPort {
         }
 
         if combined_collections_by_app_id.is_empty() {
-            let files_label = if loaded_config_paths.is_empty() {
-                String::from("none")
-            } else {
-                loaded_config_paths.join(", ")
-            };
-            return Err(AppError::validation(
-                "steam_collections_empty",
-                format!(
-                    "No Steam collections were found in local Steam configuration. Checked files: {files_label}"
-                ),
+            return Ok(Self::to_contract_steam_collections_import(
+                crate::SteamCollectionsImportResponse {
+                    apps_tagged: 0,
+                    collections_created: 0,
+                    memberships_added: 0,
+                    skipped_games: 0,
+                    tags_discovered: 0,
+                },
             ));
         }
 

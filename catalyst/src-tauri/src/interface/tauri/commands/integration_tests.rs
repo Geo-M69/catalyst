@@ -284,12 +284,7 @@ fn get_session_expires_old_sessions_and_clears_active_token() {
 #[test]
 fn get_session_bootstraps_local_steam_user_from_loginusers() {
     let fake_steam_root = tempfile::tempdir().expect("steam temp dir");
-    create_fake_steam_install(
-        fake_steam_root.path(),
-        "76561198000000042",
-        570,
-        "Dota 2",
-    );
+    create_fake_steam_install(fake_steam_root.path(), "76561198000000042", 570, "Dota 2");
 
     let harness = CommandTestHarness::new_with_options(
         None,
@@ -306,19 +301,17 @@ fn get_session_bootstraps_local_steam_user_from_loginusers() {
         response.get("steamId").and_then(Value::as_str),
         Some("76561198000000042")
     );
-    assert_eq!(response.get("steamLinked").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        response.get("steamLinked").and_then(Value::as_bool),
+        Some(true)
+    );
     assert!(harness.current_session_token().is_some());
 }
 
 #[test]
 fn get_library_loads_local_manifest_games_after_auto_bootstrap() {
     let fake_steam_root = tempfile::tempdir().expect("steam temp dir");
-    create_fake_steam_install(
-        fake_steam_root.path(),
-        "76561198000000042",
-        570,
-        "Dota 2",
-    );
+    create_fake_steam_install(fake_steam_root.path(), "76561198000000042", 570, "Dota 2");
 
     let harness = CommandTestHarness::new_with_options(
         None,
@@ -330,7 +323,10 @@ fn get_library_loads_local_manifest_games_after_auto_bootstrap() {
     let session = app
         .invoke_no_args("get_session")
         .expect("get_session should bootstrap local Steam session");
-    assert_eq!(session.get("steamLinked").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        session.get("steamLinked").and_then(Value::as_bool),
+        Some(true)
+    );
 
     let library = app
         .invoke_no_args("get_library")
@@ -342,9 +338,18 @@ fn get_library_loads_local_manifest_games_after_auto_bootstrap() {
         .and_then(Value::as_array)
         .expect("games should be an array");
     let first_game = games.first().expect("one game should be present");
-    assert_eq!(first_game.get("provider").and_then(Value::as_str), Some("steam"));
-    assert_eq!(first_game.get("externalId").and_then(Value::as_str), Some("570"));
-    assert_eq!(first_game.get("installed").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        first_game.get("provider").and_then(Value::as_str),
+        Some("steam")
+    );
+    assert_eq!(
+        first_game.get("externalId").and_then(Value::as_str),
+        Some("570")
+    );
+    assert_eq!(
+        first_game.get("installed").and_then(Value::as_bool),
+        Some(true)
+    );
 }
 
 #[test]

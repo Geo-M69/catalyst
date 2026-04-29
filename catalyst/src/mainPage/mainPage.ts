@@ -2335,16 +2335,152 @@ const registerGridZoomShortcut = (): void => {
   }, { passive: false });
 };
 
+const resolveGameIdentityKey = (game: Pick<GameResponse, "provider" | "externalId">): string => {
+  return `${game.provider.trim().toLocaleLowerCase()}:${game.externalId.trim()}`;
+};
+
+const resolveGameMergeQualityScore = (game: GameResponse): number => {
+  let score = 0;
+  const trimmedName = game.name.trim();
+  if (trimmedName.length > 0 && !trimmedName.startsWith("Steam App ")) {
+    score += 10;
+  }
+  if (game.installed) {
+    score += 4;
+  }
+  if (game.playtimeMinutes > 0) {
+    score += 3;
+  }
+  if (parseDateToMs(game.lastPlayedAt) > 0) {
+    score += 2;
+  }
+  if (typeof game.artworkUrl === "string" && game.artworkUrl.trim().length > 0) {
+    score += 1;
+  }
+  return score;
+};
+
+const mergeDuplicateGameRecords = (existing: GameResponse, incoming: GameResponse): GameResponse => {
+  const existingScore = resolveGameMergeQualityScore(existing);
+  const incomingScore = resolveGameMergeQualityScore(incoming);
+  const preferred = incomingScore > existingScore
+    ? incoming
+    : existingScore > incomingScore
+      ? existing
+      : parseDateToMs(incoming.lastSyncedAt) > parseDateToMs(existing.lastSyncedAt)
+        ? incoming
+        : existing;
+  const secondary = preferred === incoming ? existing : incoming;
+  const preferredLastPlayedAtMs = parseDateToMs(preferred.lastPlayedAt);
+  const secondaryLastPlayedAtMs = parseDateToMs(secondary.lastPlayedAt);
+  const preferredLastSyncedAtMs = parseDateToMs(preferred.lastSyncedAt);
+  const secondaryLastSyncedAtMs = parseDateToMs(secondary.lastSyncedAt);
+  const preferredArtworkUrl = typeof preferred.artworkUrl === "string" && preferred.artworkUrl.trim().length > 0
+    ? preferred.artworkUrl
+    : secondary.artworkUrl;
+  const preferredHeaderImage = typeof preferred.headerImage === "string" && preferred.headerImage.trim().length > 0
+    ? preferred.headerImage
+    : secondary.headerImage;
+  const preferredSteamTags = (preferred.steamTags?.length ?? 0) >= (secondary.steamTags?.length ?? 0)
+    ? preferred.steamTags
+    : secondary.steamTags;
+  const preferredGenres = (preferred.genres?.length ?? 0) >= (secondary.genres?.length ?? 0)
+    ? preferred.genres
+    : secondary.genres;
+  const preferredCollections = (preferred.collections?.length ?? 0) >= (secondary.collections?.length ?? 0)
+    ? preferred.collections
+    : secondary.collections;
+  const preferredDevelopers = (preferred.developers?.length ?? 0) >= (secondary.developers?.length ?? 0)
+    ? preferred.developers
+    : secondary.developers;
+  const preferredPublishers = (preferred.publishers?.length ?? 0) >= (secondary.publishers?.length ?? 0)
+    ? preferred.publishers
+    : secondary.publishers;
+  const preferredFeatures = (preferred.features?.length ?? 0) >= (secondary.features?.length ?? 0)
+    ? preferred.features
+    : secondary.features;
+
+  return {
+    ...preferred,
+    id: preferred.id.trim().length > 0 ? preferred.id : secondary.id,
+    artworkUrl: preferredArtworkUrl,
+    headerImage: preferredHeaderImage,
+    installed: preferred.installed || secondary.installed,
+    favorite: preferred.favorite || secondary.favorite,
+    hideInLibrary: preferred.hideInLibrary === true || secondary.hideInLibrary === true,
+    playtimeMinutes: Math.max(preferred.playtimeMinutes, secondary.playtimeMinutes),
+    lastPlayedAt: preferredLastPlayedAtMs >= secondaryLastPlayedAtMs
+      ? preferred.lastPlayedAt
+      : secondary.lastPlayedAt,
+    lastSyncedAt: preferredLastSyncedAtMs >= secondaryLastSyncedAtMs
+      ? preferred.lastSyncedAt
+      : secondary.lastSyncedAt,
+    steamTags: preferredSteamTags,
+    genres: preferredGenres,
+    collections: preferredCollections,
+    developers: preferredDevelopers,
+    publishers: preferredPublishers,
+    features: preferredFeatures,
+  };
+};
+
 const setAllGames = (games: GameResponse[]): void => {
-  const nextGames = games.map((game) => {
-    const key = `${game.provider.trim().toLocaleLowerCase()}:${game.externalId.trim()}`;
+  const aliasesByIdentity = new Map<string, Set<string>>();
+  const dedupedByIdentity = new Map<string, GameResponse>();
+  for (const game of games) {
+    const identityKey = resolveGameIdentityKey(game);
+    if (identityKey.startsWith(":") || identityKey.endsWith(":")) {
+      continue;
+    }
+    let aliases = aliasesByIdentity.get(identityKey);
+    if (!aliases) {
+      aliases = new Set<string>();
+      aliasesByIdentity.set(identityKey, aliases);
+    }
+    const trimmedId = game.id.trim();
+    if (trimmedId.length > 0) {
+      aliases.add(trimmedId);
+    }
+
+    const previous = dedupedByIdentity.get(identityKey);
+    if (!previous) {
+      dedupedByIdentity.set(identityKey, game);
+      continue;
+    }
+    dedupedByIdentity.set(identityKey, mergeDuplicateGameRecords(previous, game));
+  }
+
+  const dedupedGames = [...dedupedByIdentity.values()];
+  const nextGames = dedupedGames.map((game) => {
+    const key = resolveGameIdentityKey(game);
     return {
       ...game,
       uninstalling: pendingUninstallVerificationByKey.has(key),
     };
   });
+
+  const nextGameById = new Map<string, GameResponse>();
+  for (const game of nextGames) {
+    const identityKey = resolveGameIdentityKey(game);
+    const aliases = aliasesByIdentity.get(identityKey);
+    if (aliases) {
+      for (const aliasId of aliases) {
+        nextGameById.set(aliasId, game);
+      }
+    }
+    nextGameById.set(game.id, game);
+  }
+
+  if (games.length > nextGames.length) {
+    console.info(
+      "setAllGames: deduped duplicate game identities",
+      games.length - nextGames.length,
+      "duplicates removed"
+    );
+  }
+
   libraryCatalogStore.allGames = nextGames;
-  libraryCatalogStore.gameById = new Map(nextGames.map((game) => [game.id, game]));
+  libraryCatalogStore.gameById = nextGameById;
   console.debug("setAllGames: loaded", nextGames.length, "games; sample ids:", nextGames.slice(0,10).map(g => g.id));
   filterPanel.setSteamTagSuggestions(collectSteamTagSuggestions(nextGames));
   updateCollectionSuggestions();
@@ -4403,7 +4539,11 @@ const refreshLibrary = async (
           await ipcService.importSteamCollections();
         } catch (error) {
           const appError = normalizeAppError(error, "Steam collection import failed.");
-          console.error(`[collections/import_steam] ${appError.kind}:${appError.code} ${appError.message}`);
+          if (appError.kind === "validation" && appError.code === "steam_collections_empty") {
+            console.info(`[collections/import_steam] ${appError.kind}:${appError.code} ${appError.message}`);
+          } else {
+            console.error(`[collections/import_steam] ${appError.kind}:${appError.code} ${appError.message}`);
+          }
         }
       }
 

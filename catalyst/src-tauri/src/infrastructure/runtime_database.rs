@@ -214,17 +214,26 @@ pub(crate) fn initialize_database(db_path: &Path) -> Result<(), String> {
 
                         CREATE INDEX IF NOT EXISTS idx_game_genres_user_game ON game_genres(user_id, provider, external_id);
 
-                        CREATE TABLE IF NOT EXISTS steam_app_details (
+            CREATE TABLE IF NOT EXISTS steam_app_details (
+                app_id TEXT PRIMARY KEY,
+                details_json TEXT NOT NULL,
+                fetched_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_steam_app_details_fetched_at ON steam_app_details(fetched_at);
+
+            CREATE TABLE IF NOT EXISTS steam_public_app_names (
+                app_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                fetched_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_steam_public_app_names_fetched_at
+              ON steam_public_app_names(fetched_at);
+
+                        CREATE TABLE IF NOT EXISTS steam_app_features (
                             app_id TEXT PRIMARY KEY,
-                            details_json TEXT NOT NULL,
-                            fetched_at TEXT NOT NULL
-                        );
-
-                        CREATE INDEX IF NOT EXISTS idx_steam_app_details_fetched_at ON steam_app_details(fetched_at);
-
-                                    CREATE TABLE IF NOT EXISTS steam_app_features (
-                                        app_id TEXT PRIMARY KEY,
-                                        has_achievements INTEGER NOT NULL DEFAULT 0,
+                            has_achievements INTEGER NOT NULL DEFAULT 0,
                                         achievements_count INTEGER,
                                         has_cloud_saves INTEGER NOT NULL DEFAULT 0,
                                         cloud_details TEXT,
@@ -281,7 +290,11 @@ fn games_table_has_column(connection: &Connection, expected_column: &str) -> Res
 }
 
 fn migrate_steam_friends_activity_cache_table(connection: &Connection) -> Result<(), String> {
-    if !table_has_column(connection, "steam_friends_activity_cache", "friend_list_fingerprint")? {
+    if !table_has_column(
+        connection,
+        "steam_friends_activity_cache",
+        "friend_list_fingerprint",
+    )? {
         connection
             .execute(
                 "ALTER TABLE steam_friends_activity_cache ADD COLUMN friend_list_fingerprint TEXT NOT NULL DEFAULT ''",
@@ -311,8 +324,8 @@ fn table_has_column(
         .map_err(|error| format!("Failed to query {table_name} table schema: {error}"))?;
 
     for row in rows {
-        let column_name =
-            row.map_err(|error| format!("Failed to decode {table_name} table schema row: {error}"))?;
+        let column_name = row
+            .map_err(|error| format!("Failed to decode {table_name} table schema row: {error}"))?;
         if column_name == expected_column {
             return Ok(true);
         }
