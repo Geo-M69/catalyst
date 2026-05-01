@@ -355,6 +355,8 @@ fn get_library_loads_local_manifest_games_after_auto_bootstrap() {
 #[test]
 fn get_session_returns_null_when_local_steam_not_installed() {
     let empty_root = tempfile::tempdir().expect("steam temp dir");
+    std::fs::create_dir_all(empty_root.path().join("steamapps"))
+        .expect("create steamapps directory");
     let harness = CommandTestHarness::new_with_options(
         None,
         true,

@@ -54,7 +54,6 @@ export const getSteamArtworkCandidates = (
 ): string[] => {
   const candidates: string[] = [];
   const seen = new Set<string>();
-  const normalizedProvider = game.provider.trim().toLowerCase();
   const normalizedExternalId = game.externalId.trim();
 
   if (isSteamAppGame(game)) {
@@ -79,21 +78,14 @@ export const getSteamArtworkCandidates = (
         "library_capsule.jpg",
         "capsule_616x353.jpg",
         "header.jpg",
+        "capsule_467x181.jpg",
       ], seen, candidates);
     }
   }
 
+  // Prefer larger metadata artwork before legacy logo/icon-derived fields.
+  addUniqueCandidate(game.headerImage, seen, candidates);
   addUniqueCandidate(game.artworkUrl, seen, candidates);
-
-  if (kind === "wide-cover") {
-    addUniqueCandidate(
-      normalizedProvider === "steam" && /^\d+$/.test(normalizedExternalId)
-        ? `https://cdn.cloudflare.steamstatic.com/steam/apps/${normalizedExternalId}/capsule_467x181.jpg`
-        : undefined,
-      seen,
-      candidates
-    );
-  }
 
   return candidates;
 };

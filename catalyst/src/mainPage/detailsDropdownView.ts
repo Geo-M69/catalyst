@@ -30,7 +30,9 @@ export const createDetailsDropdownView = ({
     }
 
     const coverCandidates = getSteamArtworkCandidates(game, "cover");
-    const coverUrl = (coverCandidates && coverCandidates.length > 0) ? coverCandidates[0] : (game.artworkUrl ?? "");
+    const coverUrl = (coverCandidates && coverCandidates.length > 0)
+      ? coverCandidates[0]
+      : (game.headerImage ?? game.artworkUrl ?? "");
     const metadataSnapshot = buildDetailsDropdownSnapshot(game);
     const headerImage = metadataSnapshot.headerImage;
     const left = document.createElement("div");

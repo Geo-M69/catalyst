@@ -3,7 +3,8 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    sync::{Mutex, OnceLock},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use chrono::{Duration as ChronoDuration, TimeZone, Utc};
@@ -38,8 +39,11 @@ const STEAM_APP_METADATA_CACHE_TTL_HOURS: i64 = 24 * 7;
 const STEAM_APP_LANGUAGES_CACHE_TTL_HOURS: i64 = 24 * 7;
 const STEAM_APP_BETAS_CACHE_TTL_HOURS: i64 = 24 * 7;
 const STEAM_APP_STORE_TAGS_CACHE_TTL_HOURS: i64 = 24 * 7;
+const STEAM_STORE_TAGS_SYNC_MAX_REQUESTS: usize = 4;
+const STEAM_STORE_TAGS_SYNC_TIME_BUDGET_SECS: u64 = 12;
 const STEAM_PUBLIC_APP_NAME_CACHE_TTL_HOURS: i64 = 24 * 30;
-const STEAM_PUBLIC_APP_NAME_LOOKUP_MAX_REQUESTS_PER_SYNC: usize = 20;
+const STEAM_PUBLIC_APP_NAME_LOOKUP_MAX_REQUESTS_PER_SYNC: usize = 300;
+const STEAM_PUBLIC_APP_NAME_LOOKUP_TIME_BUDGET_SECS: u64 = 20;
 const STEAM_PUBLIC_APP_NAME_LOOKUP_MAX_CONSECUTIVE_ERRORS: usize = 5;
 const SESSION_TTL_DAYS: i64 = 30;
 const STEAM_ID64_ACCOUNT_ID_BASE: u64 = 76_561_197_960_265_728;
@@ -325,43 +329,6 @@ struct SteamOwnedGame {
     rtime_last_played: Option<i64>,
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 fn complete_steam_auth_flow(
     db_path: &Path,
     steam_api_key: Option<String>,
@@ -378,6 +345,44 @@ fn complete_steam_auth_flow(
     )
 }
 
+fn collect_locally_known_steam_games_from_app_ids(
+    connection: &Connection,
+    user: &UserRow,
+    app_ids: &HashSet<u64>,
+) -> Result<Vec<LibraryGameInput>, String> {
+    if app_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let existing_game_names = load_provider_game_names(connection, &user.id, "steam")?;
+    let now = Utc::now().to_rfc3339();
+    let mut local_games = Vec::with_capacity(app_ids.len());
+    for app_id in app_ids {
+        let external_id = app_id.to_string();
+        let name = existing_game_names
+            .get(&external_id)
+            .cloned()
+            .unwrap_or_else(|| format!("Steam App {external_id}"));
+        let kind = classify_steam_game_kind(&name).to_owned();
+        let artwork_url = Some(format!(
+            "https://cdn.cloudflare.steamstatic.com/steam/apps/{external_id}/capsule_231x87.jpg"
+        ));
+
+        local_games.push(LibraryGameInput {
+            external_id,
+            name,
+            kind,
+            playtime_minutes: 0,
+            installed: false,
+            artwork_url,
+            last_synced_at: now.clone(),
+            last_played_at: None,
+        });
+    }
+
+    Ok(local_games)
+}
+
 fn sync_steam_games_for_user(
     connection: &Connection,
     user: &UserRow,
@@ -390,6 +395,8 @@ fn sync_steam_games_for_user(
         .steam_id
         .as_deref()
         .ok_or_else(|| String::from("User is not linked to Steam"))?;
+    let steam_local_signal_app_ids =
+        collect_signal_steam_library_app_ids_from_local_state(steam_root_override, steam_id);
 
     let locally_installed_games = if steam_local_install_detection {
         match collect_locally_installed_steam_games(steam_root_override) {
@@ -424,11 +431,28 @@ fn sync_steam_games_for_user(
                     games_by_external_id.insert(local_game.external_id.clone(), local_game.clone());
                 }
             }
+            match collect_locally_known_steam_games_from_app_ids(
+                connection,
+                user,
+                &steam_local_signal_app_ids,
+            ) {
+                Ok(dynamic_owned_games) => {
+                    for dynamic_owned_game in dynamic_owned_games {
+                        games_by_external_id
+                            .entry(dynamic_owned_game.external_id.clone())
+                            .or_insert(dynamic_owned_game);
+                    }
+                }
+                Err(error) => {
+                    eprintln!("Local Steam signal app merge failed: {error}");
+                }
+            }
 
             match collect_locally_known_steam_games_from_localconfig(
                 connection,
                 user,
                 steam_root_override,
+                true,
             ) {
                 Ok(localconfig_games) => {
                     for localconfig_game in localconfig_games {
@@ -445,9 +469,12 @@ fn sync_steam_games_for_user(
                             {
                                 existing_game.last_played_at = localconfig_game.last_played_at;
                             }
-                            if existing_game.name.starts_with("Steam App ")
-                                && !localconfig_game.name.starts_with("Steam App ")
-                            {
+                            if should_replace_placeholder_steam_game_name(
+                                &existing_game.name,
+                                &existing_game.external_id,
+                                &localconfig_game.name,
+                                &localconfig_game.external_id,
+                            ) {
                                 existing_game.name = localconfig_game.name;
                                 existing_game.kind = localconfig_game.kind;
                             }
@@ -468,19 +495,99 @@ fn sync_steam_games_for_user(
                 }
             }
 
+            match collect_locally_known_steam_games_from_sharedconfig(
+                connection,
+                user,
+                steam_root_override,
+                true,
+            ) {
+                Ok(sharedconfig_games) => {
+                    for sharedconfig_game in sharedconfig_games {
+                        if let Some(existing_game) =
+                            games_by_external_id.get_mut(&sharedconfig_game.external_id)
+                        {
+                            if existing_game.playtime_minutes <= 0
+                                && sharedconfig_game.playtime_minutes > 0
+                            {
+                                existing_game.playtime_minutes = sharedconfig_game.playtime_minutes;
+                            }
+                            if existing_game.last_played_at.is_none()
+                                && sharedconfig_game.last_played_at.is_some()
+                            {
+                                existing_game.last_played_at = sharedconfig_game.last_played_at;
+                            }
+                            if should_replace_placeholder_steam_game_name(
+                                &existing_game.name,
+                                &existing_game.external_id,
+                                &sharedconfig_game.name,
+                                &sharedconfig_game.external_id,
+                            ) {
+                                existing_game.name = sharedconfig_game.name;
+                                existing_game.kind = sharedconfig_game.kind;
+                            }
+                            if existing_game.artwork_url.is_none()
+                                && sharedconfig_game.artwork_url.is_some()
+                            {
+                                existing_game.artwork_url = sharedconfig_game.artwork_url;
+                            }
+                            continue;
+                        }
+
+                        games_by_external_id
+                            .insert(sharedconfig_game.external_id.clone(), sharedconfig_game);
+                    }
+                }
+                Err(error) => {
+                    eprintln!("Local Steam sharedconfig fallback failed: {error}");
+                }
+            }
+
             match collect_locally_known_steam_games_from_librarycache(
                 connection,
                 user,
                 steam_root_override,
             ) {
                 Ok(librarycache_games) => {
+                    let selected_app_ids = collect_selected_steam_library_app_ids_from_localconfig(
+                        steam_root_override,
+                        steam_id,
+                    );
+                    let target_app_id = steam_sync_debug_target_app_id();
+                    if steam_sync_debug_logging_enabled() {
+                        let target_in_librarycache = target_app_id.is_some_and(|target| {
+                            librarycache_games
+                                .iter()
+                                .any(|game| game.external_id.parse::<u64>().ok() == Some(target))
+                        });
+                        let target_in_selected =
+                            target_app_id.is_some_and(|target| selected_app_ids.contains(&target));
+                        let target_in_signal_set =
+                            target_app_id.is_some_and(|target| steam_local_signal_app_ids.contains(&target));
+                        let target_preexisting = target_app_id.is_some_and(|target| {
+                            games_by_external_id.contains_key(&target.to_string())
+                        });
+                        log_steam_sync_debug(&format!(
+                            "librarycache fallback merge: games={}, selected_app_ids={}, signal_app_ids={}, target_app_id={:?}, target_in_librarycache={}, target_in_selected={}, target_in_signal_set={}, target_preexisting={}",
+                            librarycache_games.len(),
+                            selected_app_ids.len(),
+                            steam_local_signal_app_ids.len(),
+                            target_app_id,
+                            target_in_librarycache,
+                            target_in_selected,
+                            target_in_signal_set,
+                            target_preexisting
+                        ));
+                    }
                     for librarycache_game in librarycache_games {
                         if let Some(existing_game) =
                             games_by_external_id.get_mut(&librarycache_game.external_id)
                         {
-                            if existing_game.name.starts_with("Steam App ")
-                                && !librarycache_game.name.starts_with("Steam App ")
-                            {
+                            if should_replace_placeholder_steam_game_name(
+                                &existing_game.name,
+                                &existing_game.external_id,
+                                &librarycache_game.name,
+                                &librarycache_game.external_id,
+                            ) {
                                 existing_game.name = librarycache_game.name;
                                 existing_game.kind = librarycache_game.kind;
                             }
@@ -489,6 +596,30 @@ fn sync_steam_games_for_user(
                             {
                                 existing_game.artwork_url = librarycache_game.artwork_url;
                             }
+                            continue;
+                        }
+
+                        let Some(app_id) = librarycache_game.external_id.parse::<u64>().ok() else {
+                            continue;
+                        };
+                        if selected_app_ids.contains(&app_id)
+                            || steam_local_signal_app_ids.contains(&app_id)
+                        {
+                            if steam_sync_debug_logging_enabled() && target_app_id == Some(app_id) {
+                                log_steam_sync_debug(&format!(
+                                    "including target app {} from librarycache fallback branch",
+                                    app_id
+                                ));
+                            }
+                            games_by_external_id.insert(
+                                librarycache_game.external_id.clone(),
+                                librarycache_game,
+                            );
+                        } else if steam_sync_debug_logging_enabled() && target_app_id == Some(app_id) {
+                            log_steam_sync_debug(&format!(
+                                "skipping target app {} from librarycache fallback branch because app is not selected and not in local signal set",
+                                app_id
+                            ));
                         }
                     }
                 }
@@ -507,6 +638,7 @@ fn sync_steam_games_for_user(
                 connection,
                 client,
                 &mut games_by_external_id,
+                steam_root_override,
             ) {
                 eprintln!("Local Steam public catalog name fallback failed: {error}");
             }
@@ -632,6 +764,22 @@ fn sync_steam_games_for_user(
         .map(|game| (game.external_id.clone(), game))
         .collect::<HashMap<_, _>>();
     let steam_owned_app_id_set = steam_owned_app_ids.iter().copied().collect::<HashSet<_>>();
+    let signal_only_app_ids = steam_local_signal_app_ids
+        .difference(&steam_owned_app_id_set)
+        .copied()
+        .collect::<HashSet<_>>();
+    match collect_locally_known_steam_games_from_app_ids(connection, user, &signal_only_app_ids) {
+        Ok(dynamic_owned_games) => {
+            for dynamic_owned_game in dynamic_owned_games {
+                games_by_external_id
+                    .entry(dynamic_owned_game.external_id.clone())
+                    .or_insert(dynamic_owned_game);
+            }
+        }
+        Err(error) => {
+            eprintln!("Local Steam signal app merge failed: {error}");
+        }
+    }
 
     if steam_local_install_detection {
         if let Some(local_games) = locally_installed_games.as_ref() {
@@ -646,9 +794,12 @@ fn sync_steam_games_for_user(
                     if existing_game.last_played_at.is_none() && local_game.last_played_at.is_some() {
                         existing_game.last_played_at = local_game.last_played_at.clone();
                     }
-                    if existing_game.name.starts_with("Steam App ")
-                        && !local_game.name.starts_with("Steam App ")
-                    {
+                    if should_replace_placeholder_steam_game_name(
+                        &existing_game.name,
+                        &existing_game.external_id,
+                        &local_game.name,
+                        &local_game.external_id,
+                    ) {
                         existing_game.name = local_game.name.clone();
                         existing_game.kind = local_game.kind.clone();
                     }
@@ -666,6 +817,7 @@ fn sync_steam_games_for_user(
             connection,
             user,
             steam_root_override,
+            true,
         ) {
             Ok(localconfig_games) => {
                 for localconfig_game in localconfig_games {
@@ -682,9 +834,12 @@ fn sync_steam_games_for_user(
                         {
                             existing_game.last_played_at = localconfig_game.last_played_at;
                         }
-                        if existing_game.name.starts_with("Steam App ")
-                            && !localconfig_game.name.starts_with("Steam App ")
-                        {
+                        if should_replace_placeholder_steam_game_name(
+                            &existing_game.name,
+                            &existing_game.external_id,
+                            &localconfig_game.name,
+                            &localconfig_game.external_id,
+                        ) {
                             existing_game.name = localconfig_game.name;
                             existing_game.kind = localconfig_game.kind;
                         }
@@ -704,19 +859,101 @@ fn sync_steam_games_for_user(
             }
         }
 
+        match collect_locally_known_steam_games_from_sharedconfig(
+            connection,
+            user,
+            steam_root_override,
+            true,
+        ) {
+            Ok(sharedconfig_games) => {
+                for sharedconfig_game in sharedconfig_games {
+                    if let Some(existing_game) =
+                        games_by_external_id.get_mut(&sharedconfig_game.external_id)
+                    {
+                        if existing_game.playtime_minutes <= 0
+                            && sharedconfig_game.playtime_minutes > 0
+                        {
+                            existing_game.playtime_minutes = sharedconfig_game.playtime_minutes;
+                        }
+                        if existing_game.last_played_at.is_none()
+                            && sharedconfig_game.last_played_at.is_some()
+                        {
+                            existing_game.last_played_at = sharedconfig_game.last_played_at;
+                        }
+                        if should_replace_placeholder_steam_game_name(
+                            &existing_game.name,
+                            &existing_game.external_id,
+                            &sharedconfig_game.name,
+                            &sharedconfig_game.external_id,
+                        ) {
+                            existing_game.name = sharedconfig_game.name;
+                            existing_game.kind = sharedconfig_game.kind;
+                        }
+                        if existing_game.artwork_url.is_none()
+                            && sharedconfig_game.artwork_url.is_some()
+                        {
+                            existing_game.artwork_url = sharedconfig_game.artwork_url;
+                        }
+                        continue;
+                    }
+
+                    games_by_external_id
+                        .insert(sharedconfig_game.external_id.clone(), sharedconfig_game);
+                }
+            }
+            Err(error) => {
+                eprintln!("Local Steam sharedconfig merge failed: {error}");
+            }
+        }
+
         match collect_locally_known_steam_games_from_librarycache(
             connection,
             user,
             steam_root_override,
         ) {
             Ok(librarycache_games) => {
+                let selected_app_ids = collect_selected_steam_library_app_ids_from_localconfig(
+                    steam_root_override,
+                    steam_id,
+                );
+                let target_app_id = steam_sync_debug_target_app_id();
+                if steam_sync_debug_logging_enabled() {
+                    let target_in_librarycache = target_app_id.is_some_and(|target| {
+                        librarycache_games
+                            .iter()
+                            .any(|game| game.external_id.parse::<u64>().ok() == Some(target))
+                    });
+                    let target_in_selected =
+                        target_app_id.is_some_and(|target| selected_app_ids.contains(&target));
+                    let target_in_signal_set =
+                        target_app_id.is_some_and(|target| steam_local_signal_app_ids.contains(&target));
+                    let target_preexisting =
+                        target_app_id.is_some_and(|target| games_by_external_id.contains_key(&target.to_string()));
+                    let target_is_owned_by_api =
+                        target_app_id.is_some_and(|target| steam_owned_app_id_set.contains(&target));
+                    log_steam_sync_debug(&format!(
+                        "librarycache api merge: games={}, selected_app_ids={}, signal_app_ids={}, target_app_id={:?}, target_in_librarycache={}, target_in_selected={}, target_in_signal_set={}, target_preexisting={}, target_owned_by_api={}",
+                        librarycache_games.len(),
+                        selected_app_ids.len(),
+                        steam_local_signal_app_ids.len(),
+                        target_app_id,
+                        target_in_librarycache,
+                        target_in_selected,
+                        target_in_signal_set,
+                        target_preexisting,
+                        target_is_owned_by_api
+                    ));
+                }
                 for librarycache_game in librarycache_games {
                     if let Some(existing_game) =
                         games_by_external_id.get_mut(&librarycache_game.external_id)
                     {
-                        if existing_game.name.starts_with("Steam App ")
-                            && !librarycache_game.name.starts_with("Steam App ")
-                        {
+                        if should_replace_placeholder_steam_game_name(
+                            &existing_game.name,
+                            &existing_game.external_id,
+                            &librarycache_game.name,
+                            &librarycache_game.external_id,
+                        ) {
                             existing_game.name = librarycache_game.name;
                             existing_game.kind = librarycache_game.kind;
                         }
@@ -728,8 +965,27 @@ fn sync_steam_games_for_user(
                         continue;
                     }
 
-                    // API-backed sync should not add brand-new librarycache-only app IDs.
-                    // Librarycache can contain stale/noisy entries and inflate the library.
+                    let Some(app_id) = librarycache_game.external_id.parse::<u64>().ok() else {
+                        continue;
+                    };
+                    if selected_app_ids.contains(&app_id)
+                        || steam_owned_app_id_set.contains(&app_id)
+                        || steam_local_signal_app_ids.contains(&app_id)
+                    {
+                        if steam_sync_debug_logging_enabled() && target_app_id == Some(app_id) {
+                            log_steam_sync_debug(&format!(
+                                "including target app {} from librarycache api branch",
+                                app_id
+                            ));
+                        }
+                        games_by_external_id
+                            .insert(librarycache_game.external_id.clone(), librarycache_game);
+                    } else if steam_sync_debug_logging_enabled() && target_app_id == Some(app_id) {
+                        log_steam_sync_debug(&format!(
+                            "skipping target app {} from librarycache api branch because app is not selected, owned, or in local signal set",
+                            app_id
+                        ));
+                    }
                 }
             }
             Err(error) => {
@@ -747,6 +1003,7 @@ fn sync_steam_games_for_user(
             connection,
             client,
             &mut games_by_external_id,
+            steam_root_override,
         ) {
             eprintln!("Local Steam public catalog name merge failed: {error}");
         }
@@ -1090,10 +1347,14 @@ fn parse_rfc3339_from_unix_epoch_seconds(seconds_since_epoch: u64) -> Option<Str
 fn collect_steam_app_history_entries_from_localconfig(
     steam_root_override: Option<&str>,
     steam_id: &str,
+    include_empty_entries: bool,
 ) -> Result<Vec<LocalSteamAppHistoryEntry>, String> {
-    let localconfig_path = match resolve_steam_localconfig_path(steam_root_override, steam_id) {
-        Ok(path) => path,
-        Err(_) => return Ok(Vec::new()),
+    let localconfig_path = match resolve_localconfig_path_for_linked_or_active_steam_user(
+        steam_root_override,
+        steam_id,
+    ) {
+        Some(path) => path,
+        None => return Ok(Vec::new()),
     };
 
     let localconfig_contents = fs::read_to_string(&localconfig_path).map_err(|error| {
@@ -1171,7 +1432,11 @@ fn collect_steam_app_history_entries_from_localconfig(
             .filter(|value| !value.is_empty())
             .map(str::to_owned);
 
-        if playtime_minutes <= 0 && last_played_at.is_none() && name.is_none() {
+        if !include_empty_entries
+            && playtime_minutes <= 0
+            && last_played_at.is_none()
+            && name.is_none()
+        {
             continue;
         }
 
@@ -1186,17 +1451,238 @@ fn collect_steam_app_history_entries_from_localconfig(
     Ok(history_entries)
 }
 
+fn collect_steam_app_history_entries_from_sharedconfig(
+    steam_root_override: Option<&str>,
+    steam_id: &str,
+    include_empty_entries: bool,
+) -> Result<Vec<LocalSteamAppHistoryEntry>, String> {
+    let Some(sharedconfig_paths) =
+        resolve_sharedconfig_paths_for_linked_or_active_steam_user(steam_root_override, steam_id)
+    else {
+        return Ok(Vec::new());
+    };
+    if sharedconfig_paths.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut history_entries = Vec::new();
+    let mut seen_app_ids = HashSet::new();
+
+    for sharedconfig_path in sharedconfig_paths {
+        let sharedconfig_contents = fs::read_to_string(&sharedconfig_path).map_err(|error| {
+            format!(
+                "Failed to read Steam sharedconfig at {}: {error}",
+                sharedconfig_path.display()
+            )
+        })?;
+        let parsed_sharedconfig = crate::infrastructure::runtime_vdf::parse_vdf_document(
+            &sharedconfig_contents,
+        )
+        .map_err(|error| {
+            format!(
+                "Failed to parse Steam sharedconfig at {}: {error}",
+                sharedconfig_path.display()
+            )
+        })?;
+
+        let roaming_root = crate::infrastructure::runtime_vdf::vdf_find_object_value(
+            &parsed_sharedconfig,
+            "UserRoamingConfigStore",
+        )
+        .unwrap_or(&parsed_sharedconfig);
+        let Some(software_value) = crate::infrastructure::runtime_vdf::vdf_find_object_value(
+            roaming_root,
+            "Software",
+        ) else {
+            continue;
+        };
+        let Some(valve_value) =
+            crate::infrastructure::runtime_vdf::vdf_find_object_value(software_value, "Valve")
+        else {
+            continue;
+        };
+        let Some(steam_value) =
+            crate::infrastructure::runtime_vdf::vdf_find_object_value(valve_value, "Steam")
+        else {
+            continue;
+        };
+        let Some(apps_value) =
+            crate::infrastructure::runtime_vdf::vdf_find_object_value(steam_value, "apps")
+        else {
+            continue;
+        };
+        let crate::infrastructure::runtime_vdf::VdfValue::Object(app_entries) = apps_value else {
+            continue;
+        };
+
+        for (app_id_key, app_value) in app_entries {
+            let Some(app_id) = app_id_key.trim().parse::<u64>().ok() else {
+                continue;
+            };
+            if !seen_app_ids.insert(app_id) {
+                continue;
+            }
+
+            let playtime_minutes = crate::infrastructure::runtime_vdf::vdf_get_text_entry(
+                app_value,
+                "Playtime",
+            )
+            .or_else(|| {
+                crate::infrastructure::runtime_vdf::vdf_get_text_entry(app_value, "Playtime2wks")
+            })
+            .and_then(|value| value.trim().parse::<i64>().ok())
+            .unwrap_or(0)
+            .max(0);
+            let last_played_at = crate::infrastructure::runtime_vdf::vdf_get_text_entry(
+                app_value,
+                "LastPlayed",
+            )
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .and_then(parse_rfc3339_from_unix_epoch_seconds);
+            let name = crate::infrastructure::runtime_vdf::vdf_get_text_entry(app_value, "name")
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned);
+
+            if !include_empty_entries
+                && playtime_minutes <= 0
+                && last_played_at.is_none()
+                && name.is_none()
+            {
+                continue;
+            }
+
+            history_entries.push(LocalSteamAppHistoryEntry {
+                app_id,
+                name,
+                playtime_minutes,
+                last_played_at,
+            });
+        }
+    }
+
+    Ok(history_entries)
+}
+
+fn resolve_steam_user_candidates_for_local_discovery(
+    steam_root_override: Option<&str>,
+    steam_id: &str,
+) -> Vec<String> {
+    let mut candidates = Vec::new();
+    let mut seen = HashSet::new();
+
+    let preferred = steam_id.trim();
+    if !preferred.is_empty() && seen.insert(preferred.to_owned()) {
+        candidates.push(preferred.to_owned());
+    }
+
+    if let Some(active_steam_id) = resolve_active_local_steam_id(steam_root_override) {
+        let trimmed_active = active_steam_id.trim();
+        if !trimmed_active.is_empty() && seen.insert(trimmed_active.to_owned()) {
+            candidates.push(trimmed_active.to_owned());
+        }
+    }
+
+    candidates
+}
+
+fn resolve_localconfig_path_for_linked_or_active_steam_user(
+    steam_root_override: Option<&str>,
+    steam_id: &str,
+) -> Option<PathBuf> {
+    for steam_id_candidate in
+        resolve_steam_user_candidates_for_local_discovery(steam_root_override, steam_id)
+    {
+        if let Ok(path) = resolve_steam_localconfig_path(steam_root_override, &steam_id_candidate) {
+            return Some(path);
+        }
+    }
+
+    None
+}
+
+fn resolve_localconfig_paths_for_linked_or_active_steam_user(
+    steam_root_override: Option<&str>,
+    steam_id: &str,
+) -> Vec<PathBuf> {
+    let steam_id_candidates =
+        resolve_steam_user_candidates_for_local_discovery(steam_root_override, steam_id);
+    if steam_id_candidates.is_empty() {
+        return Vec::new();
+    }
+
+    let mut paths = Vec::new();
+    let mut seen_paths = HashSet::new();
+    for steam_root in resolve_steam_root_paths(steam_root_override) {
+        for steam_id_candidate in &steam_id_candidates {
+            let Ok(userdata_directory) =
+                resolve_steam_userdata_directory(&steam_root, steam_id_candidate)
+            else {
+                continue;
+            };
+            let localconfig_path = userdata_directory.join("config").join("localconfig.vdf");
+            if !localconfig_path.is_file() {
+                continue;
+            }
+            if seen_paths.insert(localconfig_path.clone()) {
+                paths.push(localconfig_path);
+            }
+        }
+    }
+
+    if paths.is_empty() {
+        if let Some(localconfig_path) =
+            resolve_localconfig_path_for_linked_or_active_steam_user(steam_root_override, steam_id)
+        {
+            paths.push(localconfig_path);
+        }
+    }
+
+    if steam_sync_debug_logging_enabled() {
+        let rendered_paths = paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>();
+        log_steam_sync_debug(&format!(
+            "resolved localconfig paths for steam_id={steam_id}: candidates={:?}, paths={rendered_paths:?}",
+            steam_id_candidates
+        ));
+    }
+
+    paths
+}
+
+fn resolve_sharedconfig_paths_for_linked_or_active_steam_user(
+    steam_root_override: Option<&str>,
+    steam_id: &str,
+) -> Option<Vec<PathBuf>> {
+    for steam_id_candidate in
+        resolve_steam_user_candidates_for_local_discovery(steam_root_override, steam_id)
+    {
+        if let Ok(paths) = resolve_steam_sharedconfig_paths(steam_root_override, &steam_id_candidate)
+        {
+            return Some(paths);
+        }
+    }
+
+    None
+}
+
 fn collect_locally_known_steam_games_from_localconfig(
     connection: &Connection,
     user: &UserRow,
     steam_root_override: Option<&str>,
+    include_empty_entries: bool,
 ) -> Result<Vec<LibraryGameInput>, String> {
     let steam_id = user
         .steam_id
         .as_deref()
         .ok_or_else(|| String::from("User is not linked to Steam"))?;
-    let history_entries =
-        collect_steam_app_history_entries_from_localconfig(steam_root_override, steam_id)?;
+    let history_entries = collect_steam_app_history_entries_from_localconfig(
+        steam_root_override,
+        steam_id,
+        include_empty_entries,
+    )?;
     if history_entries.is_empty() {
         return Ok(Vec::new());
     }
@@ -1232,6 +1718,440 @@ fn collect_locally_known_steam_games_from_localconfig(
     }
 
     Ok(local_games)
+}
+
+fn collect_locally_known_steam_games_from_sharedconfig(
+    connection: &Connection,
+    user: &UserRow,
+    steam_root_override: Option<&str>,
+    include_empty_entries: bool,
+) -> Result<Vec<LibraryGameInput>, String> {
+    let steam_id = user
+        .steam_id
+        .as_deref()
+        .ok_or_else(|| String::from("User is not linked to Steam"))?;
+    let history_entries = collect_steam_app_history_entries_from_sharedconfig(
+        steam_root_override,
+        steam_id,
+        include_empty_entries,
+    )?;
+    if history_entries.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let existing_game_names = load_provider_game_names(connection, &user.id, "steam")?;
+    let now = Utc::now().to_rfc3339();
+    let mut local_games = Vec::with_capacity(history_entries.len());
+    for history_entry in history_entries {
+        let external_id = history_entry.app_id.to_string();
+        let name = history_entry
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .or_else(|| existing_game_names.get(&external_id).cloned())
+            .unwrap_or_else(|| format!("Steam App {external_id}"));
+        let kind = classify_steam_game_kind(&name).to_owned();
+        let artwork_url = Some(format!(
+            "https://cdn.cloudflare.steamstatic.com/steam/apps/{external_id}/capsule_231x87.jpg"
+        ));
+
+        local_games.push(LibraryGameInput {
+            external_id,
+            name,
+            kind,
+            playtime_minutes: history_entry.playtime_minutes.max(0),
+            installed: false,
+            artwork_url,
+            last_synced_at: now.clone(),
+            last_played_at: history_entry.last_played_at,
+        });
+    }
+
+    Ok(local_games)
+}
+
+fn collect_selected_steam_library_app_ids_from_localconfig(
+    steam_root_override: Option<&str>,
+    steam_id: &str,
+) -> HashSet<u64> {
+    let mut selected_app_ids = HashSet::new();
+    let localconfig_paths =
+        resolve_localconfig_paths_for_linked_or_active_steam_user(steam_root_override, steam_id);
+    if localconfig_paths.is_empty() {
+        return selected_app_ids;
+    }
+
+    for localconfig_path in &localconfig_paths {
+        let Ok(localconfig_contents) = fs::read_to_string(&localconfig_path) else {
+            if steam_sync_debug_logging_enabled() {
+                log_steam_sync_debug(&format!(
+                    "failed to read localconfig for selected app ids: {}",
+                    localconfig_path.display()
+                ));
+            }
+            continue;
+        };
+        let Ok(parsed_localconfig) =
+            crate::infrastructure::runtime_vdf::parse_vdf_document(&localconfig_contents)
+        else {
+            if steam_sync_debug_logging_enabled() {
+                log_steam_sync_debug(&format!(
+                    "failed to parse localconfig for selected app ids: {}",
+                    localconfig_path.display()
+                ));
+            }
+            continue;
+        };
+        let user_local_config_store = crate::infrastructure::runtime_vdf::vdf_find_object_value(
+            &parsed_localconfig,
+            "UserLocalConfigStore",
+        )
+        .unwrap_or(&parsed_localconfig);
+        let Some(web_storage_value) = crate::infrastructure::runtime_vdf::vdf_find_object_value(
+            user_local_config_store,
+            "WebStorage",
+        ) else {
+            continue;
+        };
+        let Some(ui_state_json_text) = crate::infrastructure::runtime_vdf::vdf_get_text_entry(
+            web_storage_value,
+            "UIStoreLocalSteamUIState",
+        ) else {
+            if steam_sync_debug_logging_enabled() {
+                log_steam_sync_debug(&format!(
+                    "missing UIStoreLocalSteamUIState in {}",
+                    localconfig_path.display()
+                ));
+            }
+            continue;
+        };
+        let Ok(ui_state_value) = serde_json::from_str::<serde_json::Value>(ui_state_json_text)
+        else {
+            if steam_sync_debug_logging_enabled() {
+                log_steam_sync_debug(&format!(
+                    "invalid UIStoreLocalSteamUIState JSON in {}",
+                    localconfig_path.display()
+                ));
+            }
+            continue;
+        };
+        let Some(current_selection_value) = ui_state_value.get("currentSelection") else {
+            if steam_sync_debug_logging_enabled() {
+                log_steam_sync_debug(&format!(
+                    "missing currentSelection in {}",
+                    localconfig_path.display()
+                ));
+            }
+            continue;
+        };
+
+        if let Some(app_id) = current_selection_value
+            .get("nAppId")
+            .and_then(serde_json::Value::as_u64)
+        {
+            selected_app_ids.insert(app_id);
+            if steam_sync_debug_logging_enabled() {
+                log_steam_sync_debug(&format!(
+                    "selected app id from {} => {}",
+                    localconfig_path.display(),
+                    app_id
+                ));
+            }
+        } else if let Some(app_id) = current_selection_value
+            .get("nAppId")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| value.trim().parse::<u64>().ok())
+        {
+            selected_app_ids.insert(app_id);
+            if steam_sync_debug_logging_enabled() {
+                log_steam_sync_debug(&format!(
+                    "selected app id from {} => {}",
+                    localconfig_path.display(),
+                    app_id
+                ));
+            }
+        } else if steam_sync_debug_logging_enabled() {
+            log_steam_sync_debug(&format!(
+                "currentSelection in {} did not contain parseable nAppId",
+                localconfig_path.display()
+            ));
+        }
+    }
+
+    if steam_sync_debug_logging_enabled() {
+        let mut rendered = selected_app_ids.iter().copied().collect::<Vec<_>>();
+        rendered.sort_unstable();
+        log_steam_sync_debug(&format!(
+            "selected app ids for steam_id={steam_id}: {:?}",
+            rendered
+        ));
+    }
+
+    selected_app_ids
+}
+
+fn collect_signal_steam_library_app_ids_from_local_state(
+    steam_root_override: Option<&str>,
+    steam_id: &str,
+) -> HashSet<u64> {
+    let mut app_ids = HashSet::new();
+    let localconfig_paths =
+        resolve_localconfig_paths_for_linked_or_active_steam_user(steam_root_override, steam_id);
+    let rollup_key_pattern = Regex::new(r"^NewContentRollup_(\d+)$").ok();
+
+    for localconfig_path in &localconfig_paths {
+        let Ok(localconfig_contents) = fs::read_to_string(localconfig_path) else {
+            continue;
+        };
+        let Ok(parsed_localconfig) =
+            crate::infrastructure::runtime_vdf::parse_vdf_document(&localconfig_contents)
+        else {
+            continue;
+        };
+        let user_local_config_store = crate::infrastructure::runtime_vdf::vdf_find_object_value(
+            &parsed_localconfig,
+            "UserLocalConfigStore",
+        )
+        .unwrap_or(&parsed_localconfig);
+        let Some(web_storage_value) = crate::infrastructure::runtime_vdf::vdf_find_object_value(
+            user_local_config_store,
+            "WebStorage",
+        ) else {
+            continue;
+        };
+        let crate::infrastructure::runtime_vdf::VdfValue::Object(web_storage_entries) = web_storage_value
+        else {
+            continue;
+        };
+
+        for (web_storage_key, web_storage_entry) in web_storage_entries {
+            let Some(raw_json_text) = (match web_storage_entry {
+                crate::infrastructure::runtime_vdf::VdfValue::Text(text) => Some(text.as_str()),
+                crate::infrastructure::runtime_vdf::VdfValue::Object(_) => None,
+            }) else {
+                continue;
+            };
+            let Ok(parsed_json_value) = serde_json::from_str::<serde_json::Value>(raw_json_text)
+            else {
+                continue;
+            };
+
+            if web_storage_key.eq_ignore_ascii_case("playnextstore_storage") {
+                if let Some(playnext_app_ids) = parsed_json_value
+                    .get("cachedPlayNext")
+                    .and_then(|value| value.get("appids"))
+                    .and_then(serde_json::Value::as_array)
+                {
+                    for value in playnext_app_ids {
+                        if let Some(app_id) = value.as_u64().or_else(|| {
+                            value
+                                .as_str()
+                                .and_then(|raw| raw.trim().parse::<u64>().ok())
+                        }) {
+                            app_ids.insert(app_id);
+                        }
+                    }
+                }
+                continue;
+            }
+
+            if web_storage_key.eq_ignore_ascii_case("UIStoreLocalSteamUIState") {
+                if let Some(selected_app_id) = parsed_json_value
+                    .get("currentSelection")
+                    .and_then(|value| value.get("nAppId"))
+                    .and_then(steam_app_id_from_json_value)
+                {
+                    app_ids.insert(selected_app_id);
+                }
+                continue;
+            }
+
+            if web_storage_key.starts_with("user-collections.") {
+                if let Some(added_app_ids) = parsed_json_value.get("added").and_then(serde_json::Value::as_array) {
+                    for value in added_app_ids {
+                        if let Some(app_id) = value.as_u64().or_else(|| {
+                            value
+                                .as_str()
+                                .and_then(|raw| raw.trim().parse::<u64>().ok())
+                        }) {
+                            app_ids.insert(app_id);
+                        }
+                    }
+                }
+                continue;
+            }
+
+            if let Some(pattern) = rollup_key_pattern.as_ref() {
+                if let Some(captured_id) = pattern
+                    .captures(web_storage_key)
+                    .and_then(|captures| captures.get(1))
+                    .and_then(|value| value.as_str().trim().parse::<u64>().ok())
+                {
+                    app_ids.insert(captured_id);
+                }
+            }
+        }
+    }
+
+    app_ids.extend(collect_signal_steam_library_app_ids_from_cloudstorage(
+        steam_root_override,
+        steam_id,
+    ));
+
+    if steam_sync_debug_logging_enabled() {
+        log_steam_sync_debug(&format!(
+            "local signal app ids for steam_id={steam_id}: count={}",
+            app_ids.len()
+        ));
+    }
+
+    app_ids
+}
+
+fn steam_app_id_from_json_value(value: &serde_json::Value) -> Option<u64> {
+    value
+        .as_u64()
+        .or_else(|| value.as_str().and_then(|raw| raw.trim().parse::<u64>().ok()))
+}
+
+fn collect_steam_app_ids_from_json_array(values: &[serde_json::Value], app_ids: &mut HashSet<u64>) {
+    for value in values {
+        if let Some(app_id) = steam_app_id_from_json_value(value) {
+            app_ids.insert(app_id);
+        }
+    }
+}
+
+fn collect_signal_steam_library_app_ids_from_cloudstorage(
+    steam_root_override: Option<&str>,
+    steam_id: &str,
+) -> HashSet<u64> {
+    let mut app_ids = HashSet::new();
+    let local_steam_id_candidates =
+        resolve_steam_user_candidates_for_local_discovery(steam_root_override, steam_id);
+    if local_steam_id_candidates.is_empty() {
+        return app_ids;
+    }
+
+    let rollup_key_pattern = Regex::new(r"^NewContentRollup_(\d+)$").ok();
+    let mut seen_cloudstorage_files = HashSet::new();
+    for steam_root in resolve_steam_root_paths(steam_root_override) {
+        for local_steam_id_candidate in &local_steam_id_candidates {
+            let Ok(userdata_directory) =
+                resolve_steam_userdata_directory(&steam_root, local_steam_id_candidate)
+            else {
+                continue;
+            };
+            let cloudstorage_directory = userdata_directory.join("config").join("cloudstorage");
+            let Ok(entries) = fs::read_dir(&cloudstorage_directory) else {
+                continue;
+            };
+
+            for entry in entries.flatten() {
+                let file_path = entry.path();
+                let Some(file_name) = file_path.file_name().and_then(|value| value.to_str()) else {
+                    continue;
+                };
+                if !file_name.starts_with("cloud-storage-namespace-")
+                    || !file_name.ends_with(".json")
+                    || file_name.ends_with(".modified.json")
+                {
+                    continue;
+                }
+                if !seen_cloudstorage_files.insert(file_path.clone()) {
+                    continue;
+                }
+
+                let Ok(contents) = fs::read_to_string(&file_path) else {
+                    continue;
+                };
+                let Ok(entries_json) = serde_json::from_str::<serde_json::Value>(&contents) else {
+                    continue;
+                };
+                let Some(entries_array) = entries_json.as_array() else {
+                    continue;
+                };
+
+                for entry in entries_array {
+                    let Some(entry_array) = entry.as_array() else {
+                        continue;
+                    };
+                    if entry_array.len() < 2 {
+                        continue;
+                    }
+                    let Some(entry_key) = entry_array.first().and_then(serde_json::Value::as_str)
+                    else {
+                        continue;
+                    };
+                    let Some(entry_metadata) = entry_array.get(1).and_then(serde_json::Value::as_object)
+                    else {
+                        continue;
+                    };
+
+                    if let Some(pattern) = rollup_key_pattern.as_ref() {
+                        if let Some(app_id) = pattern
+                            .captures(entry_key)
+                            .and_then(|captures| captures.get(1))
+                            .and_then(|value| value.as_str().trim().parse::<u64>().ok())
+                        {
+                            app_ids.insert(app_id);
+                        }
+                    }
+
+                    let parsed_value = entry_metadata
+                        .get("value")
+                        .and_then(serde_json::Value::as_str)
+                        .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok());
+                    let Some(parsed_value) = parsed_value else {
+                        continue;
+                    };
+
+                    if entry_key.eq_ignore_ascii_case("GameReleased") {
+                        if let Some(released_apps) =
+                            parsed_value.get("apps").and_then(serde_json::Value::as_array)
+                        {
+                            collect_steam_app_ids_from_json_array(released_apps, &mut app_ids);
+                        }
+                        continue;
+                    }
+
+                    if entry_key.eq_ignore_ascii_case("playnextstore_storage") {
+                        if let Some(playnext_app_ids) = parsed_value
+                            .get("cachedPlayNext")
+                            .and_then(|value| value.get("appids"))
+                            .and_then(serde_json::Value::as_array)
+                        {
+                            collect_steam_app_ids_from_json_array(playnext_app_ids, &mut app_ids);
+                        }
+                        continue;
+                    }
+
+                    if entry_key.eq_ignore_ascii_case("UIStoreLocalSteamUIState") {
+                        if let Some(selected_app_id) = parsed_value
+                            .get("currentSelection")
+                            .and_then(|value| value.get("nAppId"))
+                            .and_then(steam_app_id_from_json_value)
+                        {
+                            app_ids.insert(selected_app_id);
+                        }
+                        continue;
+                    }
+
+                    if entry_key.starts_with("user-collections.") {
+                        if let Some(added_app_ids) =
+                            parsed_value.get("added").and_then(serde_json::Value::as_array)
+                        {
+                            collect_steam_app_ids_from_json_array(added_app_ids, &mut app_ids);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    app_ids
 }
 
 fn collect_steam_app_ids_from_librarycache(
@@ -1317,8 +2237,32 @@ fn collect_locally_known_steam_games_from_librarycache(
     Ok(local_games)
 }
 
+fn is_steam_placeholder_game_name(name: &str, external_id: &str) -> bool {
+    let trimmed_name = name.trim();
+    if trimmed_name.is_empty() {
+        return true;
+    }
+
+    if trimmed_name.eq_ignore_ascii_case(&format!("Steam App {external_id}")) {
+        return true;
+    }
+
+    // Legacy rows sometimes persisted just the app id as the title.
+    trimmed_name == external_id
+}
+
 fn should_resolve_local_steam_game_name(game: &LibraryGameInput) -> bool {
-    game.name.starts_with("Steam App ")
+    is_steam_placeholder_game_name(&game.name, &game.external_id)
+}
+
+fn should_replace_placeholder_steam_game_name(
+    existing_name: &str,
+    existing_external_id: &str,
+    candidate_name: &str,
+    candidate_external_id: &str,
+) -> bool {
+    is_steam_placeholder_game_name(existing_name, existing_external_id)
+        && !is_steam_placeholder_game_name(candidate_name, candidate_external_id)
 }
 
 fn apply_resolved_local_steam_game_name(game: &mut LibraryGameInput, resolved_name: &str) {
@@ -1329,6 +2273,14 @@ fn apply_resolved_local_steam_game_name(game: &mut LibraryGameInput, resolved_na
 
     game.name = trimmed_name.to_owned();
     game.kind = classify_steam_game_kind(trimmed_name).to_owned();
+}
+
+fn normalize_unresolved_steam_game_placeholder_name(game: &mut LibraryGameInput) {
+    if !should_resolve_local_steam_game_name(game) {
+        return;
+    }
+
+    game.name = format!("Steam App {}", game.external_id);
 }
 
 fn hydrate_local_steam_game_names_from_manifests(
@@ -1357,6 +2309,7 @@ fn hydrate_local_steam_game_names_from_public_catalog(
     connection: &Connection,
     client: &Client,
     games_by_external_id: &mut HashMap<String, LibraryGameInput>,
+    steam_root_override: Option<&str>,
 ) -> Result<(), String> {
     let unresolved_app_ids = games_by_external_id
         .values()
@@ -1367,8 +2320,32 @@ fn hydrate_local_steam_game_names_from_public_catalog(
         return Ok(());
     }
 
+    let resolved_local_names =
+        resolve_steam_local_appinfo_names(steam_root_override, &unresolved_app_ids)?;
+    for game in games_by_external_id.values_mut() {
+        if !should_resolve_local_steam_game_name(game) {
+            continue;
+        }
+        let Some(app_id) = game.external_id.parse::<u64>().ok() else {
+            continue;
+        };
+        let Some(resolved_name) = resolved_local_names.get(&app_id) else {
+            continue;
+        };
+        apply_resolved_local_steam_game_name(game, resolved_name);
+    }
+
+    let unresolved_after_local = games_by_external_id
+        .values()
+        .filter(|game| should_resolve_local_steam_game_name(game))
+        .filter_map(|game| game.external_id.parse::<u64>().ok())
+        .collect::<Vec<_>>();
+    if unresolved_after_local.is_empty() {
+        return Ok(());
+    }
+
     let resolved_public_names =
-        resolve_steam_public_app_names(connection, client, &unresolved_app_ids)?;
+        resolve_steam_public_app_names(connection, client, &unresolved_after_local)?;
     if resolved_public_names.is_empty() {
         return Ok(());
     }
@@ -1386,7 +2363,155 @@ fn hydrate_local_steam_game_names_from_public_catalog(
         apply_resolved_local_steam_game_name(game, resolved_name);
     }
 
+    for game in games_by_external_id.values_mut() {
+        normalize_unresolved_steam_game_placeholder_name(game);
+    }
+
     Ok(())
+}
+
+fn resolve_steam_local_appinfo_names(
+    steam_root_override: Option<&str>,
+    app_ids: &[u64],
+) -> Result<HashMap<u64, String>, String> {
+    if app_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let unresolved = app_ids.iter().copied().collect::<HashSet<_>>();
+    let steam_roots = resolve_steam_root_paths(steam_root_override);
+    if steam_roots.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let mut names_by_app_id = HashMap::new();
+    for steam_root in steam_roots {
+        let appinfo_path = steam_root.join("appcache").join("appinfo.vdf");
+        if !appinfo_path.is_file() {
+            continue;
+        }
+        let file_bytes = match fs::read(&appinfo_path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                eprintln!(
+                    "Could not read Steam appinfo catalog at {}: {}",
+                    appinfo_path.display(),
+                    error
+                );
+                continue;
+            }
+        };
+        if file_bytes.len() < 16 {
+            continue;
+        }
+
+        let mut cursor = 16usize;
+        while cursor + 8 <= file_bytes.len() {
+            let app_id = u32::from_le_bytes([
+                file_bytes[cursor],
+                file_bytes[cursor + 1],
+                file_bytes[cursor + 2],
+                file_bytes[cursor + 3],
+            ]) as u64;
+            if app_id == 0 {
+                break;
+            }
+
+            let payload_size = u32::from_le_bytes([
+                file_bytes[cursor + 4],
+                file_bytes[cursor + 5],
+                file_bytes[cursor + 6],
+                file_bytes[cursor + 7],
+            ]) as usize;
+            cursor += 8;
+
+            if cursor + payload_size > file_bytes.len() {
+                break;
+            }
+            let payload = &file_bytes[cursor..cursor + payload_size];
+            cursor += payload_size;
+
+            if !unresolved.contains(&app_id) || names_by_app_id.contains_key(&app_id) {
+                continue;
+            }
+
+            let Some(name) = extract_steam_app_name_from_local_appinfo_payload(payload) else {
+                continue;
+            };
+            names_by_app_id.insert(app_id, name);
+        }
+
+        if names_by_app_id.len() == unresolved.len() {
+            break;
+        }
+    }
+
+    Ok(names_by_app_id)
+}
+
+fn extract_steam_app_name_from_local_appinfo_payload(payload: &[u8]) -> Option<String> {
+    for segment in payload.split(|byte| *byte == 0) {
+        if segment.len() < 3 || segment.len() > 96 {
+            continue;
+        }
+        if !segment.iter().all(|byte| (0x20..=0x7e).contains(byte)) {
+            continue;
+        }
+
+        let candidate = std::str::from_utf8(segment).ok()?.trim();
+        if !is_valid_steam_appinfo_name_candidate(candidate) {
+            continue;
+        }
+
+        return Some(candidate.to_owned());
+    }
+
+    None
+}
+
+fn is_valid_steam_appinfo_name_candidate(candidate: &str) -> bool {
+    let lowered = candidate.to_ascii_lowercase();
+    if lowered.starts_with("http://") || lowered.starts_with("https://") {
+        return false;
+    }
+    if lowered.ends_with(".exe")
+        || lowered.ends_with(".app")
+        || lowered.ends_with(".jpg")
+        || lowered.ends_with(".png")
+    {
+        return false;
+    }
+    if lowered.contains('\\') || lowered.contains('/') {
+        return false;
+    }
+    if lowered.contains("eula") {
+        return false;
+    }
+    if lowered.contains(',') {
+        return false;
+    }
+    if candidate
+        .chars()
+        .all(|character| character.is_ascii_hexdigit())
+        && candidate.len() >= 24
+    {
+        return false;
+    }
+    if lowered == "windows"
+        || lowered == "macos"
+        || lowered == "linux"
+        || lowered == "common"
+        || lowered == "config"
+        || lowered == "extended"
+        || lowered == "default"
+        || lowered == "released"
+        || lowered == "partial"
+        || lowered == "for qa"
+    {
+        return false;
+    }
+
+    candidate.chars().any(|character| character.is_ascii_alphabetic())
 }
 
 fn collect_steam_manifest_names(
@@ -1697,22 +2822,24 @@ fn resolve_steam_root_paths(steam_root_override: Option<&str>) -> Vec<PathBuf> {
         .filter(|value| !value.is_empty())
     {
         let normalized_override_root = normalize_steam_root_candidate_path(Path::new(override_path));
-        if debug_logging_enabled {
-            let steamapps_directory = normalized_override_root.join("steamapps");
-            if steamapps_directory.is_dir() {
+        let steamapps_directory = normalized_override_root.join("steamapps");
+        if steamapps_directory.is_dir() {
+            if debug_logging_enabled {
                 log_steam_detection_debug(&format!(
                     "override root accepted: {} (steamapps: {})",
                     normalized_override_root.display(),
                     steamapps_directory.display()
                 ));
-            } else {
-                log_steam_detection_debug(&format!(
-                    "override root does not currently contain steamapps: {}",
-                    normalized_override_root.display()
-                ));
             }
+            return vec![normalized_override_root];
         }
-        return vec![normalized_override_root];
+
+        if debug_logging_enabled {
+            log_steam_detection_debug(&format!(
+                "override root rejected (missing steamapps); falling back to auto-detection: {}",
+                normalized_override_root.display()
+            ));
+        }
     }
 
     let mut roots = Vec::new();
@@ -1761,6 +2888,18 @@ fn steam_detection_debug_logging_enabled() -> bool {
         || steam_detection_env_flag("STEAM_DETECTION_DEBUG_LOGGING")
 }
 
+fn steam_sync_debug_logging_enabled() -> bool {
+    steam_detection_debug_logging_enabled() || steam_detection_env_flag("STEAM_SYNC_DEBUG_LOGGING")
+}
+
+fn steam_sync_debug_target_app_id() -> Option<u64> {
+    let Ok(raw_value) = std::env::var("STEAM_SYNC_DEBUG_APP_ID") else {
+        return None;
+    };
+
+    raw_value.trim().parse::<u64>().ok()
+}
+
 fn steam_detection_env_flag(name: &str) -> bool {
     let Ok(raw_value) = std::env::var(name) else {
         return false;
@@ -1773,7 +2912,22 @@ fn steam_detection_env_flag(name: &str) -> bool {
 }
 
 fn log_steam_detection_debug(message: &str) {
+    static SEEN_DETECTION_MESSAGES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let seen_messages = SEEN_DETECTION_MESSAGES.get_or_init(|| Mutex::new(HashSet::new()));
+    if let Ok(mut seen_messages) = seen_messages.lock() {
+        if !seen_messages.insert(message.to_owned()) {
+            return;
+        }
+        if seen_messages.len() > 512 {
+            seen_messages.clear();
+            seen_messages.insert(message.to_owned());
+        }
+    }
     eprintln!("[catalyst:steam-detection] {message}");
+}
+
+fn log_steam_sync_debug(message: &str) {
+    eprintln!("[catalyst:steam-sync] {message}");
 }
 
 fn normalize_steam_root_candidate_path(candidate: &Path) -> PathBuf {
@@ -1824,13 +2978,63 @@ fn resolve_steam_root_path_for_user(
     steam_root_override: Option<&str>,
     steam_id: &str,
 ) -> Option<PathBuf> {
-    for steam_root in resolve_steam_root_paths(steam_root_override) {
-        if resolve_steam_userdata_directory(&steam_root, steam_id).is_ok() {
-            return Some(steam_root);
+    let mut best_candidate: Option<(PathBuf, u64, usize)> = None;
+
+    for (root_index, steam_root) in resolve_steam_root_paths(steam_root_override)
+        .into_iter()
+        .enumerate()
+    {
+        let Ok(userdata_directory) = resolve_steam_userdata_directory(&steam_root, steam_id) else {
+            continue;
+        };
+        let activity_epoch_secs = [
+            userdata_directory.join("config").join("localconfig.vdf"),
+            userdata_directory.join("config").join("sharedconfig.vdf"),
+            userdata_directory
+                .join("7")
+                .join("remote")
+                .join("sharedconfig.vdf"),
+            userdata_directory.join("config").join("shortcuts.vdf"),
+            userdata_directory.join("config").join("cloudstorage"),
+            userdata_directory.clone(),
+        ]
+        .iter()
+        .filter_map(|path| modified_epoch_secs(path))
+        .max()
+        .unwrap_or(0);
+
+        if steam_sync_debug_logging_enabled() {
+            log_steam_sync_debug(&format!(
+                "root candidate for steam_id={steam_id}: root={}, userdata={}, activity_epoch_secs={activity_epoch_secs}, root_index={root_index}",
+                steam_root.display(),
+                userdata_directory.display()
+            ));
+        }
+
+        let candidate = (steam_root, activity_epoch_secs, root_index);
+        match &best_candidate {
+            Some((_, best_activity_epoch_secs, best_root_index))
+                if *best_activity_epoch_secs > activity_epoch_secs
+                    || (*best_activity_epoch_secs == activity_epoch_secs
+                        && *best_root_index <= root_index) => {}
+            _ => {
+                best_candidate = Some(candidate);
+            }
         }
     }
 
-    None
+    let resolved = best_candidate.map(|(steam_root, _, _)| steam_root);
+    if steam_sync_debug_logging_enabled() {
+        let rendered = resolved
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| String::from("<none>"));
+        log_steam_sync_debug(&format!(
+            "resolved steam root for steam_id={steam_id}: {rendered}"
+        ));
+    }
+
+    resolved
 }
 
 fn resolve_steam_userdata_directory(steam_root: &Path, steam_id: &str) -> Result<PathBuf, String> {
@@ -3131,8 +4335,14 @@ fn resolve_steam_public_app_names(
         let lookup_limit = uncached_app_ids
             .len()
             .min(STEAM_PUBLIC_APP_NAME_LOOKUP_MAX_REQUESTS_PER_SYNC);
+        let lookup_started_at = Instant::now();
         let mut consecutive_errors = 0usize;
         for app_id in uncached_app_ids.into_iter().take(lookup_limit) {
+            if lookup_started_at.elapsed()
+                >= Duration::from_secs(STEAM_PUBLIC_APP_NAME_LOOKUP_TIME_BUDGET_SECS)
+            {
+                break;
+            }
             let fetched_name = match fetch_steam_app_name(client, app_id) {
                 Ok(name) => name,
                 Err(error) => {
@@ -3161,11 +4371,11 @@ fn resolve_steam_public_app_names(
     }
 
     let mut unresolved_app_ids = HashSet::new();
-    for app_id in seen_app_ids {
+    for app_id in &seen_app_ids {
         if resolved_names_by_app_id.contains_key(&app_id) {
             continue;
         }
-        unresolved_app_ids.insert(app_id);
+        unresolved_app_ids.insert(*app_id);
     }
     if unresolved_app_ids.is_empty() {
         return Ok(resolved_names_by_app_id);
@@ -3180,6 +4390,44 @@ fn resolve_steam_public_app_names(
         }
         Err(error) => {
             eprintln!("Could not fetch Steam public app names from app list: {error}");
+        }
+    }
+
+    let mut unresolved_after_app_list = seen_app_ids
+        .into_iter()
+        .filter(|app_id| !resolved_names_by_app_id.contains_key(app_id))
+        .collect::<Vec<_>>();
+    if !unresolved_after_app_list.is_empty() {
+        unresolved_after_app_list.sort_unstable();
+        let lookup_started_at = Instant::now();
+        let mut consecutive_errors = 0usize;
+        for app_id in unresolved_after_app_list {
+            if lookup_started_at.elapsed()
+                >= Duration::from_secs(STEAM_PUBLIC_APP_NAME_LOOKUP_TIME_BUDGET_SECS)
+            {
+                break;
+            }
+
+            let fetched_name = match fetch_steam_app_name_from_store_page(client, app_id) {
+                Ok(name) => name,
+                Err(error) => {
+                    consecutive_errors += 1;
+                    eprintln!(
+                        "Could not fetch Steam public app name from store page for app {app_id}: {error}"
+                    );
+                    if consecutive_errors >= STEAM_PUBLIC_APP_NAME_LOOKUP_MAX_CONSECUTIVE_ERRORS {
+                        break;
+                    }
+                    continue;
+                }
+            };
+            consecutive_errors = 0;
+
+            let Some(name) = fetched_name else {
+                continue;
+            };
+            cache_steam_public_app_name(connection, app_id, &name)?;
+            resolved_names_by_app_id.insert(app_id, name);
         }
     }
 
@@ -3230,6 +4478,68 @@ fn fetch_steam_app_name(
     };
 
     Ok(Some(name.to_owned()))
+}
+
+fn fetch_steam_app_name_from_store_page(
+    client: &Client,
+    app_id: u64,
+) -> Result<Option<String>, String> {
+    let mut request_url = Url::parse(&format!("{STEAM_STORE_APP_ENDPOINT}/{app_id}/"))
+        .map_err(|error| format!("Failed to parse Steam store app endpoint: {error}"))?;
+    request_url.query_pairs_mut().append_pair("l", "english");
+
+    let response = client
+        .get(request_url)
+        .send()
+        .map_err(|error| format!("Steam store app page request failed: {error}"))?;
+    if !response.status().is_success() {
+        if response.status().as_u16() == 404 {
+            return Ok(None);
+        }
+        return Err(format!(
+            "Steam store app page request failed with status {}",
+            response.status()
+        ));
+    }
+
+    let page_html = response
+        .text()
+        .map_err(|error| format!("Failed to read Steam store app page response: {error}"))?;
+    Ok(extract_steam_app_name_from_store_page_html(&page_html))
+}
+
+fn extract_steam_app_name_from_store_page_html(page_html: &str) -> Option<String> {
+    let app_name_regex = Regex::new(
+        r#"(?is)<div[^>]*id\s*=\s*["']appHubAppName["'][^>]*>\s*([^<]+?)\s*</div>"#,
+    )
+    .ok()?;
+    if let Some(captures) = app_name_regex.captures(page_html) {
+        let name = captures.get(1)?.as_str().trim();
+        if !name.is_empty() {
+            return Some(decode_basic_html_entities(name));
+        }
+    }
+
+    let og_title_regex =
+        Regex::new(r#"(?is)<meta[^>]*property\s*=\s*["']og:title["'][^>]*content\s*=\s*["']([^"']+)["']"#)
+            .ok()?;
+    let captures = og_title_regex.captures(page_html)?;
+    let raw_title = captures.get(1)?.as_str().trim();
+    if raw_title.is_empty() {
+        return None;
+    }
+
+    let decoded_title = decode_basic_html_entities(raw_title);
+    let normalized = decoded_title
+        .strip_suffix(" on Steam")
+        .unwrap_or(decoded_title.as_str())
+        .trim()
+        .to_owned();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    Some(normalized)
 }
 
 fn fetch_steam_public_app_names_from_app_list(
@@ -3391,6 +4701,8 @@ fn refresh_steam_store_tags_cache(
 ) -> Result<(), String> {
     let stale_before = Utc::now() - ChronoDuration::hours(STEAM_APP_STORE_TAGS_CACHE_TTL_HOURS);
     let mut seen_app_ids = HashSet::new();
+    let started_at = Instant::now();
+    let mut attempted_fetches = 0usize;
 
     for app_id in app_ids {
         if !seen_app_ids.insert(*app_id) {
@@ -3401,6 +4713,12 @@ fn refresh_steam_store_tags_cache(
             continue;
         }
 
+        if attempted_fetches >= STEAM_STORE_TAGS_SYNC_MAX_REQUESTS
+            || started_at.elapsed() >= Duration::from_secs(STEAM_STORE_TAGS_SYNC_TIME_BUDGET_SECS)
+        {
+            break;
+        }
+
         let fetched_tags = match fetch_steam_store_user_tags(client, *app_id) {
             Ok(tags) => tags,
             Err(error) => {
@@ -3408,6 +4726,7 @@ fn refresh_steam_store_tags_cache(
                 Vec::new()
             }
         };
+        attempted_fetches += 1;
         cache_steam_store_tags(connection, *app_id, &fetched_tags)?;
     }
 
@@ -3739,6 +5058,7 @@ mod tests {
         let steam_root = tempdir().expect("create temp steam root");
         let account_id = 12_345_678_u64;
         let expected_steam_id = (STEAM_ID64_ACCOUNT_ID_BASE + account_id).to_string();
+        fs::create_dir_all(steam_root.path().join("steamapps")).expect("create steamapps directory");
 
         fs::create_dir_all(
             steam_root
@@ -3769,6 +5089,7 @@ mod tests {
         let steam_root = tempdir().expect("create temp steam root");
         let account_id = 87_654_321_u64;
         let expected_steam_id = (STEAM_ID64_ACCOUNT_ID_BASE + account_id).to_string();
+        fs::create_dir_all(steam_root.path().join("steamapps")).expect("create steamapps directory");
 
         fs::create_dir_all(steam_root.path().join("config")).expect("create config directory");
         fs::write(steam_root.path().join("config").join("loginusers.vdf"), "not-vdf")
@@ -3803,6 +5124,7 @@ mod tests {
         let steam_root = tempdir().expect("create temp steam root");
         let loginusers_steam_id = "76561198000000055";
         let account_id = 99_888_777_u64;
+        fs::create_dir_all(steam_root.path().join("steamapps")).expect("create steamapps directory");
 
         fs::create_dir_all(steam_root.path().join("config")).expect("create config directory");
         fs::write(
@@ -3831,6 +5153,7 @@ mod tests {
     fn collect_steam_app_history_entries_from_localconfig_reads_playtime_and_last_played() {
         let steam_root = tempdir().expect("create temp steam root");
         let steam_id = "76561198000000042";
+        fs::create_dir_all(steam_root.path().join("steamapps")).expect("create steamapps directory");
         let localconfig_directory = steam_root
             .path()
             .join("userdata")
@@ -3882,6 +5205,7 @@ mod tests {
         let entries = collect_steam_app_history_entries_from_localconfig(
             Some(steam_root.path().to_string_lossy().as_ref()),
             steam_id,
+            false,
         )
         .expect("collect localconfig history");
 
@@ -3898,6 +5222,286 @@ mod tests {
             .find(|entry| entry.app_id == 730)
             .expect("730 should be present");
         assert_eq!(app_730.playtime_minutes, 45);
+    }
+
+    #[test]
+    fn collect_steam_app_history_entries_from_localconfig_can_include_empty_entries() {
+        let steam_root = tempdir().expect("create temp steam root");
+        let steam_id = "76561198000000042";
+        fs::create_dir_all(steam_root.path().join("steamapps")).expect("create steamapps directory");
+        let localconfig_directory = steam_root
+            .path()
+            .join("userdata")
+            .join(steam_id)
+            .join("config");
+        fs::create_dir_all(&localconfig_directory).expect("create localconfig directory");
+        fs::write(
+            localconfig_directory.join("localconfig.vdf"),
+            r#"
+            "UserLocalConfigStore"
+            {
+                "Software"
+                {
+                    "Valve"
+                    {
+                        "Steam"
+                        {
+                            "apps"
+                            {
+                                "4520130"
+                                {
+                                    "cloud"
+                                    {
+                                        "last_sync_state" "synchronized"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            "#,
+        )
+        .expect("write localconfig");
+
+        let entries = collect_steam_app_history_entries_from_localconfig(
+            Some(steam_root.path().to_string_lossy().as_ref()),
+            steam_id,
+            true,
+        )
+        .expect("collect localconfig history including empty entries");
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].app_id, 4_520_130);
+        assert_eq!(entries[0].playtime_minutes, 0);
+        assert!(entries[0].last_played_at.is_none());
+    }
+
+    #[test]
+    fn collect_selected_steam_library_app_ids_from_localconfig_reads_current_selection() {
+        let steam_root = tempdir().expect("create temp steam root");
+        let steam_id = "76561198000000042";
+        fs::create_dir_all(steam_root.path().join("steamapps")).expect("create steamapps directory");
+        let localconfig_directory = steam_root
+            .path()
+            .join("userdata")
+            .join(steam_id)
+            .join("config");
+        fs::create_dir_all(&localconfig_directory).expect("create localconfig directory");
+        fs::write(
+            localconfig_directory.join("localconfig.vdf"),
+            r#"
+            "UserLocalConfigStore"
+            {
+                "WebStorage"
+                {
+                    "UIStoreLocalSteamUIState" "{\"currentSelection\":{\"strCollectionId\":\"uncategorized\",\"nAppId\":4520130}}"
+                }
+            }
+            "#,
+        )
+        .expect("write localconfig");
+
+        let selected_app_ids = collect_selected_steam_library_app_ids_from_localconfig(
+            Some(steam_root.path().to_string_lossy().as_ref()),
+            steam_id,
+        );
+        assert!(selected_app_ids.contains(&4_520_130));
+    }
+
+    #[test]
+    fn collect_signal_steam_library_app_ids_from_local_state_supports_string_app_ids() {
+        let steam_root = tempdir().expect("create temp steam root");
+        let steam_id = "76561198000000042";
+        fs::create_dir_all(steam_root.path().join("steamapps")).expect("create steamapps directory");
+
+        let localconfig_directory = steam_root
+            .path()
+            .join("userdata")
+            .join(steam_id)
+            .join("config");
+        fs::create_dir_all(&localconfig_directory).expect("create localconfig directory");
+        fs::write(
+            localconfig_directory.join("localconfig.vdf"),
+            r#"
+            "UserLocalConfigStore"
+            {
+                "WebStorage"
+                {
+                    "UIStoreLocalSteamUIState" "{\"currentSelection\":{\"nAppId\":\"4520130\"}}"
+                    "playnextstore_storage" "{\"cachedPlayNext\":{\"appids\":[\"620\",10]}}"
+                    "user-collections.favorite" "{\"added\":[730,\"440\"]}"
+                }
+            }
+            "#,
+        )
+        .expect("write localconfig");
+
+        let signal_app_ids = collect_signal_steam_library_app_ids_from_local_state(
+            Some(steam_root.path().to_string_lossy().as_ref()),
+            steam_id,
+        );
+        assert!(signal_app_ids.contains(&4_520_130));
+        assert!(signal_app_ids.contains(&620));
+        assert!(signal_app_ids.contains(&10));
+        assert!(signal_app_ids.contains(&730));
+        assert!(signal_app_ids.contains(&440));
+    }
+
+    #[test]
+    fn collect_selected_steam_library_app_ids_from_localconfig_uses_active_user_candidate() {
+        let steam_root = tempdir().expect("create temp steam root");
+        fs::create_dir_all(steam_root.path().join("steamapps")).expect("create steamapps directory");
+        fs::create_dir_all(steam_root.path().join("config")).expect("create config directory");
+
+        let linked_steam_id = "76561198000000042";
+        let active_steam_id = "76561198000000099";
+        fs::write(
+            steam_root.path().join("config").join("loginusers.vdf"),
+            format!(
+                "\"users\"\n{{\n    \"{active_steam_id}\"\n    {{\n        \"MostRecent\"\t\"1\"\n    }}\n}}\n"
+            ),
+        )
+        .expect("write loginusers");
+
+        let linked_localconfig_directory = steam_root
+            .path()
+            .join("userdata")
+            .join(linked_steam_id)
+            .join("config");
+        fs::create_dir_all(&linked_localconfig_directory).expect("create linked localconfig directory");
+        fs::write(
+            linked_localconfig_directory.join("localconfig.vdf"),
+            r#"
+            "UserLocalConfigStore"
+            {
+                "WebStorage"
+                {
+                    "UIStoreLocalSteamUIState" "{\"currentSelection\":{}}"
+                }
+            }
+            "#,
+        )
+        .expect("write linked localconfig");
+
+        let active_localconfig_directory = steam_root
+            .path()
+            .join("userdata")
+            .join(active_steam_id)
+            .join("config");
+        fs::create_dir_all(&active_localconfig_directory).expect("create active localconfig directory");
+        fs::write(
+            active_localconfig_directory.join("localconfig.vdf"),
+            r#"
+            "UserLocalConfigStore"
+            {
+                "WebStorage"
+                {
+                    "UIStoreLocalSteamUIState" "{\"currentSelection\":{\"nAppId\":4520130}}"
+                }
+            }
+            "#,
+        )
+        .expect("write active localconfig");
+
+        let selected_app_ids = collect_selected_steam_library_app_ids_from_localconfig(
+            Some(steam_root.path().to_string_lossy().as_ref()),
+            linked_steam_id,
+        );
+        assert!(selected_app_ids.contains(&4_520_130));
+    }
+
+    #[test]
+    fn collect_steam_app_history_entries_from_sharedconfig_can_include_empty_entries() {
+        let steam_root = tempdir().expect("create temp steam root");
+        let steam_id = "76561198000000042";
+        fs::create_dir_all(steam_root.path().join("steamapps")).expect("create steamapps directory");
+        let sharedconfig_directory = steam_root
+            .path()
+            .join("userdata")
+            .join(steam_id)
+            .join("7")
+            .join("remote");
+        fs::create_dir_all(&sharedconfig_directory).expect("create sharedconfig directory");
+        fs::write(
+            sharedconfig_directory.join("sharedconfig.vdf"),
+            r#"
+            "UserRoamingConfigStore"
+            {
+                "Software"
+                {
+                    "Valve"
+                    {
+                        "Steam"
+                        {
+                            "apps"
+                            {
+                                "4520130"
+                                {
+                                    "cloud"
+                                    {
+                                        "last_sync_state" "synchronized"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            "#,
+        )
+        .expect("write sharedconfig");
+
+        let entries = collect_steam_app_history_entries_from_sharedconfig(
+            Some(steam_root.path().to_string_lossy().as_ref()),
+            steam_id,
+            true,
+        )
+        .expect("collect sharedconfig history including empty entries");
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].app_id, 4_520_130);
+        assert_eq!(entries[0].playtime_minutes, 0);
+        assert!(entries[0].last_played_at.is_none());
+    }
+
+    #[test]
+    fn collect_signal_steam_library_app_ids_from_cloudstorage_reads_rollups_collections_and_selection() {
+        let steam_root = tempdir().expect("create temp steam root");
+        let steam_id = "76561198000000042";
+        fs::create_dir_all(steam_root.path().join("steamapps")).expect("create steamapps directory");
+        let cloudstorage_directory = steam_root
+            .path()
+            .join("userdata")
+            .join(steam_id)
+            .join("config")
+            .join("cloudstorage");
+        fs::create_dir_all(&cloudstorage_directory).expect("create cloudstorage directory");
+        fs::write(
+            cloudstorage_directory.join("cloud-storage-namespace-1.json"),
+            r#"
+            [
+                ["NewContentRollup_570", {"key":"NewContentRollup_570","value":"{\"rtOld\":0,\"rtNew\":0,\"rtStart\":0}"}],
+                ["user-collections.favorite", {"key":"user-collections.favorite","value":"{\"added\":[730,\"440\"],\"removed\":[]}"}],
+                ["playnextstore_storage", {"key":"playnextstore_storage","value":"{\"cachedPlayNext\":{\"appids\":[\"620\",10]}}"}],
+                ["UIStoreLocalSteamUIState", {"key":"UIStoreLocalSteamUIState","value":"{\"currentSelection\":{\"nAppId\":\"304930\"}}"}],
+                ["GameReleased", {"key":"GameReleased","value":"{\"apps\":[\"550\",570]}"}]
+            ]
+            "#,
+        )
+        .expect("write cloudstorage namespace");
+
+        let signal_app_ids = collect_signal_steam_library_app_ids_from_cloudstorage(
+            Some(steam_root.path().to_string_lossy().as_ref()),
+            steam_id,
+        );
+        assert!(signal_app_ids.contains(&570));
+        assert!(signal_app_ids.contains(&730));
+        assert!(signal_app_ids.contains(&440));
+        assert!(signal_app_ids.contains(&620));
+        assert!(signal_app_ids.contains(&10));
+        assert!(signal_app_ids.contains(&304_930));
+        assert!(signal_app_ids.contains(&550));
     }
 
     #[test]
@@ -3922,6 +5526,7 @@ mod tests {
             .expect("insert existing game");
 
         let steam_root = tempdir().expect("create temp steam root");
+        fs::create_dir_all(steam_root.path().join("steamapps")).expect("create steamapps directory");
         let localconfig_directory = steam_root
             .path()
             .join("userdata")
@@ -3962,6 +5567,7 @@ mod tests {
             &connection,
             &user,
             Some(steam_root.path().to_string_lossy().as_ref()),
+            false,
         )
         .expect("collect local fallback games");
 
@@ -4093,7 +5699,7 @@ mod tests {
             String::from("570"),
             LibraryGameInput {
                 external_id: String::from("570"),
-                name: String::from("Steam App 570"),
+                name: String::from("570"),
                 kind: String::from("game"),
                 playtime_minutes: 0,
                 installed: false,
@@ -4134,6 +5740,115 @@ mod tests {
                 .map(|game| game.name.as_str()),
             Some("Counter-Strike 2")
         );
+    }
+
+    #[test]
+    fn should_resolve_local_steam_game_name_treats_numeric_titles_as_placeholders() {
+        let numeric_placeholder = LibraryGameInput {
+            external_id: String::from("570"),
+            name: String::from("570"),
+            kind: String::from("unknown"),
+            playtime_minutes: 0,
+            installed: false,
+            artwork_url: None,
+            last_synced_at: Utc::now().to_rfc3339(),
+            last_played_at: None,
+        };
+        let canonical_placeholder = LibraryGameInput {
+            external_id: String::from("730"),
+            name: String::from("Steam App 730"),
+            kind: String::from("unknown"),
+            playtime_minutes: 0,
+            installed: false,
+            artwork_url: None,
+            last_synced_at: Utc::now().to_rfc3339(),
+            last_played_at: None,
+        };
+        let real_name = LibraryGameInput {
+            external_id: String::from("440"),
+            name: String::from("Team Fortress 2"),
+            kind: String::from("game"),
+            playtime_minutes: 0,
+            installed: false,
+            artwork_url: None,
+            last_synced_at: Utc::now().to_rfc3339(),
+            last_played_at: None,
+        };
+
+        assert!(should_resolve_local_steam_game_name(&numeric_placeholder));
+        assert!(should_resolve_local_steam_game_name(&canonical_placeholder));
+        assert!(!should_resolve_local_steam_game_name(&real_name));
+    }
+
+    #[test]
+    fn extract_steam_app_name_from_store_page_html_prefers_app_hub_name() {
+        let html = r#"
+            <html>
+                <body>
+                    <div id="appHubAppName">Counter-Strike 2 Demo</div>
+                    <meta property="og:title" content="Wrong Name on Steam" />
+                </body>
+            </html>
+        "#;
+
+        let extracted = extract_steam_app_name_from_store_page_html(html);
+        assert_eq!(extracted.as_deref(), Some("Counter-Strike 2 Demo"));
+    }
+
+    #[test]
+    fn extract_steam_app_name_from_store_page_html_uses_og_title_fallback() {
+        let html = r#"
+            <html>
+                <head>
+                    <meta property="og:title" content="Half-Life Demo on Steam" />
+                </head>
+            </html>
+        "#;
+
+        let extracted = extract_steam_app_name_from_store_page_html(html);
+        assert_eq!(extracted.as_deref(), Some("Half-Life Demo"));
+    }
+
+    #[test]
+    fn extract_steam_app_name_from_local_appinfo_payload_returns_first_valid_title() {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(b"common\0");
+        payload.extend_from_slice(b"https://example.com\0");
+        payload.extend_from_slice(b"2081110_eula_0\0");
+        payload.extend_from_slice(b"Undecember Demo\0");
+        payload.extend_from_slice(b"UndecemberDemo.exe\0");
+
+        let extracted = extract_steam_app_name_from_local_appinfo_payload(&payload);
+        assert_eq!(extracted.as_deref(), Some("Undecember Demo"));
+    }
+
+    #[test]
+    fn extract_steam_app_name_from_local_appinfo_payload_rejects_non_titles() {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(b"https://example.com\0");
+        payload.extend_from_slice(b"e531df1abbd1e67792b5a9bad228801e2119b3da\0");
+        payload.extend_from_slice(b"windows\0");
+        payload.extend_from_slice(b"for qa\0");
+
+        let extracted = extract_steam_app_name_from_local_appinfo_payload(&payload);
+        assert!(extracted.is_none());
+    }
+
+    #[test]
+    fn normalize_unresolved_steam_game_placeholder_name_rewrites_numeric_ids() {
+        let mut unresolved = LibraryGameInput {
+            external_id: String::from("3035190"),
+            name: String::from("3035190"),
+            kind: String::from("unknown"),
+            playtime_minutes: 0,
+            installed: false,
+            artwork_url: None,
+            last_synced_at: Utc::now().to_rfc3339(),
+            last_played_at: None,
+        };
+
+        normalize_unresolved_steam_game_placeholder_name(&mut unresolved);
+        assert_eq!(unresolved.name, "Steam App 3035190");
     }
 
     #[test]
@@ -5716,7 +7431,7 @@ fn prune_untrusted_placeholder_steam_games(
         if installed || playtime_minutes > 0 {
             continue;
         }
-        if !name.starts_with("Steam App ") {
+        if !is_steam_placeholder_game_name(&name, &external_id) {
             continue;
         }
 

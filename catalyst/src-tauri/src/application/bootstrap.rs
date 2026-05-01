@@ -89,6 +89,7 @@ pub(crate) fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn Error>> {
 fn setup_app_inner(app: &mut tauri::App) -> Result<(), String> {
     let paths = resolve_paths(app)?;
     crate::initialize_database(&paths.db_path)?;
+    let configured_steam_root_override = optional_env("STEAM_ROOT_OVERRIDE");
 
     let context = AppContext::new(
         paths.db_path,
@@ -96,7 +97,7 @@ fn setup_app_inner(app: &mut tauri::App) -> Result<(), String> {
         optional_env("STEAM_API_KEY"),
         env_flag("STEAM_LOCAL_INSTALL_DETECTION", true),
         env_flag("STEAM_SETTINGS_DEBUG_LOGGING", false),
-        optional_env("STEAM_ROOT_OVERRIDE"),
+        configured_steam_root_override,
     );
 
     let state = AppState::new(

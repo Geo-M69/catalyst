@@ -103,6 +103,7 @@ const panelMiddleElement = document.querySelector<HTMLElement>(".panel-middle");
 const gameDetailsShellElement = document.getElementById("game-details-shell");
 const gameDetailsBackButton = document.getElementById("game-details-back-button");
 const appTopHover = document.getElementById("app-top-hover");
+const librarySidebarHover = document.getElementById("library-sidebar-hover");
 const gameDetailsContentElement = document.getElementById("game-details-content");
 const detailsHeroBg = document.getElementById("details-hero-bg");
 const detailsTitleInfo = document.getElementById("details-title-info");
@@ -140,6 +141,7 @@ if (
   || !(gameDetailsShellElement instanceof HTMLElement)
   || !(gameDetailsBackButton instanceof HTMLButtonElement)
   || !(appTopHover instanceof HTMLElement)
+  || !(librarySidebarHover instanceof HTMLElement)
   || !(gameDetailsContentElement instanceof HTMLElement)
   || !(detailsHeroBg instanceof HTMLElement)
   || !(detailsTitleInfo instanceof HTMLElement)
@@ -170,6 +172,74 @@ if (
   gameDetailsBackButton.addEventListener("mouseleave", hide);
   gameDetailsBackButton.addEventListener("focus", show);
   gameDetailsBackButton.addEventListener("blur", hide);
+}
+
+// Library sidebar reveal helper: keep sidebar collapsed until the pointer reaches the left edge.
+{
+  const SIDEBAR_HIDE_DELAY_MS = 320;
+  let hideTimer: number | null = null;
+  let isHoveringEdgeHotspot = false;
+  let isHoveringSidebar = false;
+
+  const clearHideTimer = (): void => {
+    if (hideTimer !== null) {
+      window.clearTimeout(hideTimer);
+      hideTimer = null;
+    }
+  };
+
+  const setSidebarRevealed = (revealed: boolean): void => {
+    document.body.classList.toggle("library-sidebar-revealed", revealed);
+  };
+
+  const syncSidebarRevealState = (): void => {
+    if (detailsViewStore.appViewMode !== "library") {
+      clearHideTimer();
+      setSidebarRevealed(false);
+      return;
+    }
+
+    if (isHoveringEdgeHotspot || isHoveringSidebar) {
+      clearHideTimer();
+      setSidebarRevealed(true);
+      return;
+    }
+
+    clearHideTimer();
+    hideTimer = window.setTimeout(() => {
+      hideTimer = null;
+      if (detailsViewStore.appViewMode !== "library") {
+        setSidebarRevealed(false);
+        return;
+      }
+      if (!isHoveringEdgeHotspot && !isHoveringSidebar) {
+        setSidebarRevealed(false);
+      }
+    }, SIDEBAR_HIDE_DELAY_MS);
+  };
+
+  document.body.classList.add("library-sidebar-collapsed");
+  document.body.classList.remove("library-sidebar-revealed");
+
+  librarySidebarHover.addEventListener("mouseenter", () => {
+    isHoveringEdgeHotspot = true;
+    syncSidebarRevealState();
+  });
+
+  librarySidebarHover.addEventListener("mouseleave", () => {
+    isHoveringEdgeHotspot = false;
+    syncSidebarRevealState();
+  });
+
+  panelLeftElement.addEventListener("mouseenter", () => {
+    isHoveringSidebar = true;
+    syncSidebarRevealState();
+  });
+
+  panelLeftElement.addEventListener("mouseleave", () => {
+    isHoveringSidebar = false;
+    syncSidebarRevealState();
+  });
 }
 
 import { addUniqueCandidate, getSteamArtworkCandidates } from "./steamArtwork";
@@ -385,8 +455,8 @@ const resolveRecentlyPlayedArtworkCandidates = (game: GameResponse): string[] =>
     addUniqueCandidate(candidate, seen, candidates);
   }
 
-  addUniqueCandidate(game.artworkUrl, seen, candidates);
   addUniqueCandidate(game.headerImage, seen, candidates);
+  addUniqueCandidate(game.artworkUrl, seen, candidates);
   return candidates;
 };
 
@@ -535,6 +605,7 @@ const openGameDetails = (gameId: string, pushHistory = true): void => {
 
   detailsViewStore.appViewMode = "game-details";
   detailsViewStore.selectedGameId = gameId;
+  document.body.classList.remove("library-sidebar-revealed");
 
   // Hide left sidebar and library grid, show details panel
   panelLeftElement.hidden = true;
@@ -558,6 +629,7 @@ const openGameDetails = (gameId: string, pushHistory = true): void => {
 const closeGameDetails = (pushHistory = false): void => {
   detailsViewStore.appViewMode = "library";
   detailsViewStore.selectedGameId = null;
+  document.body.classList.remove("library-sidebar-revealed");
 
   // Restore UI
   panelLeftElement.hidden = false;
@@ -2339,10 +2411,20 @@ const resolveGameIdentityKey = (game: Pick<GameResponse, "provider" | "externalI
   return `${game.provider.trim().toLocaleLowerCase()}:${game.externalId.trim()}`;
 };
 
+const isSteamPlaceholderName = (game: Pick<GameResponse, "name" | "externalId">): boolean => {
+  const trimmedName = game.name.trim();
+  if (trimmedName.length === 0) {
+    return true;
+  }
+  if (trimmedName.startsWith("Steam App ")) {
+    return true;
+  }
+  return trimmedName === game.externalId.trim();
+};
+
 const resolveGameMergeQualityScore = (game: GameResponse): number => {
   let score = 0;
-  const trimmedName = game.name.trim();
-  if (trimmedName.length > 0 && !trimmedName.startsWith("Steam App ")) {
+  if (!isSteamPlaceholderName(game)) {
     score += 10;
   }
   if (game.installed) {
